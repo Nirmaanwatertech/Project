@@ -233,7 +233,7 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import {
-    getFirestore, collection, addDoc, updateDoc, deleteDoc, doc,
+    getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, setDoc,
     onSnapshot, query, orderBy, getDocs, writeBatch
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
@@ -253,7 +253,7 @@
   // Expose a small Firestore helper API on window for the Babel/React script to use.
   window.fb = {
     db,
-    collection, addDoc, updateDoc, deleteDoc, doc,
+    collection, addDoc, updateDoc, deleteDoc, doc, setDoc,
     onSnapshot, query, orderBy, getDocs, writeBatch
   };
 
@@ -987,61 +987,371 @@ function Tasks() {
 }
 
 // ─── Work Orders Module ───────────────────────────────
+const WO_COLLECTION = 'workorders';
+
+function useWorkOrders() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const q = query(collection(db, WO_COLLECTION), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, (snap) => {
+        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
+        setLoading(false);
+      }, (err) => { console.error('WO listener error', err); setLoading(false); });
+      return unsub;
+    }
+    if (window.fb) {
+      const unsub = start();
+      return () => unsub && unsub();
+    } else {
+      let unsub;
+      const handler = () => { unsub = start(); };
+      window.addEventListener('firebase-ready', handler, { once: true });
+      return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+    }
+  }, []);
+
+  return { items, loading };
+}
+
+async function addWorkOrder(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, WO_COLLECTION), { ...data, createdAt: Date.now() });
+}
+async function updateWorkOrder(docId, data) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(doc(db, WO_COLLECTION, docId), data);
+}
+async function deleteWorkOrder(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, WO_COLLECTION, docId));
+}
+async function clearAllWorkOrders() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(collection(db, WO_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+function NewWorkOrderModal({ onClose, nextNumber }) {
+  const [form, setForm] = useState({
+    wo: nextNumber, client: '', site: '', work: '', assigned: 'Rahul',
+    priority: 'Medium', status: 'Scheduled', due: '', value: '', pct: 0, po: ''
+  });
+  const [saving, setSaving] = useState(false);
+  function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
+
+  async function handleSave() {
+    if (!form.client.trim() || !form.work.trim()) return;
+    setSaving(true);
+    try {
+      await addWorkOrder({ ...form, pct: Number(form.pct) || 0 });
+      onClose();
+    } catch (e) { console.error(e); alert('Could not save work order.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:560,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Work Order</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">WO Number</label>
+              <input className="form-input font-mono" value={form.wo} onChange={e=>set('wo', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Client Name</label>
+              <input className="form-input" value={form.client} onChange={e=>set('client', e.target.value)} placeholder="Client / society name" />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Site Address</label>
+            <input className="form-input" value={form.site} onChange={e=>set('site', e.target.value)} placeholder="Site address" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Work Description</label>
+            <input className="form-input" value={form.work} onChange={e=>set('work', e.target.value)} placeholder="e.g. RO plant 1000 LPH installation" />
+          </div>
+          <div className="form-grid-3">
+            <div className="form-group">
+              <label className="form-label">Assigned Staff</label>
+              <select className="form-input form-select" value={form.assigned} onChange={e=>set('assigned', e.target.value)}>
+                <option>Rahul</option><option>Priya</option><option>Manoj</option><option>Amit</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Priority</label>
+              <select className="form-input form-select" value={form.priority} onChange={e=>set('priority', e.target.value)}>
+                <option>Critical</option><option>High</option><option>Medium</option><option>Low</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Status</label>
+              <select className="form-input form-select" value={form.status} onChange={e=>set('status', e.target.value)}>
+                <option>Scheduled</option><option>In Progress</option><option>Completed</option>
+              </select>
+            </div>
+          </div>
+          <div className="form-grid-3">
+            <div className="form-group">
+              <label className="form-label">Due Date</label>
+              <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Progress %</label>
+              <input className="form-input font-mono" type="number" min="0" max="100" value={form.pct} onChange={e=>set('pct', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Estimated Value (₹)</label>
+              <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Linked PO Number</label>
+            <input className="form-input font-mono" value={form.po} onChange={e=>set('po', e.target.value)} placeholder="PO-2026-0XX" />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !form.client.trim() || !form.work.trim()} className="btn btn-primary" style={{opacity: saving || !form.client.trim() || !form.work.trim() ? .6 : 1}}>
+            {saving ? 'Saving…' : 'Save Work Order'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WOOverdueRemarkModal({ wo, onClose, onSaved }) {
+  const [reason, setReason] = useState('');
+  const [newDate, setNewDate] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!reason.trim() || !newDate) return;
+    setSaving(true);
+    try {
+      await updateWorkOrder(wo.docId, { status: 'In Progress', due: newDate, remark: reason, remarkAt: Date.now() });
+      onSaved();
+    } catch (e) { console.error(e); alert('Could not save remark.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:440,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--amber)',padding:'14px 18px'}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>⚠️ Overdue Remark Required</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div style={{fontSize:12.5,color:'var(--text)',marginBottom:14}}>
+            <strong>{wo.wo}</strong> — {wo.work} is overdue. A remark is required before this WO can move forward.
+          </div>
+          <div className="form-group">
+            <label className="form-label">Reason for Delay</label>
+            <textarea className="form-input" rows="3" value={reason} onChange={e=>setReason(e.target.value)} placeholder="Explain the delay…" style={{resize:'vertical'}} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">New Expected Date</label>
+            <input className="form-input" type="date" value={newDate} onChange={e=>setNewDate(e.target.value)} />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !reason.trim() || !newDate} className="btn btn-primary" style={{opacity: saving || !reason.trim() || !newDate ? .6 : 1}}>
+            {saving ? 'Saving…' : 'Save Remark & Continue'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClearCollectionButton({ label, count, onClear }) {
+  const [step, setStep] = useState(0);
+  const [typed, setTyped] = useState('');
+  const [working, setWorking] = useState(false);
+  const CONFIRM_PHRASE = 'DELETE';
+  function close() { setStep(0); setTyped(''); }
+
+  async function handleClear() {
+    setWorking(true);
+    try { await onClear(); close(); }
+    catch (e) { console.error(e); alert('Could not clear data — check Firestore connection.'); }
+    finally { setWorking(false); }
+  }
+
+  return (
+    <>
+      <button onClick={() => setStep(1)} disabled={count === 0}
+        style={{background:'transparent',border:'1px solid #EF9A9A',color:'var(--red)',borderRadius:4,padding:'6px 14px',fontSize:12,fontWeight:600,cursor:count===0?'not-allowed':'pointer',opacity:count===0?.5:1}}>
+        🗑 {label}
+      </button>
+      {step === 1 && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={close}>
+          <div style={{background:'var(--surface)',borderRadius:10,width:420,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+            <div style={{background:'var(--red)',padding:'14px 18px',display:'flex',alignItems:'center',gap:10}}>
+              <span style={{fontSize:20}}>🗑</span>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{label}</span>
+            </div>
+            <div style={{padding:'20px 20px 8px'}}>
+              <div style={{fontSize:13,color:'var(--text)',marginBottom:10,lineHeight:1.6}}>
+                You are about to <strong>permanently delete all {count} record{count===1?'':'s'}</strong> from the database.<br/><br/>
+                <span style={{color:'var(--red)',fontWeight:600}}>This action cannot be undone.</span>
+              </div>
+            </div>
+            <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+              <button onClick={close} className="btn btn-ghost">Cancel</button>
+              <button onClick={() => setStep(2)} style={{background:'var(--red)',color:'#fff',border:'none',borderRadius:4,padding:'7px 18px',fontWeight:600,fontSize:12.5,cursor:'pointer'}}>
+                Yes, I want to delete →
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {step === 2 && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.55)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={close}>
+          <div style={{background:'var(--surface)',borderRadius:10,width:440,boxShadow:'0 8px 40px rgba(0,0,0,.28)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+            <div style={{background:'#B71C1C',padding:'14px 18px',display:'flex',alignItems:'center',gap:10}}>
+              <span style={{fontSize:20}}>⛔</span>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Final Confirmation Required</span>
+            </div>
+            <div style={{padding:'22px 22px 8px'}}>
+              <div style={{fontSize:13,color:'var(--text)',marginBottom:16,lineHeight:1.7}}>
+                Type the word below exactly as shown to confirm deletion:
+              </div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:18,fontWeight:800,color:'var(--red)',letterSpacing:4,textAlign:'center',background:'var(--red-50)',padding:'10px',borderRadius:6,marginBottom:16,border:'1px dashed #EF9A9A'}}>
+                {CONFIRM_PHRASE}
+              </div>
+              <input
+                className="form-input font-mono"
+                placeholder={`Type ${CONFIRM_PHRASE} to confirm`}
+                value={typed}
+                onChange={e => setTyped(e.target.value.toUpperCase())}
+                autoFocus
+                style={{fontSize:14,fontWeight:600,letterSpacing:2,textAlign:'center',
+                  borderColor: typed === CONFIRM_PHRASE ? 'var(--red)' : typed.length > 0 ? '#EF9A9A' : 'var(--border)'}}
+              />
+            </div>
+            <div style={{padding:'16px 22px 22px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+              <button onClick={close} className="btn btn-ghost" disabled={working}>Cancel</button>
+              <button
+                onClick={handleClear}
+                disabled={typed !== CONFIRM_PHRASE || working}
+                style={{background: typed === CONFIRM_PHRASE ? '#B71C1C' : '#BDBDBD',color:'#fff',border:'none',borderRadius:4,padding:'7px 20px',fontWeight:700,fontSize:12.5,cursor: typed === CONFIRM_PHRASE && !working ? 'pointer' : 'not-allowed'}}>
+                {working ? 'Deleting…' : '🗑 Delete Permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function WorkOrders() {
+  const { items, loading } = useWorkOrders();
+  const [filter, setFilter] = useState('all');
+  const [showNew, setShowNew] = useState(false);
+  const [remarkWO, setRemarkWO] = useState(null);
+
+  const todayStr = new Date().toISOString().slice(0,10);
+  const withStatus = items.map(w => {
+    const isOverdue = w.due && w.due < todayStr && w.status !== 'Completed' && !w.remark;
+    return { ...w, effectiveStatus: isOverdue ? 'Overdue' : (w.status || 'Scheduled') };
+  });
+  const filtered = filter === 'all' ? withStatus : withStatus.filter(w => w.effectiveStatus.toLowerCase() === filter);
+
+  const nextNumber = `WO-2026-${String(items.length + 1).padStart(3,'0')}`;
+
+  async function markComplete(w) {
+    try { await updateWorkOrder(w.docId, { status: 'Completed', pct: 100 }); }
+    catch (e) { console.error(e); alert('Could not update work order.'); }
+  }
+
   return (
     <div>
       <div className="section-header">
         <div>
           <div className="section-title">Work Orders</div>
-          <div className="section-sub">Next: WO-2026-015</div>
+          <div className="section-sub">{loading ? 'Loading from Firestore…' : `${items.length} WO${items.length===1?'':'s'} · live data · Next: ${nextNumber}`}</div>
         </div>
-        <button className="btn btn-primary">+ New Work Order</button>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" onClick={() => setShowNew(true)}>+ New Work Order</button>
+          <ClearCollectionButton label="Clear All Work Orders" count={items.length} onClear={clearAllWorkOrders} />
+        </div>
+      </div>
+      <div className="card" style={{marginBottom:14}}>
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <select className="form-input form-select" style={{width:140}} onChange={e=>setFilter(e.target.value)}>
+            <option value="all">All Status</option>
+            <option value="in progress">In Progress</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="overdue">Overdue</option>
+            <option value="completed">Completed</option>
+          </select>
+        </div>
       </div>
       <div className="card">
-        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
-          <div className="flex gap-2">
-            <div className="search-wrap" style={{flex:1}}>
-              <span className="search-icon">🔍</span>
-              <input className="form-input" placeholder="Search WO or client…" style={{maxWidth:300}} />
-            </div>
-            <select className="form-input form-select" style={{width:140}}>
-              <option>All Status</option>
-              <option>In Progress</option>
-              <option>Scheduled</option>
-              <option>Overdue</option>
-              <option>Completed</option>
-            </select>
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+        ) : filtered.length === 0 ? (
+          <div className="module-coming">
+            <div className="big-icon">🔧</div>
+            <h3>No work orders yet</h3>
+            <p className="text-muted">Create your first work order — saved permanently to your database.</p>
           </div>
-        </div>
-        <table>
-          <thead>
-            <tr><th>WO #</th><th>Client</th><th>Work Description</th><th>Assigned</th><th>Priority</th><th>Status</th><th>Progress</th><th>Due Date</th><th>Value</th><th>Linked PO</th></tr>
-          </thead>
-          <tbody>
-            {WO_DATA.map(w => (
-              <tr key={w.wo} className={w.status==='Overdue'?'overdue':''}>
-                <td className="mono">{w.wo}</td>
-                <td>{w.client}</td>
-                <td>{w.work}</td>
-                <td>{w.assigned}</td>
-                <td><span className="badge amber">High</span></td>
-                <td><StatusBadge status={w.status} /></td>
-                <td style={{width:120}}>
-                  <div className="flex items-center gap-2">
-                    <div className="progress-wrap" style={{flex:1}}>
-                      <div className="progress-fill blue" style={{width:`${w.pct}%`}} />
+        ) : (
+          <table>
+            <thead>
+              <tr><th>WO #</th><th>Client</th><th>Work Description</th><th>Assigned</th><th>Priority</th><th>Status</th><th>Progress</th><th>Due Date</th><th>Value</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(w => (
+                <tr key={w.docId} className={w.effectiveStatus==='Overdue'?'overdue':''}>
+                  <td className="mono">{w.wo}</td>
+                  <td>{w.client}</td>
+                  <td>{w.work}{w.remark && <div className="text-sm text-muted mt-1">Remark: {w.remark}</div>}</td>
+                  <td>{w.assigned}</td>
+                  <td><span className={`badge ${PRIO_COLOR[w.priority] || 'grey'}`}>{w.priority}</span></td>
+                  <td><StatusBadge status={w.effectiveStatus} /></td>
+                  <td style={{width:120}}>
+                    <div className="flex items-center gap-2">
+                      <div className="progress-wrap" style={{flex:1}}>
+                        <div className="progress-fill blue" style={{width:`${w.pct||0}%`}} />
+                      </div>
+                      <span className="text-sm text-muted">{w.pct||0}%</span>
                     </div>
-                    <span className="text-sm text-muted">{w.pct}%</span>
-                  </div>
-                </td>
-                <td>{w.due}</td>
-                <td className="amount">{w.value}</td>
-                <td className="mono" style={{color:'var(--text-muted)'}}>PO-2026-{String(Math.floor(Math.random()*30)+1).padStart(3,'0')}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  </td>
+                  <td className={w.effectiveStatus==='Overdue'?'fw-600':''} style={w.effectiveStatus==='Overdue'?{color:'var(--red)'}:{}}>{w.due || '—'}</td>
+                  <td className="amount">{w.value ? `₹${Number(w.value).toLocaleString('en-IN')}` : '—'}</td>
+                  <td>
+                    <div className="flex gap-2">
+                      {w.effectiveStatus !== 'Completed' && <button className="btn btn-sm btn-ghost" onClick={() => markComplete(w)}>Complete</button>}
+                      {w.effectiveStatus === 'Overdue' && (
+                        <button className="btn btn-sm" style={{background:'var(--red-50)',color:'var(--red)',border:'none',borderRadius:4,fontSize:11,padding:'4px 10px',cursor:'pointer'}} onClick={() => setRemarkWO(w)}>
+                          Add Remark
+                        </button>
+                      )}
+                      <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this work order?')) deleteWorkOrder(w.docId); }}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
+      {showNew && <NewWorkOrderModal onClose={() => setShowNew(false)} nextNumber={nextNumber} />}
+      {remarkWO && <WOOverdueRemarkModal wo={remarkWO} onClose={() => setRemarkWO(null)} onSaved={() => setRemarkWO(null)} />}
     </div>
   );
 }
@@ -1103,15 +1413,84 @@ function PaymentTracker() {
 }
 
 // ─── Cash Flow Module ──────────────────────────────────
+const SETTINGS_COLLECTION = 'settings';
+const SETTINGS_DOC = 'cashflow';
+
+function useCashSettings() {
+  const [settings, setSettings] = useState({ startingBalance: 1350000, criticalThreshold: 500000, warningThreshold: 800000 });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    function start() {
+      const { db, doc, onSnapshot } = window.fb;
+      const unsub = onSnapshot(doc(db, SETTINGS_COLLECTION, SETTINGS_DOC), (snap) => {
+        if (snap.exists()) setSettings(s => ({ ...s, ...snap.data() }));
+        setLoading(false);
+      }, () => setLoading(false));
+      return unsub;
+    }
+    if (window.fb) {
+      const unsub = start();
+      return () => unsub && unsub();
+    } else {
+      let unsub;
+      const handler = () => { unsub = start(); };
+      window.addEventListener('firebase-ready', handler, { once: true });
+      return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+    }
+  }, []);
+
+  async function save(newSettings) {
+    const { db, doc, setDoc } = window.fb;
+    await setDoc(doc(db, SETTINGS_COLLECTION, SETTINGS_DOC), { ...settings, ...newSettings }, { merge: true });
+  }
+
+  return { settings, loading, save };
+}
+
 function CashFlow() {
   const [horizon, setHorizon] = useState('30');
+  const { items: bills, loading: billsLoading } = useBills();
+  const { settings, loading: settingsLoading } = useCashSettings();
+  const [editingBalance, setEditingBalance] = useState(false);
+  const [balanceInput, setBalanceInput] = useState('');
+
+  const loading = billsLoading || settingsLoading;
+  const todayStr = new Date().toISOString().slice(0,10);
+  const horizonDate = new Date(Date.now() + Number(horizon)*86400000).toISOString().slice(0,10);
+
+  // Build forecast rows from unpaid bills within horizon, sorted by due date
+  const unpaidInRange = bills
+    .filter(b => !b.paid && b.due && b.due <= horizonDate)
+    .sort((a,b) => (a.due || '').localeCompare(b.due || ''));
+
+  let running = Number(settings.startingBalance) || 0;
+  const rows = unpaidInRange.map(b => {
+    running -= Number(b.amount || 0);
+    return { date: b.due, label: b.payee, cat: b.category, type: 'out', amt: Number(b.amount||0), balance: running };
+  });
+
+  const forecastLow = rows.length ? Math.min(...rows.map(r => r.balance), running) : running;
+  const lowRow = rows.find(r => r.balance === forecastLow);
+  const outflowsTotal = unpaidInRange.reduce((s,b) => s + Number(b.amount||0), 0);
+
+  const criticalBreached = forecastLow < Number(settings.criticalThreshold || 0);
+  const warningBreached = !criticalBreached && forecastLow < Number(settings.warningThreshold || 0);
+
+  async function saveBalance() {
+    const { db, doc, setDoc } = window.fb;
+    try {
+      await setDoc(doc(db, SETTINGS_COLLECTION, SETTINGS_DOC), { ...settings, startingBalance: Number(balanceInput) || 0 }, { merge: true });
+      setEditingBalance(false);
+    } catch (e) { console.error(e); alert('Could not save balance.'); }
+  }
 
   return (
     <div>
       <div className="section-header">
         <div>
           <div className="section-title">Cash Flow Management</div>
-          <div className="section-sub">Live balance and forecast</div>
+          <div className="section-sub">{loading ? 'Loading from Firestore…' : 'Live balance and forecast · derived from unpaid bills'}</div>
         </div>
         <div className="flex gap-2">
           <select className="form-input form-select" style={{width:130}} value={horizon} onChange={e=>setHorizon(e.target.value)}>
@@ -1120,100 +1499,295 @@ function CashFlow() {
             <option value="60">60-day view</option>
             <option value="90">90-day view</option>
           </select>
-          <button className="btn btn-ghost">⬇ Export Excel</button>
-          <button className="btn btn-ghost">⬇ Export PDF</button>
         </div>
       </div>
 
-      <div className="alert-bar critical" style={{marginBottom:14}}>
-        <span className="alert-icon">🚨</span>
-        <strong>Threshold Alert:</strong>&nbsp;Forecast balance drops to ₹12,80,000 on 05 Jul — still above ₹5L critical threshold but approaching ₹8L warning level.
-      </div>
+      {!loading && criticalBreached && (
+        <div className="alert-bar critical" style={{marginBottom:14}}>
+          <span className="alert-icon">🚨</span>
+          <strong>Critical Threshold Breached:</strong>&nbsp;Forecast balance drops to {inr(forecastLow)} {lowRow ? `on ${lowRow.date}` : ''} — below your ₹{Number(settings.criticalThreshold).toLocaleString('en-IN')} critical threshold.
+        </div>
+      )}
+      {!loading && warningBreached && (
+        <div className="alert-bar warning" style={{marginBottom:14}}>
+          <span className="alert-icon">⚠️</span>
+          <strong>Warning Threshold Approaching:</strong>&nbsp;Forecast balance drops to {inr(forecastLow)} {lowRow ? `on ${lowRow.date}` : ''} — below your ₹{Number(settings.warningThreshold).toLocaleString('en-IN')} warning threshold.
+        </div>
+      )}
 
       <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginBottom:14}}>
-        <div className="stat-card"><div className="stat-label">Live Balance</div><div className="stat-value green">₹13,50,000</div></div>
-        <div className="stat-card"><div className="stat-label">Inflows ({horizon}d)</div><div className="stat-value blue">₹4,65,000</div></div>
-        <div className="stat-card"><div className="stat-label">Outflows ({horizon}d)</div><div className="stat-value red">₹2,78,500</div></div>
-        <div className="stat-card"><div className="stat-label">Forecast Low</div><div className="stat-value amber">₹12,80,000</div><div className="stat-sub">05 Jul 2026</div></div>
+        <div className="stat-card">
+          <div className="stat-label">Starting / Live Balance</div>
+          {editingBalance ? (
+            <div className="flex gap-2 items-center mt-1">
+              <input className="form-input font-mono" style={{width:120}} value={balanceInput} onChange={e=>setBalanceInput(e.target.value)} autoFocus />
+              <button className="btn btn-sm btn-primary" onClick={saveBalance}>Save</button>
+              <button className="btn btn-sm btn-ghost" onClick={() => setEditingBalance(false)}>✕</button>
+            </div>
+          ) : (
+            <>
+              <div className="stat-value green">{inr(settings.startingBalance)}</div>
+              <div className="stat-sub" style={{cursor:'pointer',color:'var(--primary)'}} onClick={() => { setBalanceInput(String(settings.startingBalance)); setEditingBalance(true); }}>Edit balance</div>
+            </>
+          )}
+        </div>
+        <div className="stat-card"><div className="stat-label">Outflows ({horizon}d)</div><div className="stat-value red">{inr(outflowsTotal)}</div><div className="stat-sub">{unpaidInRange.length} unpaid bill{unpaidInRange.length===1?'':'s'}</div></div>
+        <div className="stat-card"><div className="stat-label">Forecast Low</div><div className={`stat-value ${criticalBreached?'red':warningBreached?'amber':'blue'}`}>{inr(forecastLow)}</div>{lowRow && <div className="stat-sub">{lowRow.date}</div>}</div>
+        <div className="stat-card"><div className="stat-label">Critical / Warning</div><div className="stat-value" style={{fontSize:14}}>{inr(settings.criticalThreshold)} / {inr(settings.warningThreshold)}</div><div className="stat-sub">Set in Settings</div></div>
       </div>
 
       <div className="card">
-        <div className="card-header"><span className="card-title">{horizon}-Day Rolling Forecast</span></div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr><th>Date</th><th>Description</th><th>Category</th><th>Inflow</th><th>Outflow</th><th>Running Balance</th></tr>
-            </thead>
-            <tbody>
-              {CASHFLOW_FORECAST.map((r,i) => (
-                <tr key={i}>
-                  <td className="mono">{r.date}</td>
-                  <td>{r.label}</td>
-                  <td><span className="badge grey">{r.cat}</span></td>
-                  <td className="amount" style={{color:'var(--green)'}}>{r.type==='in' ? inr(Math.abs(r.amt)) : '—'}</td>
-                  <td className="amount" style={{color:'var(--red)'}}>{r.type==='out' ? inr(Math.abs(r.amt)) : '—'}</td>
-                  <td className="amount fw-600">{inr(r.balance)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <div className="card-header"><span className="card-title">{horizon}-Day Rolling Forecast — Live Unpaid Bills</span></div>
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+        ) : rows.length === 0 ? (
+          <div className="module-coming">
+            <div className="big-icon">📈</div>
+            <h3>No upcoming outflows</h3>
+            <p className="text-muted">Forecast will populate from unpaid bills as you add them in Bill Payments.</p>
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Date</th><th>Description</th><th>Category</th><th>Outflow</th><th>Running Balance</th></tr>
+              </thead>
+              <tbody>
+                {rows.map((r,i) => (
+                  <tr key={i} className={r.balance < Number(settings.criticalThreshold) ? 'overdue' : ''}>
+                    <td className="mono">{r.date}</td>
+                    <td>{r.label}</td>
+                    <td><span className="badge grey">{r.cat}</span></td>
+                    <td className="amount" style={{color:'var(--red)'}}>{inr(r.amt)}</td>
+                    <td className="amount fw-600">{inr(r.balance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 // ─── Bills Module ─────────────────────────────────────
+const BILLS_COLLECTION = 'bills';
+
+function useBills() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const q = query(collection(db, BILLS_COLLECTION), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, (snap) => {
+        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
+        setLoading(false);
+      }, (err) => { console.error('Bills listener error', err); setLoading(false); });
+      return unsub;
+    }
+    if (window.fb) {
+      const unsub = start();
+      return () => unsub && unsub();
+    } else {
+      let unsub;
+      const handler = () => { unsub = start(); };
+      window.addEventListener('firebase-ready', handler, { once: true });
+      return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+    }
+  }, []);
+
+  return { items, loading };
+}
+
+async function addBill(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, BILLS_COLLECTION), { ...data, createdAt: Date.now(), paid: false });
+}
+async function markBillPaid(docId) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(doc(db, BILLS_COLLECTION, docId), { paid: true, paidAt: Date.now() });
+}
+async function deleteBill(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, BILLS_COLLECTION, docId));
+}
+async function clearAllBills() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(collection(db, BILLS_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+function NewBillModal({ onClose }) {
+  const [form, setForm] = useState({
+    payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '', notes: ''
+  });
+  const [saving, setSaving] = useState(false);
+  function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
+
+  async function handleSave() {
+    if (!form.payee.trim() || !form.amount || !form.due) return;
+    setSaving(true);
+    try {
+      await addBill({ ...form, amount: Number(form.amount) });
+      onClose();
+    } catch (e) { console.error(e); alert('Could not save bill.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:480,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ Add Bill</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-group">
+            <label className="form-label">Payee Name</label>
+            <input className="form-input" value={form.payee} onChange={e=>set('payee', e.target.value)} placeholder="e.g. Aqua Membranes Pvt Ltd" autoFocus />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Category</label>
+              <select className="form-input form-select" value={form.category} onChange={e=>set('category', e.target.value)}>
+                <option>Vendor</option><option>Fixed</option><option>Professional</option><option>Utilities</option><option>Logistics</option><option>GST/Govt</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Invoice Number</label>
+              <input className="form-input font-mono" value={form.invoiceNo} onChange={e=>set('invoiceNo', e.target.value)} placeholder="INV-XXXX" />
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Invoice Date</label>
+              <input className="form-input" type="date" value={form.invoiceDate} onChange={e=>set('invoiceDate', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Due Date</label>
+              <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Amount (₹)</label>
+            <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount', e.target.value)} placeholder="0" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Notes</label>
+            <input className="form-input" value={form.notes} onChange={e=>set('notes', e.target.value)} placeholder="Optional notes" />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !form.payee.trim() || !form.amount || !form.due} className="btn btn-primary" style={{opacity: saving || !form.payee.trim() || !form.amount || !form.due ? .6 : 1}}>
+            {saving ? 'Saving…' : 'Save Bill'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BillPayments() {
+  const { items, loading } = useBills();
+  const [catFilter, setCatFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [showNew, setShowNew] = useState(false);
+
+  const todayStr = new Date().toISOString().slice(0,10);
+  const withStatus = items.map(b => {
+    let status;
+    if (b.paid) status = 'Paid';
+    else if (b.due === todayStr) status = 'Due Today';
+    else if (b.due < todayStr) status = 'Overdue';
+    else status = 'Upcoming';
+    const days = (status === 'Overdue' && b.due) ? Math.floor((new Date(todayStr) - new Date(b.due)) / 86400000) : 0;
+    return { ...b, computedStatus: status, days };
+  });
+
+  const filtered = withStatus.filter(b =>
+    (catFilter === 'all' || b.category === catFilter) &&
+    (statusFilter === 'all' || b.computedStatus === statusFilter)
+  );
+
+  const overdueTotal = withStatus.filter(b => b.computedStatus === 'Overdue').reduce((s,b) => s + Number(b.amount||0), 0);
+  const overdueCount = withStatus.filter(b => b.computedStatus === 'Overdue').length;
+  const dueTodayTotal = withStatus.filter(b => b.computedStatus === 'Due Today').reduce((s,b) => s + Number(b.amount||0), 0);
+  const next7 = new Date(Date.now() + 7*86400000).toISOString().slice(0,10);
+  const dueWeekTotal = withStatus.filter(b => !b.paid && b.due >= todayStr && b.due <= next7).reduce((s,b) => s + Number(b.amount||0), 0);
+  const paidTotal = withStatus.filter(b => b.paid).reduce((s,b) => s + Number(b.amount||0), 0);
+
   return (
     <div>
       <div className="section-header">
-        <div className="section-title">Bill Payments</div>
-        <button className="btn btn-primary">+ Add Bill</button>
+        <div>
+          <div className="section-title">Bill Payments</div>
+          <div className="section-sub">{loading ? 'Loading from Firestore…' : `${items.length} bill${items.length===1?'':'s'} · live data`}</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" onClick={() => setShowNew(true)}>+ Add Bill</button>
+          <ClearCollectionButton label="Clear All Bills" count={items.length} onClear={clearAllBills} />
+        </div>
       </div>
       <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
-        <div className="stat-card"><div className="stat-label">Overdue Bills</div><div className="stat-value red">₹38,000</div><div className="stat-sub">1 bill — 14 days overdue</div></div>
-        <div className="stat-card"><div className="stat-label">Due Today</div><div className="stat-value amber">₹65,000</div></div>
-        <div className="stat-card"><div className="stat-label">Due This Week</div><div className="stat-value blue">₹1,03,000</div></div>
-        <div className="stat-card"><div className="stat-label">Paid This Month</div><div className="stat-value green">₹2,45,000</div></div>
+        <div className="stat-card"><div className="stat-label">Overdue Bills</div><div className="stat-value red">{inr(overdueTotal)}</div><div className="stat-sub">{overdueCount} bill{overdueCount===1?'':'s'}</div></div>
+        <div className="stat-card"><div className="stat-label">Due Today</div><div className="stat-value amber">{inr(dueTodayTotal)}</div></div>
+        <div className="stat-card"><div className="stat-label">Due This Week</div><div className="stat-value blue">{inr(dueWeekTotal)}</div></div>
+        <div className="stat-card"><div className="stat-label">Paid Total</div><div className="stat-value green">{inr(paidTotal)}</div></div>
       </div>
       <div className="card">
         <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
           <div className="flex gap-2">
-            <select className="form-input form-select" style={{width:150}}>
-              <option>All Categories</option>
-              <option>Vendor</option><option>Fixed</option><option>Professional</option><option>Utilities</option>
+            <select className="form-input form-select" style={{width:150}} onChange={e=>setCatFilter(e.target.value)}>
+              <option value="all">All Categories</option>
+              <option>Vendor</option><option>Fixed</option><option>Professional</option><option>Utilities</option><option>Logistics</option><option>GST/Govt</option>
             </select>
-            <select className="form-input form-select" style={{width:140}}>
-              <option>All Status</option><option>Overdue</option><option>Due Today</option><option>Upcoming</option><option>Paid</option>
+            <select className="form-input form-select" style={{width:140}} onChange={e=>setStatusFilter(e.target.value)}>
+              <option value="all">All Status</option>
+              <option>Overdue</option><option>Due Today</option><option>Upcoming</option><option>Paid</option>
             </select>
           </div>
         </div>
-        <table>
-          <thead>
-            <tr><th>Payee</th><th>Category</th><th>Invoice #</th><th>Invoice Date</th><th>Due Date</th><th>Amount</th><th>Status</th><th>Actions</th></tr>
-          </thead>
-          <tbody>
-            {BILLS_DUE.map((b,i) => (
-              <tr key={i} className={b.status==='Overdue'?'overdue':b.status==='Due Today'?'due-today':''}>
-                <td className="fw-600">{b.payee}</td>
-                <td><span className="badge grey">{b.cat}</span></td>
-                <td className="mono">{b.inv}</td>
-                <td className="text-muted">01 Jun 2026</td>
-                <td>{b.due}{b.days > 0 && <span style={{color:'var(--red)',fontWeight:600,marginLeft:4}}>+{b.days}d</span>}</td>
-                <td className="amount fw-600">{b.amt}</td>
-                <td><span className={`badge ${BILL_STATUS_COLOR[b.status]}`}>{b.status}</span></td>
-                <td>
-                  <div className="flex gap-2">
-                    {b.status !== 'Paid' && <button className="btn btn-sm btn-primary">Mark Paid</button>}
-                    <button className="btn btn-sm btn-ghost">View</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+        ) : filtered.length === 0 ? (
+          <div className="module-coming">
+            <div className="big-icon">📑</div>
+            <h3>No bills yet</h3>
+            <p className="text-muted">Add your first bill — saved permanently to your database.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>Payee</th><th>Category</th><th>Invoice #</th><th>Invoice Date</th><th>Due Date</th><th>Amount</th><th>Status</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(b => (
+                <tr key={b.docId} className={b.computedStatus==='Overdue'?'overdue':b.computedStatus==='Due Today'?'due-today':''}>
+                  <td className="fw-600">{b.payee}</td>
+                  <td><span className="badge grey">{b.category}</span></td>
+                  <td className="mono">{b.invoiceNo || '—'}</td>
+                  <td className="text-muted">{b.invoiceDate || '—'}</td>
+                  <td>{b.due}{b.days > 0 && <span style={{color:'var(--red)',fontWeight:600,marginLeft:4}}>+{b.days}d</span>}</td>
+                  <td className="amount fw-600">{inr(b.amount||0)}</td>
+                  <td><span className={`badge ${BILL_STATUS_COLOR[b.computedStatus]}`}>{b.computedStatus}</span></td>
+                  <td>
+                    <div className="flex gap-2">
+                      {!b.paid && <button className="btn btn-sm btn-primary" onClick={() => markBillPaid(b.docId)}>Mark Paid</button>}
+                      <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this bill?')) deleteBill(b.docId); }}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
+      {showNew && <NewBillModal onClose={() => setShowNew(false)} />}
     </div>
   );
 }
@@ -1472,7 +2046,7 @@ function ClearDataCard({ item }) {
   const CONFIRM_PHRASE = 'DELETE';
 
   const isAll = item.scope === 'all';
-  const isWired = item.scope === 'tasks'; // only Tasks is connected to Firestore so far
+  const isWired = ['tasks','workorders','bills'].includes(item.scope);
   const cardBg = isAll ? '#FFF0F0' : '#FFFAFA';
 
   async function handleClear() {
@@ -1480,8 +2054,14 @@ function ClearDataCard({ item }) {
     try {
       if (item.scope === 'tasks') {
         await clearAllTasks();
+      } else if (item.scope === 'workorders') {
+        await clearAllWorkOrders();
+      } else if (item.scope === 'bills') {
+        await clearAllBills();
+      } else if (item.scope === 'all') {
+        await Promise.all([clearAllTasks(), clearAllWorkOrders(), clearAllBills()]);
       }
-      // Other scopes: no real data store wired up yet — nothing to delete.
+      // Remaining scopes (cashflow forecast is derived, milestones not yet built): nothing to delete.
       setCleared(true);
       setStep(0);
       setTyped('');
