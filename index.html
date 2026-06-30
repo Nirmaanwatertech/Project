@@ -1356,62 +1356,6 @@ function WorkOrders() {
   );
 }
 
-// ─── Payment Tracker Module ───────────────────────────
-const MILESTONES = [
-  { ms:'Mobilisation Advance', pct:'25%', amt:'₹1,20,000', due:'10 Jun 2026', status:'Paid', po:'PO-2026-019', wo:'WO-2026-014', days:null },
-  { ms:'Milestone 1 — Foundation', pct:'25%', amt:'₹1,20,000', due:'25 Jun 2026', status:'Overdue', po:'PO-2026-019', wo:'WO-2026-014', days:4 },
-  { ms:'Milestone 2 — Commissioning', pct:'30%', amt:'₹1,44,000', due:'10 Jul 2026', status:'Upcoming', po:'PO-2026-019', wo:'WO-2026-014', days:null },
-  { ms:'Final Retention', pct:'20%', amt:'₹96,000', due:'30 Jul 2026', status:'Upcoming', po:'PO-2026-019', wo:'WO-2026-014', days:null },
-  { ms:'Advance Payment', pct:'30%', amt:'₹54,000', due:'15 Jun 2026', status:'Paid', po:'PO-2026-022', wo:'WO-2026-012', days:null },
-  { ms:'On Delivery', pct:'50%', amt:'₹90,000', due:'30 Jun 2026', status:'Due', po:'PO-2026-022', wo:'WO-2026-012', days:0 },
-  { ms:'Final', pct:'20%', amt:'₹36,000', due:'15 Jul 2026', status:'Upcoming', po:'PO-2026-022', wo:'WO-2026-012', days:null },
-];
-
-function PaymentTracker() {
-  return (
-    <div>
-      <div className="section-header">
-        <div className="section-title">Payment Tracker</div>
-      </div>
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
-        <div className="stat-card"><div className="stat-label">Total Collected</div><div className="stat-value green">₹3,18,000</div></div>
-        <div className="stat-card"><div className="stat-label">Overdue</div><div className="stat-value red">₹1,20,000</div><div className="stat-sub">Sai Builders — 11 days</div></div>
-        <div className="stat-card"><div className="stat-label">Due This Week</div><div className="stat-value amber">₹90,000</div></div>
-        <div className="stat-card"><div className="stat-label">Upcoming 30 Days</div><div className="stat-value blue">₹2,76,000</div></div>
-      </div>
-      <div className="card">
-        <table>
-          <thead>
-            <tr><th>Milestone</th><th>%</th><th>Amount</th><th>Due Date</th><th>Status</th><th>PO #</th><th>WO #</th><th>Action</th></tr>
-          </thead>
-          <tbody>
-            {MILESTONES.map((m,i) => (
-              <tr key={i} className={m.status==='Overdue'?'overdue':m.status==='Due'?'due-today':''}>
-                <td className="fw-600">{m.ms}</td>
-                <td>{m.pct}</td>
-                <td className="amount fw-600">{m.amt}</td>
-                <td>{m.due}{m.days > 0 && <span style={{color:'var(--red)',fontWeight:600}}> +{m.days}d</span>}</td>
-                <td><span className={`badge ${m.status==='Paid'?'green':m.status==='Overdue'?'red':m.status==='Due'?'amber':'blue'}`}>{m.status}</span></td>
-                <td className="mono">{m.po}</td>
-                <td className="mono">{m.wo}</td>
-                <td>
-                  {m.status !== 'Paid' && m.status !== 'Upcoming' && (
-                    <div className="flex gap-2">
-                      <button className="btn btn-sm btn-primary">Mark Paid</button>
-                      <button className="btn btn-sm btn-ghost">Remind</button>
-                    </div>
-                  )}
-                  {m.status === 'Paid' && <span className="text-muted text-sm">✓ Received</span>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
 // ─── Cash Flow Module ──────────────────────────────────
 const SETTINGS_COLLECTION = 'settings';
 const SETTINGS_DOC = 'cashflow';
@@ -1886,6 +1830,842 @@ function TeamChat() {
 }
 
 // ─── Generic placeholder ──────────────────────────────
+// ════════════════════════════════════════════════════
+// VENDOR MASTER
+// ════════════════════════════════════════════════════
+const VENDORS_COLLECTION = 'vendors';
+const VENDOR_CATEGORIES = ['Membrane Supplier','Pump-Equipment','Chemicals','Pipes-Fittings','Logistics','Electrical','Civil','Other'];
+
+function useVendors() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const q = query(collection(db, VENDORS_COLLECTION), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, (snap) => {
+        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
+        setLoading(false);
+      }, (err) => { console.error('Vendors listener error', err); setLoading(false); });
+      return unsub;
+    }
+    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    let unsub;
+    const handler = () => { unsub = start(); };
+    window.addEventListener('firebase-ready', handler, { once: true });
+    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+  }, []);
+  return { items, loading };
+}
+async function addVendor(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, VENDORS_COLLECTION), { ...data, createdAt: Date.now() });
+}
+async function updateVendor(docId, data) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(doc(db, VENDORS_COLLECTION, docId), data);
+}
+async function deleteVendor(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, VENDORS_COLLECTION, docId));
+}
+async function clearAllVendors() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(collection(db, VENDORS_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+function NewVendorModal({ onClose, vendor }) {
+  const isEdit = !!vendor;
+  const [form, setForm] = useState(vendor || {
+    company: '', category: 'Pipes-Fittings', contact: '', mobile: '', email: '',
+    city: '', gstin: '', pan: '', paymentTerms: 'Net 30', rating: 3, notes: ''
+  });
+  const [saving, setSaving] = useState(false);
+  function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
+
+  async function handleSave() {
+    if (!form.company.trim()) return;
+    setSaving(true);
+    try {
+      if (isEdit) await updateVendor(vendor.docId, form);
+      else await addVendor(form);
+      onClose();
+    } catch (e) { console.error(e); alert('Could not save vendor.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:560,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--secondary)',padding:'14px 18px',position:'sticky',top:0}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? 'Edit Vendor' : '+ New Vendor'}</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-group">
+            <label className="form-label">Company Name</label>
+            <input className="form-input" value={form.company} onChange={e=>set('company', e.target.value)} placeholder="e.g. Aqua Membranes Pvt Ltd" autoFocus />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Category</label>
+              <select className="form-input form-select" value={form.category} onChange={e=>set('category', e.target.value)}>
+                {VENDOR_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">City</label>
+              <input className="form-input" value={form.city} onChange={e=>set('city', e.target.value)} placeholder="Mumbai" />
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Contact Person</label>
+              <input className="form-input" value={form.contact} onChange={e=>set('contact', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Mobile</label>
+              <input className="form-input" value={form.mobile} onChange={e=>set('mobile', e.target.value)} />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Email</label>
+            <input className="form-input" value={form.email} onChange={e=>set('email', e.target.value)} />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">GSTIN</label>
+              <input className="form-input font-mono" value={form.gstin} onChange={e=>set('gstin', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">PAN</label>
+              <input className="form-input font-mono" value={form.pan} onChange={e=>set('pan', e.target.value)} />
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Payment Terms</label>
+              <select className="form-input form-select" value={form.paymentTerms} onChange={e=>set('paymentTerms', e.target.value)}>
+                <option>Net 7</option><option>Net 15</option><option>Net 30</option><option>Net 45</option><option>Advance</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Star Rating (1–5)</label>
+              <select className="form-input form-select" value={form.rating} onChange={e=>set('rating', Number(e.target.value))}>
+                {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} ★</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Notes</label>
+            <input className="form-input" value={form.notes} onChange={e=>set('notes', e.target.value)} placeholder="Optional notes" />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !form.company.trim()} className="btn btn-primary" style={{opacity: saving || !form.company.trim() ? .6 : 1, background:'var(--secondary)'}}>
+            {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Save Vendor'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VendorMaster() {
+  const { items, loading } = useVendors();
+  const [catFilter, setCatFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [showNew, setShowNew] = useState(false);
+  const [editVendor, setEditVendor] = useState(null);
+
+  const filtered = items.filter(v =>
+    (catFilter === 'all' || v.category === catFilter) &&
+    (search === '' || (v.company||'').toLowerCase().includes(search.toLowerCase()))
+  );
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Vendor Master</div>
+          <div className="section-sub">{loading ? 'Loading from Firestore…' : `${items.length} vendor${items.length===1?'':'s'} · live data`}</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" style={{background:'var(--secondary)'}} onClick={() => setShowNew(true)}>+ New Vendor</button>
+          <ClearCollectionButton label="Clear All Vendors" count={items.length} onClear={clearAllVendors} />
+        </div>
+      </div>
+      <div className="card" style={{marginBottom:14}}>
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <div className="flex gap-2">
+            <div className="search-wrap" style={{flex:1}}>
+              <span className="search-icon">🔍</span>
+              <input className="form-input" placeholder="Search vendor name…" style={{maxWidth:280}} value={search} onChange={e=>setSearch(e.target.value)} />
+            </div>
+            <select className="form-input form-select" style={{width:170}} onChange={e=>setCatFilter(e.target.value)}>
+              <option value="all">All Categories</option>
+              {VENDOR_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+      <div className="card">
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+        ) : filtered.length === 0 ? (
+          <div className="module-coming">
+            <div className="big-icon">🏭</div>
+            <h3>No vendors yet</h3>
+            <p className="text-muted">Add your first vendor — saved permanently to your database.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>Company</th><th>Category</th><th>Contact</th><th>City</th><th>Payment Terms</th><th>Rating</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(v => (
+                <tr key={v.docId}>
+                  <td className="fw-600">{v.company}</td>
+                  <td><span className="badge teal">{v.category}</span></td>
+                  <td>{v.contact || '—'}<div className="text-sm text-muted">{v.mobile}</div></td>
+                  <td>{v.city || '—'}</td>
+                  <td>{v.paymentTerms}</td>
+                  <td>{'★'.repeat(v.rating||0)}{'☆'.repeat(5-(v.rating||0))}</td>
+                  <td>
+                    <div className="flex gap-2">
+                      <button className="btn btn-sm btn-ghost" onClick={() => setEditVendor(v)}>Edit</button>
+                      <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this vendor?')) deleteVendor(v.docId); }}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {showNew && <NewVendorModal onClose={() => setShowNew(false)} />}
+      {editVendor && <NewVendorModal vendor={editVendor} onClose={() => setEditVendor(null)} />}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// QUOTATIONS
+// ════════════════════════════════════════════════════
+const QUOTATIONS_COLLECTION = 'quotations';
+const QUOTE_STAGES = ['New','Reviewed','Negotiation','PO Received','T&C Finalized','Payment Active'];
+
+function useQuotations() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const q = query(collection(db, QUOTATIONS_COLLECTION), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, (snap) => {
+        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
+        setLoading(false);
+      }, (err) => { console.error('Quotations listener error', err); setLoading(false); });
+      return unsub;
+    }
+    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    let unsub;
+    const handler = () => { unsub = start(); };
+    window.addEventListener('firebase-ready', handler, { once: true });
+    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+  }, []);
+  return { items, loading };
+}
+async function addQuotation(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, QUOTATIONS_COLLECTION), { ...data, createdAt: Date.now() });
+}
+async function updateQuotation(docId, data) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(doc(db, QUOTATIONS_COLLECTION, docId), data);
+}
+async function deleteQuotation(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, QUOTATIONS_COLLECTION, docId));
+}
+async function clearAllQuotations() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(collection(db, QUOTATIONS_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+function NewQuotationModal({ onClose }) {
+  const [form, setForm] = useState({
+    name: '', type: 'client', description: '', value: '', receivedDate: '', stage: 'New', notes: ''
+  });
+  const [saving, setSaving] = useState(false);
+  function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
+
+  async function handleSave() {
+    if (!form.name.trim() || !form.value) return;
+    setSaving(true);
+    try {
+      await addQuotation({ ...form, value: Number(form.value) });
+      onClose();
+    } catch (e) { console.error(e); alert('Could not save quotation.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:520,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Quotation</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Vendor / Client Name</label>
+              <input className="form-input" value={form.name} onChange={e=>set('name', e.target.value)} placeholder="Name" autoFocus />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Type</label>
+              <select className="form-input form-select" value={form.type} onChange={e=>set('type', e.target.value)}>
+                <option value="client">Client (they pay us)</option>
+                <option value="vendor">Vendor (we pay)</option>
+              </select>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Description</label>
+            <input className="form-input" value={form.description} onChange={e=>set('description', e.target.value)} placeholder="e.g. RO plant 1000 LPH with installation" />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Total Value (₹)</label>
+              <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Received Date</label>
+              <input className="form-input" type="date" value={form.receivedDate} onChange={e=>set('receivedDate', e.target.value)} />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Stage</label>
+            <select className="form-input form-select" value={form.stage} onChange={e=>set('stage', e.target.value)}>
+              {QUOTE_STAGES.map(s => <option key={s}>{s}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Notes / Negotiation Points</label>
+            <textarea className="form-input" rows="2" value={form.notes} onChange={e=>set('notes', e.target.value)} style={{resize:'vertical'}} />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !form.name.trim() || !form.value} className="btn btn-primary" style={{opacity: saving || !form.name.trim() || !form.value ? .6 : 1}}>
+            {saving ? 'Saving…' : 'Save Quotation'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const STAGE_COLOR = { 'New':'blue','Reviewed':'teal','Negotiation':'amber','PO Received':'green','T&C Finalized':'grey','Payment Active':'green' };
+
+function Quotations() {
+  const { items, loading } = useQuotations();
+  const [showNew, setShowNew] = useState(false);
+  const [stageFilter, setStageFilter] = useState('all');
+
+  const filtered = stageFilter === 'all' ? items : items.filter(q => q.stage === stageFilter);
+  const pipelineValue = items.filter(q => q.stage !== 'Payment Active').reduce((s,q) => s + Number(q.value||0), 0);
+
+  async function advanceStage(q) {
+    const idx = QUOTE_STAGES.indexOf(q.stage);
+    if (idx < QUOTE_STAGES.length - 1) {
+      try { await updateQuotation(q.docId, { stage: QUOTE_STAGES[idx+1] }); }
+      catch(e) { console.error(e); alert('Could not update stage.'); }
+    }
+  }
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Quotations</div>
+          <div className="section-sub">{loading ? 'Loading from Firestore…' : `${items.length} quotation${items.length===1?'':'s'} · pipeline value ${inr(pipelineValue)}`}</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" onClick={() => setShowNew(true)}>+ New Quotation</button>
+          <ClearCollectionButton label="Clear All Quotations" count={items.length} onClear={clearAllQuotations} />
+        </div>
+      </div>
+      <div className="card" style={{marginBottom:14}}>
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <select className="form-input form-select" style={{width:170}} onChange={e=>setStageFilter(e.target.value)}>
+            <option value="all">All Stages</option>
+            {QUOTE_STAGES.map(s => <option key={s}>{s}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="card">
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+        ) : filtered.length === 0 ? (
+          <div className="module-coming">
+            <div className="big-icon">📋</div>
+            <h3>No quotations yet</h3>
+            <p className="text-muted">Add your first quotation — saved permanently to your database.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>Name</th><th>Type</th><th>Description</th><th>Value</th><th>Received</th><th>Stage</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(q => (
+                <tr key={q.docId}>
+                  <td className="fw-600">{q.name}</td>
+                  <td><span className={`badge ${q.type==='client'?'blue':'amber'}`}>{q.type==='client'?'Client':'Vendor'}</span></td>
+                  <td>{q.description || '—'}</td>
+                  <td className="amount fw-600">{inr(q.value||0)}</td>
+                  <td>{q.receivedDate || '—'}</td>
+                  <td><span className={`badge ${STAGE_COLOR[q.stage]||'grey'}`}>{q.stage}</span></td>
+                  <td>
+                    <div className="flex gap-2">
+                      {q.stage !== 'Payment Active' && <button className="btn btn-sm btn-ghost" onClick={() => advanceStage(q)}>Advance →</button>}
+                      <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this quotation?')) deleteQuotation(q.docId); }}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {showNew && <NewQuotationModal onClose={() => setShowNew(false)} />}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// PURCHASE ORDERS
+// ════════════════════════════════════════════════════
+const PO_COLLECTION = 'purchaseorders';
+const PO_STAGES = ['New','Negotiation','PO Received','T&C Pending','Finalized','Active','Closed'];
+
+function usePurchaseOrders() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const q = query(collection(db, PO_COLLECTION), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, (snap) => {
+        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
+        setLoading(false);
+      }, (err) => { console.error('PO listener error', err); setLoading(false); });
+      return unsub;
+    }
+    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    let unsub;
+    const handler = () => { unsub = start(); };
+    window.addEventListener('firebase-ready', handler, { once: true });
+    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+  }, []);
+  return { items, loading };
+}
+async function addPO(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, PO_COLLECTION), { ...data, createdAt: Date.now() });
+}
+async function updatePO(docId, data) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(doc(db, PO_COLLECTION, docId), data);
+}
+async function deletePO(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, PO_COLLECTION, docId));
+}
+async function clearAllPOs() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(collection(db, PO_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+function NewPOModal({ onClose, nextNumber, vendors }) {
+  const [form, setForm] = useState({
+    po: nextNumber, party: '', type: 'vendor', description: '', value: '', wo: '', stage: 'New', penaltyClause: '', disputeClause: ''
+  });
+  const [saving, setSaving] = useState(false);
+  function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
+
+  async function handleSave() {
+    if (!form.party.trim() || !form.value) return;
+    setSaving(true);
+    try {
+      await addPO({ ...form, value: Number(form.value) });
+      onClose();
+    } catch (e) { console.error(e); alert('Could not save purchase order.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:560,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Purchase Order</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">PO Number</label>
+              <input className="form-input font-mono" value={form.po} onChange={e=>set('po', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Type</label>
+              <select className="form-input form-select" value={form.type} onChange={e=>set('type', e.target.value)}>
+                <option value="vendor">Vendor PO (outflow)</option>
+                <option value="client">Client PO (inflow)</option>
+              </select>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">{form.type === 'vendor' ? 'Vendor Name' : 'Client Name'}</label>
+            {form.type === 'vendor' && vendors && vendors.length > 0 ? (
+              <select className="form-input form-select" value={form.party} onChange={e=>set('party', e.target.value)}>
+                <option value="">Select vendor…</option>
+                {vendors.map(v => <option key={v.docId} value={v.company}>{v.company}</option>)}
+              </select>
+            ) : (
+              <input className="form-input" value={form.party} onChange={e=>set('party', e.target.value)} placeholder="Name" />
+            )}
+          </div>
+          <div className="form-group">
+            <label className="form-label">Description of Goods / Services</label>
+            <input className="form-input" value={form.description} onChange={e=>set('description', e.target.value)} />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Total Value (₹)</label>
+              <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Linked WO Number</label>
+              <input className="form-input font-mono" value={form.wo} onChange={e=>set('wo', e.target.value)} placeholder="WO-2026-0XX" />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Stage</label>
+            <select className="form-input form-select" value={form.stage} onChange={e=>set('stage', e.target.value)}>
+              {PO_STAGES.map(s => <option key={s}>{s}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Penalty Clause</label>
+            <input className="form-input" value={form.penaltyClause} onChange={e=>set('penaltyClause', e.target.value)} placeholder="Optional" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Dispute Resolution Clause</label>
+            <input className="form-input" value={form.disputeClause} onChange={e=>set('disputeClause', e.target.value)} placeholder="Optional" />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !form.party.trim() || !form.value} className="btn btn-primary" style={{opacity: saving || !form.party.trim() || !form.value ? .6 : 1}}>
+            {saving ? 'Saving…' : 'Save Purchase Order'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const PO_STAGE_COLOR = { 'New':'blue','Negotiation':'amber','PO Received':'teal','T&C Pending':'amber','Finalized':'grey','Active':'green','Closed':'grey' };
+
+function PurchaseOrders() {
+  const { items, loading } = usePurchaseOrders();
+  const { items: vendors } = useVendors();
+  const [showNew, setShowNew] = useState(false);
+  const [typeFilter, setTypeFilter] = useState('all');
+
+  const filtered = typeFilter === 'all' ? items : items.filter(p => p.type === typeFilter);
+  const nextNumber = `PO-2026-${String(items.length + 1).padStart(3,'0')}`;
+  const clientTotal = items.filter(p => p.type==='client').reduce((s,p)=>s+Number(p.value||0),0);
+  const vendorTotal = items.filter(p => p.type==='vendor').reduce((s,p)=>s+Number(p.value||0),0);
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Purchase Orders</div>
+          <div className="section-sub">{loading ? 'Loading from Firestore…' : `${items.length} PO${items.length===1?'':'s'} · Next: ${nextNumber}`}</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" onClick={() => setShowNew(true)}>+ New Purchase Order</button>
+          <ClearCollectionButton label="Clear All POs" count={items.length} onClear={clearAllPOs} />
+        </div>
+      </div>
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Client POs (inflow)</div><div className="stat-value blue">{inr(clientTotal)}</div></div>
+        <div className="stat-card"><div className="stat-label">Vendor POs (outflow)</div><div className="stat-value red">{inr(vendorTotal)}</div></div>
+        <div className="stat-card"><div className="stat-label">Net Position</div><div className={`stat-value ${clientTotal-vendorTotal>=0?'green':'red'}`}>{inr(clientTotal-vendorTotal)}</div></div>
+      </div>
+      <div className="card" style={{marginBottom:14}}>
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <select className="form-input form-select" style={{width:170}} onChange={e=>setTypeFilter(e.target.value)}>
+            <option value="all">All Types</option>
+            <option value="client">Client POs</option>
+            <option value="vendor">Vendor POs</option>
+          </select>
+        </div>
+      </div>
+      <div className="card">
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+        ) : filtered.length === 0 ? (
+          <div className="module-coming">
+            <div className="big-icon">📦</div>
+            <h3>No purchase orders yet</h3>
+            <p className="text-muted">Create your first PO — saved permanently to your database.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>PO #</th><th>Party</th><th>Type</th><th>Description</th><th>Value</th><th>Linked WO</th><th>Stage</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(p => (
+                <tr key={p.docId}>
+                  <td className="mono">{p.po}</td>
+                  <td className="fw-600">{p.party}</td>
+                  <td><span className={`badge ${p.type==='client'?'blue':'amber'}`}>{p.type==='client'?'Client':'Vendor'}</span></td>
+                  <td>{p.description || '—'}</td>
+                  <td className="amount fw-600">{inr(p.value||0)}</td>
+                  <td className="mono">{p.wo || '—'}</td>
+                  <td><span className={`badge ${PO_STAGE_COLOR[p.stage]||'grey'}`}>{p.stage}</span></td>
+                  <td>
+                    <div className="flex gap-2">
+                      <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this purchase order?')) deletePO(p.docId); }}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {showNew && <NewPOModal onClose={() => setShowNew(false)} nextNumber={nextNumber} vendors={vendors} />}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// PAYMENT TRACKER (milestones)
+// ════════════════════════════════════════════════════
+const MILESTONES_COLLECTION = 'milestones';
+
+function useMilestones() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const q = query(collection(db, MILESTONES_COLLECTION), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, (snap) => {
+        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
+        setLoading(false);
+      }, (err) => { console.error('Milestones listener error', err); setLoading(false); });
+      return unsub;
+    }
+    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    let unsub;
+    const handler = () => { unsub = start(); };
+    window.addEventListener('firebase-ready', handler, { once: true });
+    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+  }, []);
+  return { items, loading };
+}
+async function addMilestone(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, MILESTONES_COLLECTION), { ...data, createdAt: Date.now(), paid: false });
+}
+async function markMilestonePaid(docId) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(doc(db, MILESTONES_COLLECTION, docId), { paid: true, paidAt: Date.now() });
+}
+async function deleteMilestone(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, MILESTONES_COLLECTION, docId));
+}
+async function clearAllMilestones() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(collection(db, MILESTONES_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+function NewMilestoneModal({ onClose, pos }) {
+  const [form, setForm] = useState({ name: '', pct: '', amount: '', due: '', po: '', wo: '' });
+  const [saving, setSaving] = useState(false);
+  function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
+
+  async function handleSave() {
+    if (!form.name.trim() || !form.amount || !form.due) return;
+    setSaving(true);
+    try {
+      await addMilestone({ ...form, amount: Number(form.amount) });
+      onClose();
+    } catch (e) { console.error(e); alert('Could not save milestone.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:480,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Payment Milestone</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-group">
+            <label className="form-label">Milestone Name</label>
+            <input className="form-input" value={form.name} onChange={e=>set('name', e.target.value)} placeholder="e.g. Mobilisation Advance" autoFocus />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Percentage</label>
+              <input className="form-input font-mono" value={form.pct} onChange={e=>set('pct', e.target.value)} placeholder="25%" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Amount (₹)</label>
+              <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount', e.target.value)} placeholder="0" />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Due Date</label>
+            <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Linked PO #</label>
+              {pos && pos.length > 0 ? (
+                <select className="form-input form-select" value={form.po} onChange={e=>set('po', e.target.value)}>
+                  <option value="">Select PO…</option>
+                  {pos.map(p => <option key={p.docId} value={p.po}>{p.po} — {p.party}</option>)}
+                </select>
+              ) : (
+                <input className="form-input font-mono" value={form.po} onChange={e=>set('po', e.target.value)} placeholder="PO-2026-0XX" />
+              )}
+            </div>
+            <div className="form-group">
+              <label className="form-label">Linked WO #</label>
+              <input className="form-input font-mono" value={form.wo} onChange={e=>set('wo', e.target.value)} placeholder="WO-2026-0XX" />
+            </div>
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !form.name.trim() || !form.amount || !form.due} className="btn btn-primary" style={{opacity: saving || !form.name.trim() || !form.amount || !form.due ? .6 : 1}}>
+            {saving ? 'Saving…' : 'Save Milestone'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PaymentTracker() {
+  const { items, loading } = useMilestones();
+  const { items: pos } = usePurchaseOrders();
+  const [showNew, setShowNew] = useState(false);
+
+  const todayStr = new Date().toISOString().slice(0,10);
+  const withStatus = items.map(m => {
+    let status;
+    if (m.paid) status = 'Paid';
+    else if (m.due === todayStr) status = 'Due';
+    else if (m.due < todayStr) status = 'Overdue';
+    else status = 'Upcoming';
+    const days = (status === 'Overdue' && m.due) ? Math.floor((new Date(todayStr) - new Date(m.due)) / 86400000) : 0;
+    return { ...m, computedStatus: status, days };
+  });
+
+  const totalCollected = withStatus.filter(m => m.paid).reduce((s,m) => s + Number(m.amount||0), 0);
+  const overdueTotal = withStatus.filter(m => m.computedStatus === 'Overdue').reduce((s,m) => s + Number(m.amount||0), 0);
+  const next7 = new Date(Date.now() + 7*86400000).toISOString().slice(0,10);
+  const dueWeekTotal = withStatus.filter(m => !m.paid && m.due >= todayStr && m.due <= next7).reduce((s,m) => s + Number(m.amount||0), 0);
+  const next30 = new Date(Date.now() + 30*86400000).toISOString().slice(0,10);
+  const upcoming30 = withStatus.filter(m => !m.paid && m.due > next7 && m.due <= next30).reduce((s,m) => s + Number(m.amount||0), 0);
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Payment Tracker</div>
+          <div className="section-sub">{loading ? 'Loading from Firestore…' : `${items.length} milestone${items.length===1?'':'s'} · live data`}</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" onClick={() => setShowNew(true)}>+ New Milestone</button>
+          <ClearCollectionButton label="Clear All Milestones" count={items.length} onClear={clearAllMilestones} />
+        </div>
+      </div>
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Total Collected</div><div className="stat-value green">{inr(totalCollected)}</div></div>
+        <div className="stat-card"><div className="stat-label">Overdue</div><div className="stat-value red">{inr(overdueTotal)}</div></div>
+        <div className="stat-card"><div className="stat-label">Due This Week</div><div className="stat-value amber">{inr(dueWeekTotal)}</div></div>
+        <div className="stat-card"><div className="stat-label">Upcoming 30 Days</div><div className="stat-value blue">{inr(upcoming30)}</div></div>
+      </div>
+      <div className="card">
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+        ) : withStatus.length === 0 ? (
+          <div className="module-coming">
+            <div className="big-icon">💳</div>
+            <h3>No payment milestones yet</h3>
+            <p className="text-muted">Add your first milestone — saved permanently to your database.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>Milestone</th><th>%</th><th>Amount</th><th>Due Date</th><th>Status</th><th>PO #</th><th>WO #</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+              {withStatus.map(m => (
+                <tr key={m.docId} className={m.computedStatus==='Overdue'?'overdue':m.computedStatus==='Due'?'due-today':''}>
+                  <td className="fw-600">{m.name}</td>
+                  <td>{m.pct}</td>
+                  <td className="amount fw-600">{inr(m.amount||0)}</td>
+                  <td>{m.due}{m.days > 0 && <span style={{color:'var(--red)',fontWeight:600}}> +{m.days}d</span>}</td>
+                  <td><span className={`badge ${m.computedStatus==='Paid'?'green':m.computedStatus==='Overdue'?'red':m.computedStatus==='Due'?'amber':'blue'}`}>{m.computedStatus}</span></td>
+                  <td className="mono">{m.po || '—'}</td>
+                  <td className="mono">{m.wo || '—'}</td>
+                  <td>
+                    {!m.paid ? (
+                      <div className="flex gap-2">
+                        <button className="btn btn-sm btn-primary" onClick={() => markMilestonePaid(m.docId)}>Mark Paid</button>
+                        <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this milestone?')) deleteMilestone(m.docId); }}>Delete</button>
+                      </div>
+                    ) : (
+                      <span className="text-muted text-sm">✓ Received</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {showNew && <NewMilestoneModal onClose={() => setShowNew(false)} pos={pos} />}
+    </div>
+  );
+}
+
 function ComingSoon({ title, icon, desc }) {
   return (
     <div>
@@ -2034,6 +2814,9 @@ function Settings() {
               { label:'Clear Cash Flow Data', desc:'Wipes all forecast entries and balance history.', scope:'cashflow' },
               { label:'Clear Bill Payments', desc:'Removes all bills, payment records, and history.', scope:'bills' },
               { label:'Clear Payment Milestones', desc:'Deletes all client payment milestone records.', scope:'milestones' },
+              { label:'Clear Quotations', desc:'Removes all quotations and pipeline data.', scope:'quotations' },
+              { label:'Clear Purchase Orders', desc:'Removes all client and vendor POs.', scope:'purchaseorders' },
+              { label:'Clear Vendor Master', desc:'Removes all vendor profiles and ratings.', scope:'vendors' },
               { label:'Reset All Data', desc:'Wipes everything and returns to a blank slate.', scope:'all' },
             ].map(item => (
               <ClearDataCard key={item.scope} item={item} />
@@ -2054,7 +2837,7 @@ function ClearDataCard({ item }) {
   const CONFIRM_PHRASE = 'DELETE';
 
   const isAll = item.scope === 'all';
-  const isWired = ['tasks','workorders','bills','cashflow'].includes(item.scope);
+  const isWired = ['tasks','workorders','bills','cashflow','milestones','quotations','purchaseorders','vendors'].includes(item.scope);
   const cardBg = isAll ? '#FFF0F0' : '#FFFAFA';
 
   async function handleClear() {
@@ -2068,10 +2851,20 @@ function ClearDataCard({ item }) {
         await clearAllBills();
       } else if (item.scope === 'cashflow') {
         await clearCashFlowData();
+      } else if (item.scope === 'milestones') {
+        await clearAllMilestones();
+      } else if (item.scope === 'quotations') {
+        await clearAllQuotations();
+      } else if (item.scope === 'purchaseorders') {
+        await clearAllPOs();
+      } else if (item.scope === 'vendors') {
+        await clearAllVendors();
       } else if (item.scope === 'all') {
-        await Promise.all([clearAllTasks(), clearAllWorkOrders(), clearCashFlowData()]);
+        await Promise.all([
+          clearAllTasks(), clearAllWorkOrders(), clearCashFlowData(),
+          clearAllMilestones(), clearAllQuotations(), clearAllPOs(), clearAllVendors()
+        ]);
       }
-      // Remaining scopes (payment milestones not yet built): nothing to delete.
       setCleared(true);
       setStep(0);
       setTyped('');
@@ -2188,11 +2981,11 @@ function Module({ id, setActive }) {
     case 'billpayments': return <BillPayments />;
     case 'chat': return <TeamChat />;
     case 'settings': return <Settings />;
-    case 'quotations': return <ComingSoon title="Quotations" icon="📋" desc="Import from email or upload manually. Manage negotiation stages and T&C." />;
+    case 'quotations': return <Quotations />;
     case 'projects': return <ComingSoon title="Project Management" icon="📐" desc="Full project P&L, material tracking, milestone triggers, and shared cost allocation." />;
-    case 'purchaseorders': return <ComingSoon title="Purchase Orders" icon="📦" desc="Client and vendor POs with payment schedules, T&C, and penalty clauses." />;
+    case 'purchaseorders': return <PurchaseOrders />;
     case 'pettycash': return <ComingSoon title="Petty Cash" icon="💰" desc="Day-to-day cash expenses with receipt photos and monthly reconciliation." />;
-    case 'vendors': return <ComingSoon title="Vendor Master" icon="🏭" desc="Full vendor profiles with transaction history, ratings, and outstanding balance." />;
+    case 'vendors': return <VendorMaster />;
     case 'documents': return <ComingSoon title="Document Vault" icon="🗄" desc="Centralised file storage with expiry alerts for licences and certificates." />;
     case 'reminders': return <ComingSoon title="Reminders" icon="🔔" desc="Auto-generated from milestones, tasks, bills, and document expiry." />;
     case 'reports': return <ComingSoon title="Reports" icon="📊" desc="Task performance, cash flow, project P&L, vendor spend, and more." />;
