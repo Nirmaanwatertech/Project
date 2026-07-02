@@ -315,9 +315,10 @@ const NAV = [
   { section: 'Operations' },
   { id:'dashboard', label:'Dashboard', icon:'⊞', badge:null },
   { id:'tasks', label:'Tasks', icon:'☑', badge:3 },
-  { id:'workorders', label:'Work Orders', icon:'🔧', badge:1 },
   { id:'projects', label:'Projects', icon:'📐', badge:null },
-  { section: 'Finance' },
+  { section: 'Orders' },
+  { id:'workorders', label:'Work Orders', icon:'🔧', badge:null },
+  { id:'purchaseorders', label:'Purchase Orders', icon:'📦', badge:null },
   { id:'quotations', label:'Quotations', icon:'📋', badge:null },
   { id:'paymenttracker', label:'Payment Tracker', icon:'💳', badge:2 },
   { id:'billpayments', label:'Bill Payments', icon:'📑', badge:2 },
@@ -986,13 +987,18 @@ function Tasks() {
   );
 }
 
-// ─── Work Orders Module ───────────────────────────────
+
+// ════════════════════════════════════════════════════
+// WORK ORDERS — issued to vendors for services/labour
+// Series: NWTS/WO/2026-27/001
+// ════════════════════════════════════════════════════
 const WO_COLLECTION = 'workorders';
+const WO_STAGES = ['Draft','Issued','In Progress','Completed','Cancelled'];
+const FY = '2026-27';
 
 function useWorkOrders() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-
   useEffect(() => {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
@@ -1003,20 +1009,14 @@ function useWorkOrders() {
       }, (err) => { console.error('WO listener error', err); setLoading(false); });
       return unsub;
     }
-    if (window.fb) {
-      const unsub = start();
-      return () => unsub && unsub();
-    } else {
-      let unsub;
-      const handler = () => { unsub = start(); };
-      window.addEventListener('firebase-ready', handler, { once: true });
-      return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
-    }
+    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    let unsub;
+    const handler = () => { unsub = start(); };
+    window.addEventListener('firebase-ready', handler, { once: true });
+    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
   }, []);
-
   return { items, loading };
 }
-
 async function addWorkOrder(data) {
   const { db, collection, addDoc } = window.fb;
   await addDoc(collection(db, WO_COLLECTION), { ...data, createdAt: Date.now() });
@@ -1037,29 +1037,63 @@ async function clearAllWorkOrders() {
   await batch.commit();
 }
 
-function NewWorkOrderModal({ onClose, nextNumber }) {
+function nextWONumber(count) {
+  return `NWTS/WO/${FY}/${String(count + 1).padStart(3, '0')}`;
+}
+function nextPONumber(count) {
+  return `NWTS/PO/${FY}/${String(count + 1).padStart(3, '0')}`;
+}
+
+// Returns quotations eligible for linking (Finalization of T&C or Issuing of PO/WO)
+function finalizedQuotations(quotations) {
+  return quotations.filter(q => q.stage === 'Finalization of T&C' || q.stage === 'Issuing of PO/WO');
+}
+
+function NewWOModal({ onClose, nextNumber, quotations }) {
   const [form, setForm] = useState({
-    wo: nextNumber, client: '', site: '', work: '', assigned: 'Rahul',
-    priority: 'Medium', status: 'Scheduled', due: '', value: '', pct: 0, po: ''
+    wo: nextNumber, vendorName: '', description: '', value: '',
+    linkedQuotation: '', stage: 'Draft', due: '', notes: '',
+    penaltyClause: '', disputeClause: ''
   });
+  const [schedule, setSchedule] = useState([]);
   const [saving, setSaving] = useState(false);
-  function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
+  function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
+
+  // Auto-fill vendor name when quotation selected
+  function handleQuotationSelect(val) {
+    const q = quotations.find(q => q.docId === val);
+    set('linkedQuotation', val);
+    if (q) {
+      setForm(s => ({
+        ...s,
+        linkedQuotation: val,
+        vendorName: q.vendorName || s.vendorName,
+        description: s.description || q.description || '',
+        value: s.value || (q.value ? String(q.value) : ''),
+      }));
+      if ((!schedule || schedule.length === 0) && q.paymentSchedule && q.paymentSchedule.length > 0) {
+        setSchedule(q.paymentSchedule.map(r => ({ ...r, id: genRowId() })));
+      }
+    }
+  }
 
   async function handleSave() {
-    if (!form.client.trim() || !form.work.trim()) return;
+    if (!form.vendorName.trim() || !form.description.trim()) return;
     setSaving(true);
     try {
-      await addWorkOrder({ ...form, pct: Number(form.pct) || 0 });
+      await addWorkOrder({ ...form, value: Number(form.value) || 0, paymentSchedule: schedule });
       onClose();
     } catch (e) { console.error(e); alert('Could not save work order.'); }
     finally { setSaving(false); }
   }
 
+  const eligible = finalizedQuotations(quotations);
+
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:560,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
-        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Work Order</span>
+      <div style={{background:'var(--surface)',borderRadius:10,width:620,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--secondary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ Issue Work Order</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-grid">
@@ -1068,61 +1102,59 @@ function NewWorkOrderModal({ onClose, nextNumber }) {
               <input className="form-input font-mono" value={form.wo} onChange={e=>set('wo', e.target.value)} />
             </div>
             <div className="form-group">
-              <label className="form-label">Client Name</label>
-              <input className="form-input" value={form.client} onChange={e=>set('client', e.target.value)} placeholder="Client / society name" />
+              <label className="form-label">Linked Quotation</label>
+              <select className="form-input form-select" value={form.linkedQuotation} onChange={e => handleQuotationSelect(e.target.value)}>
+                <option value="">Select finalized quotation…</option>
+                {eligible.map(q => (
+                  <option key={q.docId} value={q.docId}>{q.vendorName} — {q.description ? q.description.slice(0,40) : ''} ({inr(q.value||0)})</option>
+                ))}
+                {eligible.length === 0 && <option disabled>No finalized quotations yet</option>}
+              </select>
             </div>
           </div>
           <div className="form-group">
-            <label className="form-label">Site Address</label>
-            <input className="form-input" value={form.site} onChange={e=>set('site', e.target.value)} placeholder="Site address" />
+            <label className="form-label">Vendor Name</label>
+            <input className="form-input" value={form.vendorName} onChange={e=>set('vendorName', e.target.value)} placeholder="Vendor / contractor name" />
           </div>
           <div className="form-group">
-            <label className="form-label">Work Description</label>
-            <input className="form-input" value={form.work} onChange={e=>set('work', e.target.value)} placeholder="e.g. RO plant 1000 LPH installation" />
+            <label className="form-label">Scope of Work / Description</label>
+            <textarea className="form-input" rows="2" value={form.description} onChange={e=>set('description', e.target.value)} placeholder="e.g. RO plant commissioning and installation at Green Valley CHS" style={{resize:'vertical'}} />
           </div>
-          <div className="form-grid-3">
+          <div className="form-grid">
             <div className="form-group">
-              <label className="form-label">Assigned Staff</label>
-              <select className="form-input form-select" value={form.assigned} onChange={e=>set('assigned', e.target.value)}>
-                <option>Rahul</option><option>Priya</option><option>Manoj</option><option>Amit</option>
-              </select>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Priority</label>
-              <select className="form-input form-select" value={form.priority} onChange={e=>set('priority', e.target.value)}>
-                <option>Critical</option><option>High</option><option>Medium</option><option>Low</option>
-              </select>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Status</label>
-              <select className="form-input form-select" value={form.status} onChange={e=>set('status', e.target.value)}>
-                <option>Scheduled</option><option>In Progress</option><option>Completed</option>
-              </select>
-            </div>
-          </div>
-          <div className="form-grid-3">
-            <div className="form-group">
-              <label className="form-label">Due Date</label>
-              <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Progress %</label>
-              <input className="form-input font-mono" type="number" min="0" max="100" value={form.pct} onChange={e=>set('pct', e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Estimated Value (₹)</label>
+              <label className="form-label">Total Value (₹)</label>
               <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
             </div>
+            <div className="form-group">
+              <label className="form-label">Expected Completion Date</label>
+              <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
+            </div>
+          </div>
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
+          <div className="form-group">
+            <label className="form-label">Stage</label>
+            <select className="form-input form-select" value={form.stage} onChange={e=>set('stage', e.target.value)}>
+              {WO_STAGES.map(s => <option key={s}>{s}</option>)}
+            </select>
           </div>
           <div className="form-group">
-            <label className="form-label">Linked PO Number</label>
-            <input className="form-input font-mono" value={form.po} onChange={e=>set('po', e.target.value)} placeholder="PO-2026-0XX" />
+            <label className="form-label">Penalty Clause</label>
+            <input className="form-input" value={form.penaltyClause} onChange={e=>set('penaltyClause', e.target.value)} placeholder="Optional" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Dispute Resolution Clause</label>
+            <input className="form-input" value={form.disputeClause} onChange={e=>set('disputeClause', e.target.value)} placeholder="Optional" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Internal Notes</label>
+            <input className="form-input" value={form.notes} onChange={e=>set('notes', e.target.value)} placeholder="Optional" />
           </div>
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleSave} disabled={saving || !form.client.trim() || !form.work.trim()} className="btn btn-primary" style={{opacity: saving || !form.client.trim() || !form.work.trim() ? .6 : 1}}>
-            {saving ? 'Saving…' : 'Save Work Order'}
+          <button onClick={handleSave} disabled={saving || !form.vendorName.trim() || !form.description.trim()} className="btn btn-primary"
+            style={{background:'var(--secondary)', opacity: saving || !form.vendorName.trim() || !form.description.trim() ? .6 : 1}}>
+            {saving ? 'Saving…' : 'Issue Work Order'}
           </button>
         </div>
       </div>
@@ -1130,176 +1162,64 @@ function NewWorkOrderModal({ onClose, nextNumber }) {
   );
 }
 
-function WOOverdueRemarkModal({ wo, onClose, onSaved }) {
-  const [reason, setReason] = useState('');
-  const [newDate, setNewDate] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  async function handleSave() {
-    if (!reason.trim() || !newDate) return;
-    setSaving(true);
-    try {
-      await updateWorkOrder(wo.docId, { status: 'In Progress', due: newDate, remark: reason, remarkAt: Date.now() });
-      onSaved();
-    } catch (e) { console.error(e); alert('Could not save remark.'); }
-    finally { setSaving(false); }
-  }
-
-  return (
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:440,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
-        <div style={{background:'var(--amber)',padding:'14px 18px'}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>⚠️ Overdue Remark Required</span>
-        </div>
-        <div style={{padding:'18px 20px'}}>
-          <div style={{fontSize:12.5,color:'var(--text)',marginBottom:14}}>
-            <strong>{wo.wo}</strong> — {wo.work} is overdue. A remark is required before this WO can move forward.
-          </div>
-          <div className="form-group">
-            <label className="form-label">Reason for Delay</label>
-            <textarea className="form-input" rows="3" value={reason} onChange={e=>setReason(e.target.value)} placeholder="Explain the delay…" style={{resize:'vertical'}} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">New Expected Date</label>
-            <input className="form-input" type="date" value={newDate} onChange={e=>setNewDate(e.target.value)} />
-          </div>
-        </div>
-        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
-          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleSave} disabled={saving || !reason.trim() || !newDate} className="btn btn-primary" style={{opacity: saving || !reason.trim() || !newDate ? .6 : 1}}>
-            {saving ? 'Saving…' : 'Save Remark & Continue'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ClearCollectionButton({ label, count, onClear }) {
-  const [step, setStep] = useState(0);
-  const [typed, setTyped] = useState('');
-  const [working, setWorking] = useState(false);
-  const CONFIRM_PHRASE = 'DELETE';
-  function close() { setStep(0); setTyped(''); }
-
-  async function handleClear() {
-    setWorking(true);
-    try { await onClear(); close(); }
-    catch (e) { console.error(e); alert('Could not clear data — check Firestore connection.'); }
-    finally { setWorking(false); }
-  }
-
-  return (
-    <>
-      <button onClick={() => setStep(1)} disabled={count === 0}
-        style={{background:'transparent',border:'1px solid #EF9A9A',color:'var(--red)',borderRadius:4,padding:'6px 14px',fontSize:12,fontWeight:600,cursor:count===0?'not-allowed':'pointer',opacity:count===0?.5:1}}>
-        🗑 {label}
-      </button>
-      {step === 1 && (
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={close}>
-          <div style={{background:'var(--surface)',borderRadius:10,width:420,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
-            <div style={{background:'var(--red)',padding:'14px 18px',display:'flex',alignItems:'center',gap:10}}>
-              <span style={{fontSize:20}}>🗑</span>
-              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{label}</span>
-            </div>
-            <div style={{padding:'20px 20px 8px'}}>
-              <div style={{fontSize:13,color:'var(--text)',marginBottom:10,lineHeight:1.6}}>
-                You are about to <strong>permanently delete all {count} record{count===1?'':'s'}</strong> from the database.<br/><br/>
-                <span style={{color:'var(--red)',fontWeight:600}}>This action cannot be undone.</span>
-              </div>
-            </div>
-            <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
-              <button onClick={close} className="btn btn-ghost">Cancel</button>
-              <button onClick={() => setStep(2)} style={{background:'var(--red)',color:'#fff',border:'none',borderRadius:4,padding:'7px 18px',fontWeight:600,fontSize:12.5,cursor:'pointer'}}>
-                Yes, I want to delete →
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {step === 2 && (
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.55)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={close}>
-          <div style={{background:'var(--surface)',borderRadius:10,width:440,boxShadow:'0 8px 40px rgba(0,0,0,.28)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
-            <div style={{background:'#B71C1C',padding:'14px 18px',display:'flex',alignItems:'center',gap:10}}>
-              <span style={{fontSize:20}}>⛔</span>
-              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Final Confirmation Required</span>
-            </div>
-            <div style={{padding:'22px 22px 8px'}}>
-              <div style={{fontSize:13,color:'var(--text)',marginBottom:16,lineHeight:1.7}}>
-                Type the word below exactly as shown to confirm deletion:
-              </div>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:18,fontWeight:800,color:'var(--red)',letterSpacing:4,textAlign:'center',background:'var(--red-50)',padding:'10px',borderRadius:6,marginBottom:16,border:'1px dashed #EF9A9A'}}>
-                {CONFIRM_PHRASE}
-              </div>
-              <input
-                className="form-input font-mono"
-                placeholder={`Type ${CONFIRM_PHRASE} to confirm`}
-                value={typed}
-                onChange={e => setTyped(e.target.value.toUpperCase())}
-                autoFocus
-                style={{fontSize:14,fontWeight:600,letterSpacing:2,textAlign:'center',
-                  borderColor: typed === CONFIRM_PHRASE ? 'var(--red)' : typed.length > 0 ? '#EF9A9A' : 'var(--border)'}}
-              />
-            </div>
-            <div style={{padding:'16px 22px 22px',display:'flex',gap:10,justifyContent:'flex-end'}}>
-              <button onClick={close} className="btn btn-ghost" disabled={working}>Cancel</button>
-              <button
-                onClick={handleClear}
-                disabled={typed !== CONFIRM_PHRASE || working}
-                style={{background: typed === CONFIRM_PHRASE ? '#B71C1C' : '#BDBDBD',color:'#fff',border:'none',borderRadius:4,padding:'7px 20px',fontWeight:700,fontSize:12.5,cursor: typed === CONFIRM_PHRASE && !working ? 'pointer' : 'not-allowed'}}>
-                {working ? 'Deleting…' : '🗑 Delete Permanently'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
+const WO_STAGE_COLOR = { 'Draft':'grey','Issued':'blue','In Progress':'teal','Completed':'green','Cancelled':'red' };
 
 function WorkOrders() {
   const { items, loading } = useWorkOrders();
-  const [filter, setFilter] = useState('all');
+  const { items: quotations } = useQuotations();
   const [showNew, setShowNew] = useState(false);
-  const [remarkWO, setRemarkWO] = useState(null);
+  const [viewSchedule, setViewSchedule] = useState(null);
+  const [stageFilter, setStageFilter] = useState('all');
 
-  const todayStr = new Date().toISOString().slice(0,10);
-  const withStatus = items.map(w => {
-    const isOverdue = w.due && w.due < todayStr && w.status !== 'Completed' && !w.remark;
-    return { ...w, effectiveStatus: isOverdue ? 'Overdue' : (w.status || 'Scheduled') };
-  });
-  const filtered = filter === 'all' ? withStatus : withStatus.filter(w => w.effectiveStatus.toLowerCase() === filter);
+  const nextNumber = nextWONumber(items.length);
+  const filtered = stageFilter === 'all' ? items : items.filter(w => w.stage === stageFilter);
+  const totalValue = items.reduce((s,w) => s + Number(w.value||0), 0);
+  const activeCount = items.filter(w => w.stage === 'Issued' || w.stage === 'In Progress').length;
 
-  const nextNumber = `WO-2026-${String(items.length + 1).padStart(3,'0')}`;
+  // Resolve quotation display name from docId
+  function quoteLabel(id) {
+    const q = quotations.find(q => q.docId === id);
+    return q ? `${q.vendorName}` : (id || '—');
+  }
 
-  async function markComplete(w) {
-    try { await updateWorkOrder(w.docId, { status: 'Completed', pct: 100 }); }
-    catch (e) { console.error(e); alert('Could not update work order.'); }
+  async function advanceStage(w) {
+    const idx = WO_STAGES.indexOf(w.stage);
+    if (idx < WO_STAGES.length - 1) {
+      try { await updateWorkOrder(w.docId, { stage: WO_STAGES[idx+1] }); }
+      catch(e) { console.error(e); alert('Could not update stage.'); }
+    }
   }
 
   return (
-    <div>
+    <div style={{marginBottom:24}}>
       <div className="section-header">
         <div>
           <div className="section-title">Work Orders</div>
-          <div className="section-sub">{loading ? 'Loading from Firestore…' : `${items.length} WO${items.length===1?'':'s'} · live data · Next: ${nextNumber}`}</div>
+          <div className="section-sub">
+            {loading ? 'Loading from Firestore…' : `${items.length} WO${items.length===1?'':'s'} · ${activeCount} active · Next: ${nextNumber}`}
+          </div>
         </div>
         <div className="flex gap-2">
-          <button className="btn btn-primary" onClick={() => setShowNew(true)}>+ New Work Order</button>
-          <ClearCollectionButton label="Clear All Work Orders" count={items.length} onClear={clearAllWorkOrders} />
+          <button className="btn btn-primary" style={{background:'var(--secondary)'}} onClick={() => setShowNew(true)}>+ Issue Work Order</button>
+          <ClearCollectionButton label="Clear All WOs" count={items.length} onClear={clearAllWorkOrders} />
         </div>
       </div>
+
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Total WO Value</div><div className="stat-value red">{inr(totalValue)}</div></div>
+        <div className="stat-card"><div className="stat-label">Active</div><div className="stat-value blue">{activeCount}</div></div>
+        <div className="stat-card"><div className="stat-label">Completed</div><div className="stat-value green">{items.filter(w=>w.stage==='Completed').length}</div></div>
+      </div>
+
       <div className="card" style={{marginBottom:14}}>
         <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
-          <select className="form-input form-select" style={{width:140}} onChange={e=>setFilter(e.target.value)}>
-            <option value="all">All Status</option>
-            <option value="in progress">In Progress</option>
-            <option value="scheduled">Scheduled</option>
-            <option value="overdue">Overdue</option>
-            <option value="completed">Completed</option>
+          <select className="form-input form-select" style={{width:160}} onChange={e=>setStageFilter(e.target.value)}>
+            <option value="all">All Stages</option>
+            {WO_STAGES.map(s => <option key={s}>{s}</option>)}
           </select>
         </div>
       </div>
+
       <div className="card">
         {loading ? (
           <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
@@ -1307,39 +1227,34 @@ function WorkOrders() {
           <div className="module-coming">
             <div className="big-icon">🔧</div>
             <h3>No work orders yet</h3>
-            <p className="text-muted">Create your first work order — saved permanently to your database.</p>
+            <p className="text-muted">Issue a WO to a vendor for services or labour. Link it to a finalized quotation.</p>
           </div>
         ) : (
           <table>
             <thead>
-              <tr><th>WO #</th><th>Client</th><th>Work Description</th><th>Assigned</th><th>Priority</th><th>Status</th><th>Progress</th><th>Due Date</th><th>Value</th><th>Actions</th></tr>
+              <tr><th>WO Number</th><th>Vendor</th><th>Scope of Work</th><th>Linked Quotation</th><th>Value</th><th>Due</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {filtered.map(w => (
-                <tr key={w.docId} className={w.effectiveStatus==='Overdue'?'overdue':''}>
-                  <td className="mono">{w.wo}</td>
-                  <td>{w.client}</td>
-                  <td>{w.work}{w.remark && <div className="text-sm text-muted mt-1">Remark: {w.remark}</div>}</td>
-                  <td>{w.assigned}</td>
-                  <td><span className={`badge ${PRIO_COLOR[w.priority] || 'grey'}`}>{w.priority}</span></td>
-                  <td><StatusBadge status={w.effectiveStatus} /></td>
-                  <td style={{width:120}}>
-                    <div className="flex items-center gap-2">
-                      <div className="progress-wrap" style={{flex:1}}>
-                        <div className="progress-fill blue" style={{width:`${w.pct||0}%`}} />
-                      </div>
-                      <span className="text-sm text-muted">{w.pct||0}%</span>
-                    </div>
+                <tr key={w.docId}>
+                  <td className="mono" style={{whiteSpace:'nowrap'}}>{w.wo}</td>
+                  <td className="fw-600">{w.vendorName}</td>
+                  <td style={{maxWidth:180}}>{w.description}</td>
+                  <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{quoteLabel(w.linkedQuotation)}</td>
+                  <td className="amount fw-600">{inr(w.value||0)}</td>
+                  <td>{w.due || '—'}</td>
+                  <td>
+                    {w.paymentSchedule && w.paymentSchedule.length > 0 ? (
+                      <span className="btn btn-sm btn-ghost" style={{cursor:'pointer',whiteSpace:'nowrap'}} onClick={() => setViewSchedule({...w, label:w.wo})}>
+                        {w.paymentSchedule.length} stage{w.paymentSchedule.length===1?'':'s'}
+                      </span>
+                    ) : <span className="text-muted text-sm">—</span>}
                   </td>
-                  <td className={w.effectiveStatus==='Overdue'?'fw-600':''} style={w.effectiveStatus==='Overdue'?{color:'var(--red)'}:{}}>{w.due || '—'}</td>
-                  <td className="amount">{w.value ? `₹${Number(w.value).toLocaleString('en-IN')}` : '—'}</td>
+                  <td><span className={`badge ${WO_STAGE_COLOR[w.stage]||'grey'}`}>{w.stage}</span></td>
                   <td>
                     <div className="flex gap-2">
-                      {w.effectiveStatus !== 'Completed' && <button className="btn btn-sm btn-ghost" onClick={() => markComplete(w)}>Complete</button>}
-                      {w.effectiveStatus === 'Overdue' && (
-                        <button className="btn btn-sm" style={{background:'var(--red-50)',color:'var(--red)',border:'none',borderRadius:4,fontSize:11,padding:'4px 10px',cursor:'pointer'}} onClick={() => setRemarkWO(w)}>
-                          Add Remark
-                        </button>
+                      {w.stage !== 'Completed' && w.stage !== 'Cancelled' && (
+                        <button className="btn btn-sm btn-ghost" onClick={() => advanceStage(w)}>Advance →</button>
                       )}
                       <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this work order?')) deleteWorkOrder(w.docId); }}>Delete</button>
                     </div>
@@ -1350,11 +1265,345 @@ function WorkOrders() {
           </table>
         )}
       </div>
-      {showNew && <NewWorkOrderModal onClose={() => setShowNew(false)} nextNumber={nextNumber} />}
-      {remarkWO && <WOOverdueRemarkModal wo={remarkWO} onClose={() => setRemarkWO(null)} onSaved={() => setRemarkWO(null)} />}
+
+      {showNew && <NewWOModal onClose={() => setShowNew(false)} nextNumber={nextNumber} quotations={quotations} />}
+      {viewSchedule && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={() => setViewSchedule(null)}>
+          <div style={{background:'var(--surface)',borderRadius:10,width:440,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+            <div style={{background:'var(--secondary)',padding:'14px 18px'}}>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payment Schedule — {viewSchedule.label}</span>
+            </div>
+            <div style={{padding:'16px 20px'}}>
+              <table style={{width:'100%'}}>
+                <thead><tr>
+                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)',padding:'4px 0'}}>Stage</th>
+                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>%</th>
+                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Amount</th>
+                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Date</th>
+                </tr></thead>
+                <tbody>
+                  {(viewSchedule.paymentSchedule||[]).map((r,i) => (
+                    <tr key={i} style={{borderTop:'1px solid var(--grey-50)'}}>
+                      <td style={{padding:'6px 0',fontSize:12.5}}>{r.name}</td>
+                      <td style={{fontSize:12.5}}>{r.pct}%</td>
+                      <td className="amount" style={{fontSize:12.5}}>{inr(r.amount||0)}</td>
+                      <td style={{fontSize:12.5}}>{r.date || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{padding:'0 20px 16px',display:'flex',justifyContent:'flex-end'}}>
+              <button onClick={() => setViewSchedule(null)} className="btn btn-ghost">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+// ════════════════════════════════════════════════════
+// PURCHASE ORDERS — issued to vendors for materials/goods
+// Series: NWTS/PO/2026-27/001
+// ════════════════════════════════════════════════════
+const PO_COLLECTION = 'purchaseorders';
+const PO_STAGES = ['Draft','Issued','Goods In Transit','Partially Received','Fully Received','Closed'];
+
+function usePurchaseOrders() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const q = query(collection(db, PO_COLLECTION), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, (snap) => {
+        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
+        setLoading(false);
+      }, (err) => { console.error('PO listener error', err); setLoading(false); });
+      return unsub;
+    }
+    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    let unsub;
+    const handler = () => { unsub = start(); };
+    window.addEventListener('firebase-ready', handler, { once: true });
+    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+  }, []);
+  return { items, loading };
+}
+async function addPO(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, PO_COLLECTION), { ...data, createdAt: Date.now() });
+}
+async function updatePO(docId, data) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(doc(db, PO_COLLECTION, docId), data);
+}
+async function deletePO(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, PO_COLLECTION, docId));
+}
+async function clearAllPOs() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(collection(db, PO_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill }) {
+  const [form, setForm] = useState({
+    po: nextNumber, vendorName: prefill?.party || '', description: prefill?.description || '',
+    value: prefill?.value ? String(prefill.value) : '',
+    linkedQuotation: prefill?.fromQuotation || '',
+    stage: 'Draft', penaltyClause: prefill?.penaltyClause || '', disputeClause: prefill?.disputeClause || ''
+  });
+  const [schedule, setSchedule] = useState(prefill?.paymentSchedule ? prefill.paymentSchedule.map(r => ({...r, id: genRowId()})) : []);
+  const [saving, setSaving] = useState(false);
+  function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
+
+  function handleQuotationSelect(val) {
+    const q = quotations.find(q => q.docId === val);
+    set('linkedQuotation', val);
+    if (q) {
+      setForm(s => ({
+        ...s,
+        linkedQuotation: val,
+        vendorName: s.vendorName || q.vendorName || '',
+        description: s.description || q.description || '',
+        value: s.value || (q.value ? String(q.value) : ''),
+      }));
+      if ((!schedule || schedule.length === 0) && q.paymentSchedule && q.paymentSchedule.length > 0) {
+        setSchedule(q.paymentSchedule.map(r => ({ ...r, id: genRowId() })));
+      }
+    }
+  }
+
+  async function handleSave() {
+    if (!form.vendorName.trim() || !form.value) return;
+    setSaving(true);
+    try {
+      await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule });
+      onClose();
+    } catch (e) { console.error(e); alert('Could not save purchase order.'); }
+    finally { setSaving(false); }
+  }
+
+  const eligible = finalizedQuotations(quotations);
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:620,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ Issue Purchase Order</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">PO Number</label>
+              <input className="form-input font-mono" value={form.po} onChange={e=>set('po', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Linked Quotation</label>
+              <select className="form-input form-select" value={form.linkedQuotation} onChange={e => handleQuotationSelect(e.target.value)}>
+                <option value="">Select finalized quotation…</option>
+                {eligible.map(q => (
+                  <option key={q.docId} value={q.docId}>{q.vendorName} — {q.description ? q.description.slice(0,40) : ''} ({inr(q.value||0)})</option>
+                ))}
+                {eligible.length === 0 && <option disabled>No finalized quotations yet</option>}
+              </select>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Vendor Name</label>
+            {vendors && vendors.length > 0 ? (
+              <select className="form-input form-select" value={form.vendorName} onChange={e=>set('vendorName', e.target.value)}>
+                <option value="">Select vendor…</option>
+                {vendors.map(v => <option key={v.docId} value={v.company}>{v.company}</option>)}
+                {form.vendorName && !vendors.find(v => v.company === form.vendorName) && (
+                  <option value={form.vendorName}>{form.vendorName} (from quotation)</option>
+                )}
+              </select>
+            ) : (
+              <input className="form-input" value={form.vendorName} onChange={e=>set('vendorName', e.target.value)} placeholder="Vendor name" />
+            )}
+          </div>
+          <div className="form-group">
+            <label className="form-label">Description of Goods / Materials</label>
+            <input className="form-input" value={form.description} onChange={e=>set('description', e.target.value)} placeholder="e.g. RO membranes 4040 — 10 units" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Total Value (₹)</label>
+            <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
+          </div>
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
+          <div className="form-group">
+            <label className="form-label">Stage</label>
+            <select className="form-input form-select" value={form.stage} onChange={e=>set('stage', e.target.value)}>
+              {PO_STAGES.map(s => <option key={s}>{s}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Penalty Clause</label>
+            <input className="form-input" value={form.penaltyClause} onChange={e=>set('penaltyClause', e.target.value)} placeholder="Optional" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Dispute Resolution Clause</label>
+            <input className="form-input" value={form.disputeClause} onChange={e=>set('disputeClause', e.target.value)} placeholder="Optional" />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !form.vendorName.trim() || !form.value} className="btn btn-primary"
+            style={{opacity: saving || !form.vendorName.trim() || !form.value ? .6 : 1}}>
+            {saving ? 'Saving…' : 'Issue Purchase Order'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const PO_STAGE_COLOR = { 'Draft':'grey','Issued':'blue','Goods In Transit':'amber','Partially Received':'teal','Fully Received':'green','Closed':'grey' };
+
+function PurchaseOrders() {
+  const { items, loading } = usePurchaseOrders();
+  const { items: vendors } = useVendors();
+  const { items: quotations } = useQuotations();
+  const [showNew, setShowNew] = useState(false);
+  const [viewSchedule, setViewSchedule] = useState(null);
+  const [stageFilter, setStageFilter] = useState('all');
+
+  const nextNumber = nextPONumber(items.length);
+  const filtered = stageFilter === 'all' ? items : items.filter(p => p.stage === stageFilter);
+  const totalValue = items.reduce((s,p) => s + Number(p.value||0), 0);
+  const activeCount = items.filter(p => p.stage !== 'Closed' && p.stage !== 'Draft').length;
+
+  function quoteLabel(id) {
+    const q = quotations.find(q => q.docId === id);
+    return q ? `${q.vendorName}` : (id || '—');
+  }
+
+  async function advanceStage(p) {
+    const idx = PO_STAGES.indexOf(p.stage);
+    if (idx < PO_STAGES.length - 1) {
+      try { await updatePO(p.docId, { stage: PO_STAGES[idx+1] }); }
+      catch(e) { console.error(e); alert('Could not update stage.'); }
+    }
+  }
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Purchase Orders</div>
+          <div className="section-sub">
+            {loading ? 'Loading from Firestore…' : `${items.length} PO${items.length===1?'':'s'} · ${activeCount} active · Next: ${nextNumber}`}
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" onClick={() => setShowNew(true)}>+ Issue Purchase Order</button>
+          <ClearCollectionButton label="Clear All POs" count={items.length} onClear={clearAllPOs} />
+        </div>
+      </div>
+
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Total PO Value</div><div className="stat-value red">{inr(totalValue)}</div></div>
+        <div className="stat-card"><div className="stat-label">Active</div><div className="stat-value blue">{activeCount}</div></div>
+        <div className="stat-card"><div className="stat-label">Fully Received</div><div className="stat-value green">{items.filter(p=>p.stage==='Fully Received'||p.stage==='Closed').length}</div></div>
+      </div>
+
+      <div className="card" style={{marginBottom:14}}>
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <select className="form-input form-select" style={{width:180}} onChange={e=>setStageFilter(e.target.value)}>
+            <option value="all">All Stages</option>
+            {PO_STAGES.map(s => <option key={s}>{s}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div className="card">
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+        ) : filtered.length === 0 ? (
+          <div className="module-coming">
+            <div className="big-icon">📦</div>
+            <h3>No purchase orders yet</h3>
+            <p className="text-muted">Issue a PO to a vendor for materials or goods. Link it to a finalized quotation.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>PO Number</th><th>Vendor</th><th>Description</th><th>Linked Quotation</th><th>Value</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(p => (
+                <tr key={p.docId}>
+                  <td className="mono" style={{whiteSpace:'nowrap'}}>{p.po}</td>
+                  <td className="fw-600">{p.vendorName}</td>
+                  <td style={{maxWidth:180}}>{p.description || '—'}</td>
+                  <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{quoteLabel(p.linkedQuotation)}</td>
+                  <td className="amount fw-600">{inr(p.value||0)}</td>
+                  <td>
+                    {p.paymentSchedule && p.paymentSchedule.length > 0 ? (
+                      <span className="btn btn-sm btn-ghost" style={{cursor:'pointer',whiteSpace:'nowrap'}} onClick={() => setViewSchedule({...p, label:p.po})}>
+                        {p.paymentSchedule.length} stage{p.paymentSchedule.length===1?'':'s'}
+                      </span>
+                    ) : <span className="text-muted text-sm">—</span>}
+                  </td>
+                  <td><span className={`badge ${PO_STAGE_COLOR[p.stage]||'grey'}`}>{p.stage}</span></td>
+                  <td>
+                    <div className="flex gap-2">
+                      {p.stage !== 'Closed' && (
+                        <button className="btn btn-sm btn-ghost" onClick={() => advanceStage(p)}>Advance →</button>
+                      )}
+                      <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this purchase order?')) deletePO(p.docId); }}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {showNew && <NewPOModal onClose={() => setShowNew(false)} nextNumber={nextNumber} vendors={vendors} quotations={quotations} />}
+      {viewSchedule && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={() => setViewSchedule(null)}>
+          <div style={{background:'var(--surface)',borderRadius:10,width:440,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+            <div style={{background:'var(--primary)',padding:'14px 18px'}}>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payment Schedule — {viewSchedule.label}</span>
+            </div>
+            <div style={{padding:'16px 20px'}}>
+              <table style={{width:'100%'}}>
+                <thead><tr>
+                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)',padding:'4px 0'}}>Stage</th>
+                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>%</th>
+                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Amount</th>
+                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Date</th>
+                </tr></thead>
+                <tbody>
+                  {(viewSchedule.paymentSchedule||[]).map((r,i) => (
+                    <tr key={i} style={{borderTop:'1px solid var(--grey-50)'}}>
+                      <td style={{padding:'6px 0',fontSize:12.5}}>{r.name}</td>
+                      <td style={{fontSize:12.5}}>{r.pct}%</td>
+                      <td className="amount" style={{fontSize:12.5}}>{inr(r.amount||0)}</td>
+                      <td style={{fontSize:12.5}}>{r.date || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{padding:'0 20px 16px',display:'flex',justifyContent:'flex-end'}}>
+              <button onClick={() => setViewSchedule(null)} className="btn btn-ghost">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 // ─── Cash Flow Module ──────────────────────────────────
 const SETTINGS_COLLECTION = 'settings';
@@ -2257,20 +2506,26 @@ function NewQuotationModal({ onClose }) {
 // ─── Issue PO modal — pre-filled from quotation, creates linked PO ──
 function IssuePOModal({ quotation, onClose, onIssued }) {
   const { items: existingPOs } = usePurchaseOrders();
-  const nextNumber = `PO-2026-${String(existingPOs.length + 1).padStart(3,'0')}`;
+  const nextNumber = nextPONumber(existingPOs.length);
   const [form, setForm] = useState({
-    po: nextNumber, party: quotation.vendorName, description: quotation.description || '',
-    value: quotation.value || '', wo: '', stage: 'New', penaltyClause: '', disputeClause: ''
+    po: nextNumber,
+    vendorName: quotation.vendorName || '',
+    description: quotation.description || '',
+    value: quotation.value ? String(quotation.value) : '',
+    linkedQuotation: quotation.docId,
+    stage: 'Draft', penaltyClause: '', disputeClause: ''
   });
-  const [schedule, setSchedule] = useState(quotation.paymentSchedule || []);
+  const [schedule, setSchedule] = useState(
+    quotation.paymentSchedule ? quotation.paymentSchedule.map(r => ({ ...r, id: genRowId() })) : []
+  );
   const [saving, setSaving] = useState(false);
   function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
 
   async function handleIssue() {
-    if (!form.party.trim() || !form.value) return;
+    if (!form.vendorName.trim() || !form.value) return;
     setSaving(true);
     try {
-      await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule, fromQuotation: quotation.docId });
+      await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule });
       await updateQuotation(quotation.docId, { stage: 'Issuing of PO/WO', issuedPO: form.po });
       onIssued();
     } catch (e) { console.error(e); alert('Could not issue PO.'); }
@@ -2279,13 +2534,13 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:600,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:620,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--green)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>✓ Issue Purchase Order</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>✓ Issue Purchase Order from Quotation</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:14,background:'var(--green-50)',padding:'8px 12px',borderRadius:6}}>
-            This creates a new Purchase Order pre-filled from quotation <strong>{quotation.vendorName}</strong>, and marks the quotation as Issued.
+            Pre-filled from quotation — <strong>{quotation.vendorName}</strong>. Review and confirm before issuing.
           </div>
           <div className="form-grid">
             <div className="form-group">
@@ -2294,22 +2549,16 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
             </div>
             <div className="form-group">
               <label className="form-label">Vendor Name</label>
-              <input className="form-input" value={form.party} onChange={e=>set('party', e.target.value)} />
+              <input className="form-input" value={form.vendorName} onChange={e=>set('vendorName', e.target.value)} />
             </div>
           </div>
           <div className="form-group">
-            <label className="form-label">Description</label>
+            <label className="form-label">Description of Goods / Materials</label>
             <input className="form-input" value={form.description} onChange={e=>set('description', e.target.value)} />
           </div>
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">Total Value (₹)</label>
-              <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Linked WO Number</label>
-              <input className="form-input font-mono" value={form.wo} onChange={e=>set('wo', e.target.value)} placeholder="WO-2026-0XX (optional)" />
-            </div>
+          <div className="form-group">
+            <label className="form-label">Total Value (₹)</label>
+            <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} />
           </div>
           <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
           <div className="form-group">
@@ -2323,7 +2572,8 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleIssue} disabled={saving || !form.party.trim() || !form.value} className="btn btn-primary" style={{background:'var(--green)',opacity: saving || !form.party.trim() || !form.value ? .6 : 1}}>
+          <button onClick={handleIssue} disabled={saving || !form.vendorName.trim() || !form.value} className="btn btn-primary"
+            style={{background:'var(--green)', opacity: saving || !form.vendorName.trim() || !form.value ? .6 : 1}}>
             {saving ? 'Issuing…' : '✓ Issue PO'}
           </button>
         </div>
@@ -2456,240 +2706,6 @@ function Quotations() {
   );
 }
 
-// ════════════════════════════════════════════════════
-// PURCHASE ORDERS — vendor only
-// ════════════════════════════════════════════════════
-const PO_COLLECTION = 'purchaseorders';
-const PO_STAGES = ['New','Negotiation','PO Received','T&C Pending','Finalized','Active','Closed'];
-
-function usePurchaseOrders() {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    function start() {
-      const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(collection(db, PO_COLLECTION), orderBy('createdAt', 'desc'));
-      const unsub = onSnapshot(q, (snap) => {
-        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
-        setLoading(false);
-      }, (err) => { console.error('PO listener error', err); setLoading(false); });
-      return unsub;
-    }
-    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
-    let unsub;
-    const handler = () => { unsub = start(); };
-    window.addEventListener('firebase-ready', handler, { once: true });
-    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
-  }, []);
-  return { items, loading };
-}
-async function addPO(data) {
-  const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, PO_COLLECTION), { ...data, createdAt: Date.now() });
-}
-async function updatePO(docId, data) {
-  const { db, doc, updateDoc } = window.fb;
-  await updateDoc(doc(db, PO_COLLECTION, docId), data);
-}
-async function deletePO(docId) {
-  const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, PO_COLLECTION, docId));
-}
-async function clearAllPOs() {
-  const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(collection(db, PO_COLLECTION));
-  const batch = writeBatch(db);
-  snap.docs.forEach(d => batch.delete(d.ref));
-  await batch.commit();
-}
-
-function NewPOModal({ onClose, nextNumber, vendors, prefill }) {
-  const [form, setForm] = useState({
-    po: nextNumber, party: prefill?.party || '', description: prefill?.description || '',
-    value: prefill?.value || '', wo: prefill?.wo || '', stage: 'New', penaltyClause: '', disputeClause: ''
-  });
-  const [schedule, setSchedule] = useState([]);
-  const [saving, setSaving] = useState(false);
-  function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
-
-  async function handleSave() {
-    if (!form.party.trim() || !form.value) return;
-    setSaving(true);
-    try {
-      await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule });
-      onClose();
-    } catch (e) { console.error(e); alert('Could not save purchase order.'); }
-    finally { setSaving(false); }
-  }
-
-  return (
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:600,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
-        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Purchase Order</span>
-        </div>
-        <div style={{padding:'18px 20px'}}>
-          <div className="form-group">
-            <label className="form-label">PO Number</label>
-            <input className="form-input font-mono" value={form.po} onChange={e=>set('po', e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Vendor Name</label>
-            {vendors && vendors.length > 0 ? (
-              <select className="form-input form-select" value={form.party} onChange={e=>set('party', e.target.value)}>
-                <option value="">Select vendor…</option>
-                {vendors.map(v => <option key={v.docId} value={v.company}>{v.company}</option>)}
-                {form.party && !vendors.find(v => v.company === form.party) && <option value={form.party}>{form.party} (new)</option>}
-              </select>
-            ) : (
-              <input className="form-input" value={form.party} onChange={e=>set('party', e.target.value)} placeholder="Vendor name" />
-            )}
-          </div>
-          <div className="form-group">
-            <label className="form-label">Description of Goods / Services</label>
-            <input className="form-input" value={form.description} onChange={e=>set('description', e.target.value)} />
-          </div>
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">Total Value (₹)</label>
-              <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Linked WO Number</label>
-              <input className="form-input font-mono" value={form.wo} onChange={e=>set('wo', e.target.value)} placeholder="WO-2026-0XX" />
-            </div>
-          </div>
-          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
-          <div className="form-group">
-            <label className="form-label">Stage</label>
-            <select className="form-input form-select" value={form.stage} onChange={e=>set('stage', e.target.value)}>
-              {PO_STAGES.map(s => <option key={s}>{s}</option>)}
-            </select>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Penalty Clause</label>
-            <input className="form-input" value={form.penaltyClause} onChange={e=>set('penaltyClause', e.target.value)} placeholder="Optional" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Dispute Resolution Clause</label>
-            <input className="form-input" value={form.disputeClause} onChange={e=>set('disputeClause', e.target.value)} placeholder="Optional" />
-          </div>
-        </div>
-        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
-          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleSave} disabled={saving || !form.party.trim() || !form.value} className="btn btn-primary" style={{opacity: saving || !form.party.trim() || !form.value ? .6 : 1}}>
-            {saving ? 'Saving…' : 'Save Purchase Order'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const PO_STAGE_COLOR = { 'New':'blue','Negotiation':'amber','PO Received':'teal','T&C Pending':'amber','Finalized':'grey','Active':'green','Closed':'grey' };
-
-function PurchaseOrders() {
-  const { items, loading } = usePurchaseOrders();
-  const { items: vendors } = useVendors();
-  const [showNew, setShowNew] = useState(false);
-  const [viewSchedule, setViewSchedule] = useState(null);
-
-  const nextNumber = `PO-2026-${String(items.length + 1).padStart(3,'0')}`;
-  const totalValue = items.reduce((s,p)=>s+Number(p.value||0),0);
-  const activeCount = items.filter(p => p.stage !== 'Closed').length;
-
-  return (
-    <div>
-      <div className="section-header">
-        <div>
-          <div className="section-title">Purchase Orders</div>
-          <div className="section-sub">{loading ? 'Loading from Firestore…' : `${items.length} PO${items.length===1?'':'s'} · Next: ${nextNumber}`}</div>
-        </div>
-        <div className="flex gap-2">
-          <button className="btn btn-primary" onClick={() => setShowNew(true)}>+ New Purchase Order</button>
-          <ClearCollectionButton label="Clear All POs" count={items.length} onClear={clearAllPOs} />
-        </div>
-      </div>
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
-        <div className="stat-card"><div className="stat-label">Total PO Value (outflow)</div><div className="stat-value red">{inr(totalValue)}</div></div>
-        <div className="stat-card"><div className="stat-label">Active POs</div><div className="stat-value blue">{activeCount}</div></div>
-        <div className="stat-card"><div className="stat-label">Vendors Used</div><div className="stat-value">{new Set(items.map(p=>p.party)).size}</div></div>
-      </div>
-      <div className="card">
-        {loading ? (
-          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
-        ) : items.length === 0 ? (
-          <div className="module-coming">
-            <div className="big-icon">📦</div>
-            <h3>No purchase orders yet</h3>
-            <p className="text-muted">Create a PO manually, or issue one from a finalized quotation.</p>
-          </div>
-        ) : (
-          <table>
-            <thead>
-              <tr><th>PO #</th><th>Vendor</th><th>Description</th><th>Value</th><th>Linked WO</th><th>Payment Schedule</th><th>Stage</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              {items.map(p => (
-                <tr key={p.docId}>
-                  <td className="mono">{p.po}</td>
-                  <td className="fw-600">{p.party}</td>
-                  <td>{p.description || '—'}</td>
-                  <td className="amount fw-600">{inr(p.value||0)}</td>
-                  <td className="mono">{p.wo || '—'}</td>
-                  <td>
-                    {p.paymentSchedule && p.paymentSchedule.length > 0 ? (
-                      <span className="btn btn-sm btn-ghost" style={{cursor:'pointer'}} onClick={() => setViewSchedule(p)}>
-                        {p.paymentSchedule.length} stage{p.paymentSchedule.length===1?'':'s'} · view
-                      </span>
-                    ) : <span className="text-muted text-sm">—</span>}
-                  </td>
-                  <td><span className={`badge ${PO_STAGE_COLOR[p.stage]||'grey'}`}>{p.stage}</span></td>
-                  <td>
-                    <div className="flex gap-2">
-                      <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this purchase order?')) deletePO(p.docId); }}>Delete</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-      {showNew && <NewPOModal onClose={() => setShowNew(false)} nextNumber={nextNumber} vendors={vendors} />}
-      {viewSchedule && (
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={() => setViewSchedule(null)}>
-          <div style={{background:'var(--surface)',borderRadius:10,width:420,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
-            <div style={{background:'var(--primary)',padding:'14px 18px'}}>
-              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payment Schedule — {viewSchedule.party}</span>
-            </div>
-            <div style={{padding:'16px 20px'}}>
-              <table style={{width:'100%'}}>
-                <thead><tr><th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)',padding:'4px 0'}}>Stage</th><th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>%</th><th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Amount</th><th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Date</th></tr></thead>
-                <tbody>
-                  {(viewSchedule.paymentSchedule||[]).map((r,i) => (
-                    <tr key={i} style={{borderTop:'1px solid var(--grey-50)'}}>
-                      <td style={{padding:'6px 0',fontSize:12.5}}>{r.name}</td>
-                      <td style={{fontSize:12.5}}>{r.pct}%</td>
-                      <td className="amount" style={{fontSize:12.5}}>{inr(r.amount||0)}</td>
-                      <td style={{fontSize:12.5}}>{r.date || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{padding:'0 20px 16px',display:'flex',justifyContent:'flex-end'}}>
-              <button onClick={() => setViewSchedule(null)} className="btn btn-ghost">Close</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-// ════════════════════════════════════════════════════
 // PAYMENT TRACKER (milestones)
 // ════════════════════════════════════════════════════
 const MILESTONES_COLLECTION = 'milestones';
