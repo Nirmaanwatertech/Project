@@ -2054,10 +2054,97 @@ function VendorMaster() {
 }
 
 // ════════════════════════════════════════════════════
-// QUOTATIONS
+// PAYMENT SCHEDULE EDITOR — reusable, dynamic rows
+// Each row: milestone name, percentage, amount (₹), date
+// ════════════════════════════════════════════════════
+function genRowId() { return 'r' + Math.random().toString(36).slice(2, 9); }
+
+function PaymentScheduleEditor({ rows, setRows, totalValue }) {
+  function addRow() {
+    setRows([...rows, { id: genRowId(), name: '', pct: '', amount: '', date: '' }]);
+  }
+  function removeRow(id) {
+    setRows(rows.filter(r => r.id !== id));
+  }
+  function updateRow(id, field, value) {
+    setRows(rows.map(r => {
+      if (r.id !== id) return r;
+      const next = { ...r, [field]: value };
+      // Auto-calc amount from percentage if total value is known and amount wasn't hand-edited this change
+      if (field === 'pct' && totalValue) {
+        const pctNum = parseFloat(value);
+        if (!isNaN(pctNum)) next.amount = String(Math.round((pctNum / 100) * Number(totalValue)));
+      }
+      return next;
+    }));
+  }
+
+  const pctTotal = rows.reduce((s, r) => s + (parseFloat(r.pct) || 0), 0);
+  const amtTotal = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const pctMismatch = rows.length > 0 && Math.abs(pctTotal - 100) > 0.01;
+
+  return (
+    <div className="form-group">
+      <label className="form-label">Payment Schedule</label>
+      {rows.length === 0 ? (
+        <div style={{fontSize:11.5,color:'var(--text-muted)',padding:'8px 0'}}>No payment stages added yet.</div>
+      ) : (
+        <div style={{border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',marginBottom:8}}>
+          <table style={{width:'100%'}}>
+            <thead>
+              <tr style={{background:'var(--grey-50)'}}>
+                <th style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)'}}>Stage Name</th>
+                <th style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)',width:70}}>%</th>
+                <th style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)',width:110}}>Amount (₹)</th>
+                <th style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)',width:130}}>Date</th>
+                <th style={{width:30}}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.id} style={{borderTop:'1px solid var(--grey-50)'}}>
+                  <td style={{padding:4}}>
+                    <input className="form-input" style={{fontSize:11.5,padding:'5px 7px'}} value={r.name}
+                      onChange={e => updateRow(r.id, 'name', e.target.value)} placeholder="e.g. Advance" />
+                  </td>
+                  <td style={{padding:4}}>
+                    <input className="form-input font-mono" style={{fontSize:11.5,padding:'5px 7px'}} value={r.pct}
+                      onChange={e => updateRow(r.id, 'pct', e.target.value)} placeholder="20" />
+                  </td>
+                  <td style={{padding:4}}>
+                    <input className="form-input font-mono" style={{fontSize:11.5,padding:'5px 7px'}} value={r.amount}
+                      onChange={e => updateRow(r.id, 'amount', e.target.value)} placeholder="0" />
+                  </td>
+                  <td style={{padding:4}}>
+                    <input className="form-input" type="date" style={{fontSize:11.5,padding:'5px 7px'}} value={r.date}
+                      onChange={e => updateRow(r.id, 'date', e.target.value)} />
+                  </td>
+                  <td style={{padding:4,textAlign:'center'}}>
+                    <span onClick={() => removeRow(r.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="flex items-center justify-between">
+        <button type="button" onClick={addRow} className="btn btn-sm btn-outline">+ Add Payment Stage</button>
+        {rows.length > 0 && (
+          <span style={{fontSize:11,color: pctMismatch ? 'var(--red)' : 'var(--text-muted)',fontWeight: pctMismatch ? 600 : 400}}>
+            Total: {pctTotal}% {pctMismatch && '⚠ should total 100%'} · {inr(amtTotal)}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// QUOTATIONS — vendor quotations only (we receive, we issue PO)
 // ════════════════════════════════════════════════════
 const QUOTATIONS_COLLECTION = 'quotations';
-const QUOTE_STAGES = ['New','Reviewed','Negotiation','PO Received','T&C Finalized','Payment Active'];
+const QUOTE_STAGES = ['Receipt of Quotation','Negotiation','Finalization of T&C','Issuing of PO/WO'];
 
 function useQuotations() {
   const [items, setItems] = useState([]);
@@ -2082,7 +2169,8 @@ function useQuotations() {
 }
 async function addQuotation(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, QUOTATIONS_COLLECTION), { ...data, createdAt: Date.now() });
+  const ref = await addDoc(collection(db, QUOTATIONS_COLLECTION), { ...data, createdAt: Date.now() });
+  return ref.id;
 }
 async function updateQuotation(docId, data) {
   const { db, doc, updateDoc } = window.fb;
@@ -2102,16 +2190,17 @@ async function clearAllQuotations() {
 
 function NewQuotationModal({ onClose }) {
   const [form, setForm] = useState({
-    name: '', type: 'client', description: '', value: '', receivedDate: '', stage: 'New', notes: ''
+    vendorName: '', description: '', value: '', receivedDate: '', stage: 'Receipt of Quotation', notes: ''
   });
+  const [schedule, setSchedule] = useState([]);
   const [saving, setSaving] = useState(false);
   function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
 
   async function handleSave() {
-    if (!form.name.trim() || !form.value) return;
+    if (!form.vendorName.trim() || !form.value) return;
     setSaving(true);
     try {
-      await addQuotation({ ...form, value: Number(form.value) });
+      await addQuotation({ ...form, value: Number(form.value), paymentSchedule: schedule });
       onClose();
     } catch (e) { console.error(e); alert('Could not save quotation.'); }
     finally { setSaving(false); }
@@ -2119,27 +2208,18 @@ function NewQuotationModal({ onClose }) {
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:520,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
-        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:600,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
           <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Quotation</span>
         </div>
         <div style={{padding:'18px 20px'}}>
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">Vendor / Client Name</label>
-              <input className="form-input" value={form.name} onChange={e=>set('name', e.target.value)} placeholder="Name" autoFocus />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Type</label>
-              <select className="form-input form-select" value={form.type} onChange={e=>set('type', e.target.value)}>
-                <option value="client">Client (they pay us)</option>
-                <option value="vendor">Vendor (we pay)</option>
-              </select>
-            </div>
+          <div className="form-group">
+            <label className="form-label">Vendor Name</label>
+            <input className="form-input" value={form.vendorName} onChange={e=>set('vendorName', e.target.value)} placeholder="Vendor / supplier name" autoFocus />
           </div>
           <div className="form-group">
             <label className="form-label">Description</label>
-            <input className="form-input" value={form.description} onChange={e=>set('description', e.target.value)} placeholder="e.g. RO plant 1000 LPH with installation" />
+            <input className="form-input" value={form.description} onChange={e=>set('description', e.target.value)} placeholder="e.g. RO membranes — 5 units, 4040 size" />
           </div>
           <div className="form-grid">
             <div className="form-group">
@@ -2151,6 +2231,7 @@ function NewQuotationModal({ onClose }) {
               <input className="form-input" type="date" value={form.receivedDate} onChange={e=>set('receivedDate', e.target.value)} />
             </div>
           </div>
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
           <div className="form-group">
             <label className="form-label">Stage</label>
             <select className="form-input form-select" value={form.stage} onChange={e=>set('stage', e.target.value)}>
@@ -2164,7 +2245,7 @@ function NewQuotationModal({ onClose }) {
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleSave} disabled={saving || !form.name.trim() || !form.value} className="btn btn-primary" style={{opacity: saving || !form.name.trim() || !form.value ? .6 : 1}}>
+          <button onClick={handleSave} disabled={saving || !form.vendorName.trim() || !form.value} className="btn btn-primary" style={{opacity: saving || !form.vendorName.trim() || !form.value ? .6 : 1}}>
             {saving ? 'Saving…' : 'Save Quotation'}
           </button>
         </div>
@@ -2173,21 +2254,103 @@ function NewQuotationModal({ onClose }) {
   );
 }
 
-const STAGE_COLOR = { 'New':'blue','Reviewed':'teal','Negotiation':'amber','PO Received':'green','T&C Finalized':'grey','Payment Active':'green' };
+// ─── Issue PO modal — pre-filled from quotation, creates linked PO ──
+function IssuePOModal({ quotation, onClose, onIssued }) {
+  const { items: existingPOs } = usePurchaseOrders();
+  const nextNumber = `PO-2026-${String(existingPOs.length + 1).padStart(3,'0')}`;
+  const [form, setForm] = useState({
+    po: nextNumber, party: quotation.vendorName, description: quotation.description || '',
+    value: quotation.value || '', wo: '', stage: 'New', penaltyClause: '', disputeClause: ''
+  });
+  const [schedule, setSchedule] = useState(quotation.paymentSchedule || []);
+  const [saving, setSaving] = useState(false);
+  function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
+
+  async function handleIssue() {
+    if (!form.party.trim() || !form.value) return;
+    setSaving(true);
+    try {
+      await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule, fromQuotation: quotation.docId });
+      await updateQuotation(quotation.docId, { stage: 'Issuing of PO/WO', issuedPO: form.po });
+      onIssued();
+    } catch (e) { console.error(e); alert('Could not issue PO.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:600,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--green)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>✓ Issue Purchase Order</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:14,background:'var(--green-50)',padding:'8px 12px',borderRadius:6}}>
+            This creates a new Purchase Order pre-filled from quotation <strong>{quotation.vendorName}</strong>, and marks the quotation as Issued.
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">PO Number</label>
+              <input className="form-input font-mono" value={form.po} onChange={e=>set('po', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Vendor Name</label>
+              <input className="form-input" value={form.party} onChange={e=>set('party', e.target.value)} />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Description</label>
+            <input className="form-input" value={form.description} onChange={e=>set('description', e.target.value)} />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Total Value (₹)</label>
+              <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Linked WO Number</label>
+              <input className="form-input font-mono" value={form.wo} onChange={e=>set('wo', e.target.value)} placeholder="WO-2026-0XX (optional)" />
+            </div>
+          </div>
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
+          <div className="form-group">
+            <label className="form-label">Penalty Clause</label>
+            <input className="form-input" value={form.penaltyClause} onChange={e=>set('penaltyClause', e.target.value)} placeholder="Optional" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Dispute Resolution Clause</label>
+            <input className="form-input" value={form.disputeClause} onChange={e=>set('disputeClause', e.target.value)} placeholder="Optional" />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleIssue} disabled={saving || !form.party.trim() || !form.value} className="btn btn-primary" style={{background:'var(--green)',opacity: saving || !form.party.trim() || !form.value ? .6 : 1}}>
+            {saving ? 'Issuing…' : '✓ Issue PO'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const STAGE_COLOR = { 'Receipt of Quotation':'blue', 'Negotiation':'amber', 'Finalization of T&C':'teal', 'Issuing of PO/WO':'green' };
 
 function Quotations() {
   const { items, loading } = useQuotations();
   const [showNew, setShowNew] = useState(false);
   const [stageFilter, setStageFilter] = useState('all');
+  const [issuingFor, setIssuingFor] = useState(null);
+  const [viewSchedule, setViewSchedule] = useState(null);
 
   const filtered = stageFilter === 'all' ? items : items.filter(q => q.stage === stageFilter);
-  const pipelineValue = items.filter(q => q.stage !== 'Payment Active').reduce((s,q) => s + Number(q.value||0), 0);
+  const pipelineValue = items.filter(q => q.stage !== 'Issuing of PO/WO').reduce((s,q) => s + Number(q.value||0), 0);
 
   async function advanceStage(q) {
     const idx = QUOTE_STAGES.indexOf(q.stage);
-    if (idx < QUOTE_STAGES.length - 1) {
+    if (idx < QUOTE_STAGES.length - 2) {
       try { await updateQuotation(q.docId, { stage: QUOTE_STAGES[idx+1] }); }
       catch(e) { console.error(e); alert('Could not update stage.'); }
+    } else if (idx === QUOTE_STAGES.length - 2) {
+      setIssuingFor(q);
     }
   }
 
@@ -2205,7 +2368,7 @@ function Quotations() {
       </div>
       <div className="card" style={{marginBottom:14}}>
         <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
-          <select className="form-input form-select" style={{width:170}} onChange={e=>setStageFilter(e.target.value)}>
+          <select className="form-input form-select" style={{width:200}} onChange={e=>setStageFilter(e.target.value)}>
             <option value="all">All Stages</option>
             {QUOTE_STAGES.map(s => <option key={s}>{s}</option>)}
           </select>
@@ -2218,25 +2381,39 @@ function Quotations() {
           <div className="module-coming">
             <div className="big-icon">📋</div>
             <h3>No quotations yet</h3>
-            <p className="text-muted">Add your first quotation — saved permanently to your database.</p>
+            <p className="text-muted">Add your first vendor quotation — enter the details and payment schedule manually.</p>
           </div>
         ) : (
           <table>
             <thead>
-              <tr><th>Name</th><th>Type</th><th>Description</th><th>Value</th><th>Received</th><th>Stage</th><th>Actions</th></tr>
+              <tr><th>Vendor</th><th>Description</th><th>Value</th><th>Received</th><th>Payment Schedule</th><th>Stage</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {filtered.map(q => (
                 <tr key={q.docId}>
-                  <td className="fw-600">{q.name}</td>
-                  <td><span className={`badge ${q.type==='client'?'blue':'amber'}`}>{q.type==='client'?'Client':'Vendor'}</span></td>
+                  <td className="fw-600">{q.vendorName}</td>
                   <td>{q.description || '—'}</td>
                   <td className="amount fw-600">{inr(q.value||0)}</td>
                   <td>{q.receivedDate || '—'}</td>
-                  <td><span className={`badge ${STAGE_COLOR[q.stage]||'grey'}`}>{q.stage}</span></td>
+                  <td>
+                    {q.paymentSchedule && q.paymentSchedule.length > 0 ? (
+                      <span className="btn btn-sm btn-ghost" style={{cursor:'pointer'}} onClick={() => setViewSchedule(q)}>
+                        {q.paymentSchedule.length} stage{q.paymentSchedule.length===1?'':'s'} · view
+                      </span>
+                    ) : <span className="text-muted text-sm">—</span>}
+                  </td>
+                  <td>
+                    <span className={`badge ${STAGE_COLOR[q.stage]||'grey'}`}>{q.stage}</span>
+                    {q.issuedPO && <div className="text-sm text-muted mono mt-1">{q.issuedPO}</div>}
+                  </td>
                   <td>
                     <div className="flex gap-2">
-                      {q.stage !== 'Payment Active' && <button className="btn btn-sm btn-ghost" onClick={() => advanceStage(q)}>Advance →</button>}
+                      {q.stage === 'Finalization of T&C' && (
+                        <button className="btn btn-sm btn-primary" style={{background:'var(--green)'}} onClick={() => setIssuingFor(q)}>Issue PO →</button>
+                      )}
+                      {q.stage !== 'Issuing of PO/WO' && q.stage !== 'Finalization of T&C' && (
+                        <button className="btn btn-sm btn-ghost" onClick={() => advanceStage(q)}>Advance →</button>
+                      )}
                       <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this quotation?')) deleteQuotation(q.docId); }}>Delete</button>
                     </div>
                   </td>
@@ -2247,12 +2424,40 @@ function Quotations() {
         )}
       </div>
       {showNew && <NewQuotationModal onClose={() => setShowNew(false)} />}
+      {issuingFor && <IssuePOModal quotation={issuingFor} onClose={() => setIssuingFor(null)} onIssued={() => setIssuingFor(null)} />}
+      {viewSchedule && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={() => setViewSchedule(null)}>
+          <div style={{background:'var(--surface)',borderRadius:10,width:420,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+            <div style={{background:'var(--primary)',padding:'14px 18px'}}>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payment Schedule — {viewSchedule.vendorName}</span>
+            </div>
+            <div style={{padding:'16px 20px'}}>
+              <table style={{width:'100%'}}>
+                <thead><tr><th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)',padding:'4px 0'}}>Stage</th><th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>%</th><th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Amount</th><th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Date</th></tr></thead>
+                <tbody>
+                  {(viewSchedule.paymentSchedule||[]).map((r,i) => (
+                    <tr key={i} style={{borderTop:'1px solid var(--grey-50)'}}>
+                      <td style={{padding:'6px 0',fontSize:12.5}}>{r.name}</td>
+                      <td style={{fontSize:12.5}}>{r.pct}%</td>
+                      <td className="amount" style={{fontSize:12.5}}>{inr(r.amount||0)}</td>
+                      <td style={{fontSize:12.5}}>{r.date || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{padding:'0 20px 16px',display:'flex',justifyContent:'flex-end'}}>
+              <button onClick={() => setViewSchedule(null)} className="btn btn-ghost">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ════════════════════════════════════════════════════
-// PURCHASE ORDERS
+// PURCHASE ORDERS — vendor only
 // ════════════════════════════════════════════════════
 const PO_COLLECTION = 'purchaseorders';
 const PO_STAGES = ['New','Negotiation','PO Received','T&C Pending','Finalized','Active','Closed'];
@@ -2298,10 +2503,12 @@ async function clearAllPOs() {
   await batch.commit();
 }
 
-function NewPOModal({ onClose, nextNumber, vendors }) {
+function NewPOModal({ onClose, nextNumber, vendors, prefill }) {
   const [form, setForm] = useState({
-    po: nextNumber, party: '', type: 'vendor', description: '', value: '', wo: '', stage: 'New', penaltyClause: '', disputeClause: ''
+    po: nextNumber, party: prefill?.party || '', description: prefill?.description || '',
+    value: prefill?.value || '', wo: prefill?.wo || '', stage: 'New', penaltyClause: '', disputeClause: ''
   });
+  const [schedule, setSchedule] = useState([]);
   const [saving, setSaving] = useState(false);
   function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
 
@@ -2309,7 +2516,7 @@ function NewPOModal({ onClose, nextNumber, vendors }) {
     if (!form.party.trim() || !form.value) return;
     setSaving(true);
     try {
-      await addPO({ ...form, value: Number(form.value) });
+      await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule });
       onClose();
     } catch (e) { console.error(e); alert('Could not save purchase order.'); }
     finally { setSaving(false); }
@@ -2317,33 +2524,25 @@ function NewPOModal({ onClose, nextNumber, vendors }) {
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:560,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
-        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:600,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
           <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Purchase Order</span>
         </div>
         <div style={{padding:'18px 20px'}}>
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">PO Number</label>
-              <input className="form-input font-mono" value={form.po} onChange={e=>set('po', e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Type</label>
-              <select className="form-input form-select" value={form.type} onChange={e=>set('type', e.target.value)}>
-                <option value="vendor">Vendor PO (outflow)</option>
-                <option value="client">Client PO (inflow)</option>
-              </select>
-            </div>
+          <div className="form-group">
+            <label className="form-label">PO Number</label>
+            <input className="form-input font-mono" value={form.po} onChange={e=>set('po', e.target.value)} />
           </div>
           <div className="form-group">
-            <label className="form-label">{form.type === 'vendor' ? 'Vendor Name' : 'Client Name'}</label>
-            {form.type === 'vendor' && vendors && vendors.length > 0 ? (
+            <label className="form-label">Vendor Name</label>
+            {vendors && vendors.length > 0 ? (
               <select className="form-input form-select" value={form.party} onChange={e=>set('party', e.target.value)}>
                 <option value="">Select vendor…</option>
                 {vendors.map(v => <option key={v.docId} value={v.company}>{v.company}</option>)}
+                {form.party && !vendors.find(v => v.company === form.party) && <option value={form.party}>{form.party} (new)</option>}
               </select>
             ) : (
-              <input className="form-input" value={form.party} onChange={e=>set('party', e.target.value)} placeholder="Name" />
+              <input className="form-input" value={form.party} onChange={e=>set('party', e.target.value)} placeholder="Vendor name" />
             )}
           </div>
           <div className="form-group">
@@ -2360,6 +2559,7 @@ function NewPOModal({ onClose, nextNumber, vendors }) {
               <input className="form-input font-mono" value={form.wo} onChange={e=>set('wo', e.target.value)} placeholder="WO-2026-0XX" />
             </div>
           </div>
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
           <div className="form-group">
             <label className="form-label">Stage</label>
             <select className="form-input form-select" value={form.stage} onChange={e=>set('stage', e.target.value)}>
@@ -2392,12 +2592,11 @@ function PurchaseOrders() {
   const { items, loading } = usePurchaseOrders();
   const { items: vendors } = useVendors();
   const [showNew, setShowNew] = useState(false);
-  const [typeFilter, setTypeFilter] = useState('all');
+  const [viewSchedule, setViewSchedule] = useState(null);
 
-  const filtered = typeFilter === 'all' ? items : items.filter(p => p.type === typeFilter);
   const nextNumber = `PO-2026-${String(items.length + 1).padStart(3,'0')}`;
-  const clientTotal = items.filter(p => p.type==='client').reduce((s,p)=>s+Number(p.value||0),0);
-  const vendorTotal = items.filter(p => p.type==='vendor').reduce((s,p)=>s+Number(p.value||0),0);
+  const totalValue = items.reduce((s,p)=>s+Number(p.value||0),0);
+  const activeCount = items.filter(p => p.stage !== 'Closed').length;
 
   return (
     <div>
@@ -2412,42 +2611,39 @@ function PurchaseOrders() {
         </div>
       </div>
       <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
-        <div className="stat-card"><div className="stat-label">Client POs (inflow)</div><div className="stat-value blue">{inr(clientTotal)}</div></div>
-        <div className="stat-card"><div className="stat-label">Vendor POs (outflow)</div><div className="stat-value red">{inr(vendorTotal)}</div></div>
-        <div className="stat-card"><div className="stat-label">Net Position</div><div className={`stat-value ${clientTotal-vendorTotal>=0?'green':'red'}`}>{inr(clientTotal-vendorTotal)}</div></div>
-      </div>
-      <div className="card" style={{marginBottom:14}}>
-        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
-          <select className="form-input form-select" style={{width:170}} onChange={e=>setTypeFilter(e.target.value)}>
-            <option value="all">All Types</option>
-            <option value="client">Client POs</option>
-            <option value="vendor">Vendor POs</option>
-          </select>
-        </div>
+        <div className="stat-card"><div className="stat-label">Total PO Value (outflow)</div><div className="stat-value red">{inr(totalValue)}</div></div>
+        <div className="stat-card"><div className="stat-label">Active POs</div><div className="stat-value blue">{activeCount}</div></div>
+        <div className="stat-card"><div className="stat-label">Vendors Used</div><div className="stat-value">{new Set(items.map(p=>p.party)).size}</div></div>
       </div>
       <div className="card">
         {loading ? (
           <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
-        ) : filtered.length === 0 ? (
+        ) : items.length === 0 ? (
           <div className="module-coming">
             <div className="big-icon">📦</div>
             <h3>No purchase orders yet</h3>
-            <p className="text-muted">Create your first PO — saved permanently to your database.</p>
+            <p className="text-muted">Create a PO manually, or issue one from a finalized quotation.</p>
           </div>
         ) : (
           <table>
             <thead>
-              <tr><th>PO #</th><th>Party</th><th>Type</th><th>Description</th><th>Value</th><th>Linked WO</th><th>Stage</th><th>Actions</th></tr>
+              <tr><th>PO #</th><th>Vendor</th><th>Description</th><th>Value</th><th>Linked WO</th><th>Payment Schedule</th><th>Stage</th><th>Actions</th></tr>
             </thead>
             <tbody>
-              {filtered.map(p => (
+              {items.map(p => (
                 <tr key={p.docId}>
                   <td className="mono">{p.po}</td>
                   <td className="fw-600">{p.party}</td>
-                  <td><span className={`badge ${p.type==='client'?'blue':'amber'}`}>{p.type==='client'?'Client':'Vendor'}</span></td>
                   <td>{p.description || '—'}</td>
                   <td className="amount fw-600">{inr(p.value||0)}</td>
                   <td className="mono">{p.wo || '—'}</td>
+                  <td>
+                    {p.paymentSchedule && p.paymentSchedule.length > 0 ? (
+                      <span className="btn btn-sm btn-ghost" style={{cursor:'pointer'}} onClick={() => setViewSchedule(p)}>
+                        {p.paymentSchedule.length} stage{p.paymentSchedule.length===1?'':'s'} · view
+                      </span>
+                    ) : <span className="text-muted text-sm">—</span>}
+                  </td>
                   <td><span className={`badge ${PO_STAGE_COLOR[p.stage]||'grey'}`}>{p.stage}</span></td>
                   <td>
                     <div className="flex gap-2">
@@ -2461,9 +2657,37 @@ function PurchaseOrders() {
         )}
       </div>
       {showNew && <NewPOModal onClose={() => setShowNew(false)} nextNumber={nextNumber} vendors={vendors} />}
+      {viewSchedule && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={() => setViewSchedule(null)}>
+          <div style={{background:'var(--surface)',borderRadius:10,width:420,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+            <div style={{background:'var(--primary)',padding:'14px 18px'}}>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payment Schedule — {viewSchedule.party}</span>
+            </div>
+            <div style={{padding:'16px 20px'}}>
+              <table style={{width:'100%'}}>
+                <thead><tr><th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)',padding:'4px 0'}}>Stage</th><th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>%</th><th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Amount</th><th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Date</th></tr></thead>
+                <tbody>
+                  {(viewSchedule.paymentSchedule||[]).map((r,i) => (
+                    <tr key={i} style={{borderTop:'1px solid var(--grey-50)'}}>
+                      <td style={{padding:'6px 0',fontSize:12.5}}>{r.name}</td>
+                      <td style={{fontSize:12.5}}>{r.pct}%</td>
+                      <td className="amount" style={{fontSize:12.5}}>{inr(r.amount||0)}</td>
+                      <td style={{fontSize:12.5}}>{r.date || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{padding:'0 20px 16px',display:'flex',justifyContent:'flex-end'}}>
+              <button onClick={() => setViewSchedule(null)} className="btn btn-ghost">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
 
 // ════════════════════════════════════════════════════
 // PAYMENT TRACKER (milestones)
