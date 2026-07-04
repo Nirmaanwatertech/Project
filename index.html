@@ -310,30 +310,6 @@ const CASHFLOW_FORECAST = [
 const STATUS_COLOR = { 'In Progress':'blue','Scheduled':'teal','Overdue':'red','Completed':'green','Pending':'grey' };
 const BILL_STATUS_COLOR = { 'Overdue':'red','Due Today':'amber','Upcoming':'blue','Paid':'green' };
 
-// ─── Nav Config ──────────────────────────────────────
-const NAV = [
-  { section: 'Operations' },
-  { id:'dashboard', label:'Dashboard', icon:'⊞', badge:null },
-  { id:'tasks', label:'Tasks', icon:'☑', badge:3 },
-  { id:'projects', label:'Projects', icon:'📐', badge:null },
-  { section: 'Orders' },
-  { id:'workorders', label:'Work Orders', icon:'🔧', badge:null },
-  { id:'purchaseorders', label:'Purchase Orders', icon:'📦', badge:null },
-  { id:'quotations', label:'Quotations', icon:'📋', badge:null },
-  { id:'paymenttracker', label:'Payment Tracker', icon:'💳', badge:2 },
-  { id:'billpayments', label:'Bill Payments', icon:'📑', badge:2 },
-  { id:'cashflow', label:'Cash Flow', icon:'📈', badge:null },
-  { id:'pettycash', label:'Petty Cash', icon:'💰', badge:null },
-  { section: 'Records' },
-  { id:'purchaseorders', label:'Purchase Orders', icon:'📦', badge:null },
-  { id:'vendors', label:'Vendor Master', icon:'🏭', badge:null },
-  { id:'documents', label:'Document Vault', icon:'🗄', badge:null },
-  { section: 'Team' },
-  { id:'chat', label:'Team Chat', icon:'💬', badge:5 },
-  { id:'reminders', label:'Reminders', icon:'🔔', badge:3 },
-  { id:'reports', label:'Reports', icon:'📊', badge:null },
-  { id:'settings', label:'Settings', icon:'⚙', badge:null },
-];
 
 // ─── Reusable Components ──────────────────────────────
 const StatusBadge = ({ status }) => {
@@ -3210,42 +3186,1098 @@ function ClearDataCard({ item }) {
   );
 }
 
-// ─── Module router ─────────────────────────────────────
-function Module({ id, setActive }) {
-  switch(id) {
-    case 'dashboard': return <Dashboard setActive={setActive} />;
-    case 'tasks': return <Tasks />;
-    case 'workorders': return <WorkOrders />;
-    case 'cashflow': return <CashFlow />;
-    case 'paymenttracker': return <PaymentTracker />;
-    case 'billpayments': return <BillPayments />;
-    case 'chat': return <TeamChat />;
-    case 'settings': return <Settings />;
-    case 'quotations': return <Quotations />;
-    case 'projects': return <ComingSoon title="Project Management" icon="📐" desc="Full project P&L, material tracking, milestone triggers, and shared cost allocation." />;
-    case 'purchaseorders': return <PurchaseOrders />;
-    case 'pettycash': return <ComingSoon title="Petty Cash" icon="💰" desc="Day-to-day cash expenses with receipt photos and monthly reconciliation." />;
-    case 'vendors': return <VendorMaster />;
-    case 'documents': return <ComingSoon title="Document Vault" icon="🗄" desc="Centralised file storage with expiry alerts for licences and certificates." />;
-    case 'reminders': return <ComingSoon title="Reminders" icon="🔔" desc="Auto-generated from milestones, tasks, bills, and document expiry." />;
-    case 'reports': return <ComingSoon title="Reports" icon="📊" desc="Task performance, cash flow, project P&L, vendor spend, and more." />;
-    default: return <Dashboard setActive={setActive} />;
+// ════════════════════════════════════════════════════
+// USER SESSION & ROLE-BASED ACCESS CONTROL
+// Auth-ready: swap window.currentUser from Firebase Auth later
+// ════════════════════════════════════════════════════
+
+const STAFF = [
+  { uid:'vatsal',    name:'Vatsal',    initials:'V', role:'owner',       email:'vatsal@nirmanwatertech.com' },
+  { uid:'dakshata',  name:'Dakshata',  initials:'D', role:'accounts',    email:'dakshata@nirmanwatertech.com' },
+  { uid:'rahul',     name:'Rahul',     initials:'R', role:'field_staff', email:'rahul@nirmanwatertech.com' },
+  { uid:'priya',     name:'Priya',     initials:'P', role:'field_staff', email:'priya@nirmanwatertech.com' },
+  { uid:'manoj',     name:'Manoj',     initials:'M', role:'field_staff', email:'manoj@nirmanwatertech.com' },
+  { uid:'amit',      name:'Amit',      initials:'A', role:'field_staff', email:'amit@nirmanwatertech.com' },
+];
+
+// Default permissions per role — Vatsal can override in Settings
+const DEFAULT_PERMISSIONS = {
+  owner:       { raise_requisition:true,  enter_quotation:true,  approve_quotation:true,  issue_po:true,  issue_wo:true,  mark_payment:true,  view_cashflow:true,  edit_settings:true  },
+  manager:     { raise_requisition:true,  enter_quotation:true,  approve_quotation:true,  issue_po:true,  issue_wo:true,  mark_payment:true,  view_cashflow:true,  edit_settings:false },
+  accounts:    { raise_requisition:true,  enter_quotation:true,  approve_quotation:false, issue_po:false, issue_wo:false, mark_payment:true,  view_cashflow:true,  edit_settings:false },
+  field_staff: { raise_requisition:true,  enter_quotation:false, approve_quotation:false, issue_po:false, issue_wo:false, mark_payment:false, view_cashflow:false, edit_settings:false },
+  viewer:      { raise_requisition:false, enter_quotation:false, approve_quotation:false, issue_po:false, issue_wo:false, mark_payment:false, view_cashflow:false, edit_settings:false },
+};
+
+// Global current user — replaced by Firebase Auth user object later
+// Shape: { uid, name, initials, role, email }
+if (!window.currentUser) window.currentUser = STAFF[0]; // default Vatsal
+
+function useCurrentUser() {
+  const [user, setUser] = useState(window.currentUser);
+  useEffect(() => {
+    // Poll for Firebase Auth user once it's wired — no-op for now
+    const interval = setInterval(() => {
+      if (window.currentUser !== user) setUser(window.currentUser);
+    }, 500);
+    return () => clearInterval(interval);
+  }, [user]);
+  return user;
+}
+
+function can(user, action, customPerms) {
+  // customPerms from Firestore settings override defaults
+  const perms = (customPerms && customPerms[user.role]) || DEFAULT_PERMISSIONS[user.role] || {};
+  return !!perms[action];
+}
+
+// ─── Permission gate component ─────────────────────
+function PermGate({ user, action, customPerms, children, fallback }) {
+  if (can(user, action, customPerms)) return children;
+  return fallback || null;
+}
+
+// ─── Login / User Switcher ─────────────────────────
+// Before Firebase Auth: shows a dev-mode user picker
+// After Firebase Auth: this is replaced by real login screen
+function LoginScreen({ onLogin }) {
+  const [selected, setSelected] = useState('vatsal');
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState('');
+
+  // Simple 4-digit PIN per user for demo — Firebase Auth replaces this
+  const DEMO_PINS = { vatsal:'1234', dakshata:'2345', rahul:'3456', priya:'4567', manoj:'5678', amit:'6789' };
+
+  function handleLogin() {
+    const user = STAFF.find(s => s.uid === selected);
+    if (!user) return;
+    if (pin !== DEMO_PINS[selected]) { setError('Incorrect PIN. Try again.'); return; }
+    window.currentUser = user;
+    onLogin(user);
   }
+
+  const user = STAFF.find(s => s.uid === selected);
+
+  return (
+    <div style={{minHeight:'100vh',background:'var(--primary-dark)',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'var(--font-sans)'}}>
+      <div style={{background:'var(--surface)',borderRadius:12,width:360,boxShadow:'0 8px 40px rgba(0,0,0,.3)',overflow:'hidden'}}>
+        <div style={{background:'var(--primary)',padding:'28px 28px 24px',textAlign:'center'}}>
+          <div style={{fontSize:32,marginBottom:8}}>💧</div>
+          <div style={{fontWeight:800,fontSize:16,color:'#fff',letterSpacing:.3}}>Nirman Watertech</div>
+          <div style={{fontSize:11.5,color:'rgba(255,255,255,.65)',marginTop:3}}>Internal Workflow Platform</div>
+        </div>
+        <div style={{padding:'24px 28px'}}>
+          <div style={{fontSize:11.5,fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.5,marginBottom:10}}>Select User</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:18}}>
+            {STAFF.map(s => (
+              <div key={s.uid} onClick={() => { setSelected(s.uid); setError(''); setPin(''); }}
+                style={{display:'flex',alignItems:'center',gap:8,padding:'8px 10px',borderRadius:8,cursor:'pointer',
+                  border:`2px solid ${selected===s.uid?'var(--primary)':'var(--border)'}`,
+                  background:selected===s.uid?'var(--primary-50)':'transparent',transition:'all .12s'}}>
+                <div style={{width:28,height:28,borderRadius:'50%',background:selected===s.uid?'var(--primary)':'var(--grey-50)',
+                  color:selected===s.uid?'#fff':'var(--text-muted)',display:'flex',alignItems:'center',justifyContent:'center',
+                  fontSize:11,fontWeight:700}}>
+                  {s.initials}
+                </div>
+                <div>
+                  <div style={{fontSize:12,fontWeight:600,color:'var(--text)'}}>{s.name}</div>
+                  <div style={{fontSize:10,color:'var(--text-muted)',textTransform:'capitalize'}}>{s.role.replace('_',' ')}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{marginBottom:14}}>
+            <label style={{fontSize:11.5,fontWeight:600,color:'var(--text-secondary)',display:'block',marginBottom:4}}>PIN</label>
+            <input type="password" maxLength={4} value={pin} onChange={e=>{setPin(e.target.value);setError('');}}
+              onKeyDown={e=>e.key==='Enter'&&handleLogin()}
+              placeholder="4-digit PIN"
+              style={{width:'100%',padding:'9px 12px',border:`1px solid ${error?'var(--red)':'var(--border)'}`,borderRadius:6,fontSize:14,fontFamily:'var(--font-mono)',letterSpacing:4,textAlign:'center',outline:'none',boxSizing:'border-box'}} />
+            {error && <div style={{fontSize:11,color:'var(--red)',marginTop:4}}>{error}</div>}
+          </div>
+          <button onClick={handleLogin} style={{width:'100%',background:'var(--primary)',color:'#fff',border:'none',borderRadius:6,padding:'10px',fontWeight:700,fontSize:13,cursor:'pointer'}}>
+            Sign In as {user?.name}
+          </button>
+          <div style={{fontSize:10.5,color:'var(--text-muted)',textAlign:'center',marginTop:12}}>
+            Demo PINs: Vatsal 1234 · Dakshata 2345 · Field staff 3456–6789
+            <br/>Firebase Auth will replace this screen
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// REQUISITION MODULE
+// ════════════════════════════════════════════════════
+const REQ_COLLECTION = 'requisitions';
+const REQ_STATUSES = ['Open','Quotations Invited','Quotation Approved','PO/WO Issued','Closed'];
+const REQ_CATEGORIES = ['Materials','Services','Both'];
+const REQ_PRIORITIES = ['Urgent','Normal','Low'];
+
+function useRequisitions() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const q = query(collection(db, REQ_COLLECTION), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, snap => {
+        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
+        setLoading(false);
+      }, err => { console.error('REQ listener', err); setLoading(false); });
+      return unsub;
+    }
+    if (window.fb) { const u = start(); return () => u && u(); }
+    let u; const h = () => { u = start(); };
+    window.addEventListener('firebase-ready', h, { once: true });
+    return () => { window.removeEventListener('firebase-ready', h); if (u) u(); };
+  }, []);
+  return { items, loading };
+}
+async function addRequisition(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, REQ_COLLECTION), { ...data, createdAt: Date.now() });
+}
+async function updateRequisition(docId, data) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(doc(db, REQ_COLLECTION, docId), data);
+}
+async function deleteRequisition(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, REQ_COLLECTION, docId));
+}
+async function clearAllRequisitions() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(collection(db, REQ_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+function nextREQNumber(count) { return `REQ/${FY}/${String(count+1).padStart(3,'0')}`; }
+
+function LineItemEditor({ items, setItems }) {
+  function addItem() { setItems([...items, { id: genRowId(), name:'', qty:'', unit:'', estimatedValue:'' }]); }
+  function removeItem(id) { setItems(items.filter(r => r.id !== id)); }
+  function updateItem(id, field, value) { setItems(items.map(r => r.id===id ? {...r,[field]:value} : r)); }
+
+  return (
+    <div className="form-group">
+      <label className="form-label">Items Required</label>
+      {items.length === 0
+        ? <div style={{fontSize:11.5,color:'var(--text-muted)',padding:'6px 0'}}>No items added yet.</div>
+        : (
+          <div style={{border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',marginBottom:8}}>
+            <table style={{width:'100%'}}>
+              <thead>
+                <tr style={{background:'var(--grey-50)'}}>
+                  {['Item Description','Qty','Unit','Est. Value (₹)',''].map((h,i) => (
+                    <th key={i} style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {items.map(r => (
+                  <tr key={r.id} style={{borderTop:'1px solid var(--grey-50)'}}>
+                    <td style={{padding:4}}><input className="form-input" style={{fontSize:11.5,padding:'5px 7px'}} value={r.name} onChange={e=>updateItem(r.id,'name',e.target.value)} placeholder="e.g. RO Membrane 4040" /></td>
+                    <td style={{padding:4,width:70}}><input className="form-input font-mono" style={{fontSize:11.5,padding:'5px 7px'}} value={r.qty} onChange={e=>updateItem(r.id,'qty',e.target.value)} placeholder="5" /></td>
+                    <td style={{padding:4,width:80}}><input className="form-input" style={{fontSize:11.5,padding:'5px 7px'}} value={r.unit} onChange={e=>updateItem(r.id,'unit',e.target.value)} placeholder="Nos" /></td>
+                    <td style={{padding:4,width:110}}><input className="form-input font-mono" style={{fontSize:11.5,padding:'5px 7px'}} value={r.estimatedValue} onChange={e=>updateItem(r.id,'estimatedValue',e.target.value)} placeholder="0" /></td>
+                    <td style={{padding:4,textAlign:'center',width:30}}><span onClick={()=>removeItem(r.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      }
+      <button type="button" onClick={addItem} className="btn btn-sm btn-outline">+ Add Item</button>
+    </div>
+  );
+}
+
+function NewRequisitionModal({ onClose, nextNumber, currentUser }) {
+  const [form, setForm] = useState({
+    req: nextNumber, date: new Date().toISOString().slice(0,10),
+    raisedBy: currentUser.name, raisedByUid: currentUser.uid,
+    category: 'Materials', priority: 'Normal', project: '', description: '', status: 'Open'
+  });
+  const [lineItems, setLineItems] = useState([]);
+  const [saving, setSaving] = useState(false);
+  function set(f,v) { setForm(s=>({...s,[f]:v})); }
+
+  async function handleSave() {
+    if (!form.description.trim()) return;
+    setSaving(true);
+    try {
+      await addRequisition({ ...form, lineItems, totalEstimated: lineItems.reduce((s,r)=>s+Number(r.estimatedValue||0),0) });
+      onClose();
+    } catch(e) { console.error(e); alert('Could not save requisition.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:640,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary-dark)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Requisition</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">REQ Number</label>
+              <input className="form-input font-mono" value={form.req} onChange={e=>set('req',e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Date</label>
+              <input className="form-input" type="date" value={form.date} onChange={e=>set('date',e.target.value)} />
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Raised By</label>
+              <input className="form-input" value={form.raisedBy} readOnly style={{background:'var(--grey-50)',color:'var(--text-muted)'}} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Priority</label>
+              <select className="form-input form-select" value={form.priority} onChange={e=>set('priority',e.target.value)}>
+                {REQ_PRIORITIES.map(p=><option key={p}>{p}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Category</label>
+              <select className="form-input form-select" value={form.category} onChange={e=>set('category',e.target.value)}>
+                {REQ_CATEGORIES.map(c=><option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Project / Site (optional)</label>
+              <input className="form-input" value={form.project} onChange={e=>set('project',e.target.value)} placeholder="e.g. Green Valley CHS WTP" />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Description / Purpose</label>
+            <textarea className="form-input" rows="2" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="What is needed and why" style={{resize:'vertical'}} />
+          </div>
+          <LineItemEditor items={lineItems} setItems={setLineItems} />
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.description.trim()} className="btn btn-primary"
+            style={{opacity:saving||!form.description.trim()?.6:1}}>
+            {saving?'Saving…':'Submit Requisition'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const REQ_STATUS_COLOR = { 'Open':'blue','Quotations Invited':'amber','Quotation Approved':'teal','PO/WO Issued':'green','Closed':'grey' };
+const REQ_PRIORITY_COLOR = { 'Urgent':'red','Normal':'blue','Low':'grey' };
+
+function Requisitions({ currentUser }) {
+  const { items, loading } = useRequisitions();
+  const [showNew, setShowNew] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [expandedId, setExpandedId] = useState(null);
+
+  const nextNumber = nextREQNumber(items.length);
+  const filtered = statusFilter==='all' ? items : items.filter(r=>r.status===statusFilter);
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Requisitions</div>
+          <div className="section-sub">{loading?'Loading…':`${items.length} requisition${items.length===1?'':'s'} · Next: ${nextNumber}`}</div>
+        </div>
+        <div className="flex gap-2">
+          <PermGate user={currentUser} action="raise_requisition" fallback={<span style={{fontSize:11,color:'var(--text-muted)'}}>No permission to raise requisitions</span>}>
+            <button className="btn btn-primary" onClick={()=>setShowNew(true)}>+ New Requisition</button>
+          </PermGate>
+          <ClearCollectionButton label="Clear All" count={items.length} onClear={clearAllRequisitions} />
+        </div>
+      </div>
+
+      <div className="card" style={{marginBottom:14}}>
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <select className="form-input form-select" style={{width:180}} onChange={e=>setStatusFilter(e.target.value)}>
+            <option value="all">All Status</option>
+            {REQ_STATUSES.map(s=><option key={s}>{s}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div className="card">
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+        ) : filtered.length===0 ? (
+          <div className="module-coming">
+            <div className="big-icon">📝</div>
+            <h3>No requisitions yet</h3>
+            <p className="text-muted">Raise a requisition to start the procurement process.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>REQ #</th><th>Date</th><th>Raised By</th><th>Category</th><th>Description</th><th>Priority</th><th>Est. Value</th><th>Status</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(r=>(
+                <React.Fragment key={r.docId}>
+                  <tr style={{cursor:'pointer'}} onClick={()=>setExpandedId(expandedId===r.docId?null:r.docId)}>
+                    <td className="mono" style={{whiteSpace:'nowrap'}}>{r.req}</td>
+                    <td>{r.date}</td>
+                    <td>{r.raisedBy}</td>
+                    <td><span className="badge teal">{r.category}</span></td>
+                    <td className="fw-600">{r.description}</td>
+                    <td><span className={`badge ${REQ_PRIORITY_COLOR[r.priority]||'grey'}`}>{r.priority}</span></td>
+                    <td className="amount">{inr(r.totalEstimated||0)}</td>
+                    <td><span className={`badge ${REQ_STATUS_COLOR[r.status]||'grey'}`}>{r.status}</span></td>
+                    <td>
+                      <div className="flex gap-2">
+                        <button className="btn btn-sm btn-ghost" onClick={e=>{e.stopPropagation();setExpandedId(expandedId===r.docId?null:r.docId)}}>
+                          {expandedId===r.docId?'▲':'▼'} Details
+                        </button>
+                        <button className="btn btn-sm btn-ghost" onClick={e=>{e.stopPropagation();if(confirm('Delete?'))deleteRequisition(r.docId);}}>Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                  {expandedId===r.docId && (
+                    <tr>
+                      <td colSpan={9} style={{background:'var(--grey-50)',padding:'12px 16px'}}>
+                        <div className="flex gap-3" style={{flexWrap:'wrap',marginBottom:8}}>
+                          {r.project && <span style={{fontSize:11.5}}><strong>Project:</strong> {r.project}</span>}
+                          <span style={{fontSize:11.5}}><strong>Raised by:</strong> {r.raisedBy} on {r.date}</span>
+                        </div>
+                        {r.lineItems && r.lineItems.length>0 && (
+                          <table style={{width:'100%',background:'var(--surface)',borderRadius:6,overflow:'hidden'}}>
+                            <thead><tr style={{background:'var(--primary-50)'}}>
+                              <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--primary)'}}>Item</th>
+                              <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--primary)'}}>Qty</th>
+                              <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--primary)'}}>Unit</th>
+                              <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--primary)'}}>Est. Value</th>
+                            </tr></thead>
+                            <tbody>
+                              {r.lineItems.map((li,i)=>(
+                                <tr key={i} style={{borderTop:'1px solid var(--grey-50)'}}>
+                                  <td style={{padding:'5px 8px',fontSize:12}}>{li.name}</td>
+                                  <td style={{padding:'5px 8px',fontSize:12}}>{li.qty}</td>
+                                  <td style={{padding:'5px 8px',fontSize:12}}>{li.unit}</td>
+                                  <td style={{padding:'5px 8px',fontSize:12}} className="amount">{inr(li.estimatedValue||0)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                        <div className="flex gap-2" style={{marginTop:10}}>
+                          <select className="form-input form-select" style={{width:200,fontSize:11.5}} defaultValue={r.status}
+                            onChange={async e=>{try{await updateRequisition(r.docId,{status:e.target.value});}catch(err){alert('Could not update.')}}}>
+                            {REQ_STATUSES.map(s=><option key={s}>{s}</option>)}
+                          </select>
+                          <span style={{fontSize:11,color:'var(--text-muted)',alignSelf:'center'}}>Update status</span>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {showNew && <NewRequisitionModal onClose={()=>setShowNew(false)} nextNumber={nextNumber} currentUser={currentUser} />}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// CROSS-REFERENCE VIEWER
+// Search any document number → see the full chain
+// ════════════════════════════════════════════════════
+function CrossReference() {
+  const { items: reqs } = useRequisitions();
+  const { items: quotes } = useQuotations();
+  const { items: pos } = usePurchaseOrders();
+  const { items: wos } = useWorkOrders();
+  const { items: milestones } = useMilestones();
+  const [search, setSearch] = useState('');
+  const [result, setResult] = useState(null);
+
+  function findChain(query) {
+    const q = query.trim().toUpperCase();
+    if (!q) { setResult(null); return; }
+
+    // Find starting point — could be REQ, QUOT, PO, WO
+    let chain = { query: q, req: null, quotations: [], approvedQuote: null, po: null, wo: null, milestones: [] };
+
+    // Try match as REQ
+    const req = reqs.find(r => (r.req||'').toUpperCase().includes(q));
+    if (req) {
+      chain.req = req;
+      chain.quotations = quotes.filter(qt => qt.linkedReq === req.docId || qt.linkedReq === req.req);
+      chain.approvedQuote = chain.quotations.find(qt => qt.approved);
+      if (chain.approvedQuote) {
+        chain.po = pos.find(p => p.linkedQuotation === chain.approvedQuote.docId);
+        chain.wo = wos.find(w => w.linkedQuotation === chain.approvedQuote.docId);
+      }
+    }
+    // Try as QUOT
+    if (!chain.req) {
+      const qt = quotes.find(qt => (qt.quotNo||'').toUpperCase().includes(q) || (qt.vendorName||'').toUpperCase().includes(q));
+      if (qt) {
+        chain.approvedQuote = qt.approved ? qt : null;
+        chain.quotations = [qt];
+        chain.req = reqs.find(r => r.docId === qt.linkedReq || r.req === qt.linkedReq);
+        chain.po = pos.find(p => p.linkedQuotation === qt.docId);
+        chain.wo = wos.find(w => w.linkedQuotation === qt.docId);
+      }
+    }
+    // Try as PO
+    if (!chain.req && !chain.quotations.length) {
+      const po = pos.find(p => (p.po||'').toUpperCase().includes(q));
+      if (po) {
+        chain.po = po;
+        const qt = quotes.find(qt => qt.docId === po.linkedQuotation);
+        if (qt) { chain.quotations = [qt]; chain.approvedQuote = qt.approved ? qt : null; chain.req = reqs.find(r=>r.docId===qt.linkedReq); }
+      }
+    }
+    // Try as WO
+    if (!chain.req && !chain.quotations.length && !chain.po) {
+      const wo = wos.find(w => (w.wo||'').toUpperCase().includes(q));
+      if (wo) {
+        chain.wo = wo;
+        const qt = quotes.find(qt => qt.docId === wo.linkedQuotation);
+        if (qt) { chain.quotations = [qt]; chain.approvedQuote = qt.approved ? qt : null; chain.req = reqs.find(r=>r.docId===qt.linkedReq); }
+      }
+    }
+
+    if (chain.po) chain.milestones = milestones.filter(m => m.po === chain.po.po);
+    setResult(chain);
+  }
+
+  const ChainStep = ({ icon, color, label, number, details, found }) => (
+    <div style={{display:'flex',gap:0,alignItems:'stretch'}}>
+      <div style={{display:'flex',flexDirection:'column',alignItems:'center',width:40,flexShrink:0}}>
+        <div style={{width:32,height:32,borderRadius:'50%',background:found?color:'var(--grey-50)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:15,border:`2px solid ${found?color:'var(--border)'}`}}>
+          {found ? icon : '○'}
+        </div>
+        <div style={{flex:1,width:2,background:'var(--border)',margin:'2px 0'}} />
+      </div>
+      <div style={{flex:1,paddingBottom:16,paddingLeft:10}}>
+        <div style={{fontSize:11,fontWeight:700,color:found?color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.5}}>{label}</div>
+        {found && number && <div className="font-mono" style={{fontSize:12,fontWeight:700,color:'var(--text)',marginTop:2}}>{number}</div>}
+        {found && details && <div style={{fontSize:11.5,color:'var(--text-muted)',marginTop:2}}>{details}</div>}
+        {!found && <div style={{fontSize:11.5,color:'var(--text-muted)',marginTop:2}}>Not found</div>}
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Cross-Reference</div>
+          <div className="section-sub">Trace any document through the full procurement chain</div>
+        </div>
+      </div>
+      <div className="card" style={{marginBottom:14}}>
+        <div className="card-body">
+          <div className="flex gap-2 items-center">
+            <div className="search-wrap" style={{flex:1}}>
+              <span className="search-icon">🔍</span>
+              <input className="form-input" value={search}
+                onChange={e=>setSearch(e.target.value)}
+                onKeyDown={e=>e.key==='Enter'&&findChain(search)}
+                placeholder="Type a REQ, QUOT, PO, WO number or vendor name…" style={{maxWidth:440}} />
+            </div>
+            <button className="btn btn-primary" onClick={()=>findChain(search)}>Trace</button>
+            {result && <button className="btn btn-ghost" onClick={()=>{setResult(null);setSearch('');}}>Clear</button>}
+          </div>
+        </div>
+      </div>
+
+      {result && (
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">Procurement Chain — "{result.query}"</span>
+          </div>
+          <div className="card-body" style={{padding:'20px 24px'}}>
+            <ChainStep icon="📝" color="var(--primary)" label="Requisition" found={!!result.req}
+              number={result.req?.req}
+              details={result.req ? `${result.req.description} · Raised by ${result.req.raisedBy} · ${result.req.status}` : null} />
+
+            <ChainStep icon="📋" color="var(--amber)" label={`Quotations (${result.quotations.length})`} found={result.quotations.length>0}
+              number={result.quotations.map(q=>q.quotNo||q.vendorName).join(', ')}
+              details={result.quotations.length>0 ? result.quotations.map(q=>`${q.vendorName} — ${inr(q.value||0)} [${q.approved?'✓ Approved':q.stage}]`).join(' · ') : null} />
+
+            <ChainStep icon="✅" color="var(--secondary)" label="Approved Quotation" found={!!result.approvedQuote}
+              number={result.approvedQuote?.quotNo || result.approvedQuote?.vendorName}
+              details={result.approvedQuote ? `${inr(result.approvedQuote.value||0)} · Approved` : null} />
+
+            <ChainStep icon="📦" color="var(--primary)" label="Purchase Order" found={!!result.po}
+              number={result.po?.po}
+              details={result.po ? `${result.po.vendorName} — ${inr(result.po.value||0)} · ${result.po.stage}` : null} />
+
+            <ChainStep icon="🔧" color="var(--secondary)" label="Work Order" found={!!result.wo}
+              number={result.wo?.wo}
+              details={result.wo ? `${result.wo.vendorName} — ${inr(result.wo.value||0)} · ${result.wo.stage}` : null} />
+
+            <div style={{display:'flex',gap:0,alignItems:'stretch'}}>
+              <div style={{display:'flex',flexDirection:'column',alignItems:'center',width:40,flexShrink:0}}>
+                <div style={{width:32,height:32,borderRadius:'50%',background:result.milestones.length>0?'var(--green)':'var(--grey-50)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:15,border:`2px solid ${result.milestones.length>0?'var(--green)':'var(--border)'}`}}>
+                  {result.milestones.length>0?'💳':'○'}
+                </div>
+              </div>
+              <div style={{flex:1,paddingLeft:10}}>
+                <div style={{fontSize:11,fontWeight:700,color:result.milestones.length>0?'var(--green)':'var(--text-muted)',textTransform:'uppercase',letterSpacing:.5}}>Payment Milestones ({result.milestones.length})</div>
+                {result.milestones.length>0
+                  ? result.milestones.map((m,i)=>(
+                      <div key={i} style={{fontSize:11.5,color:'var(--text-muted)',marginTop:2}}>
+                        {m.name} — {inr(m.amount||0)} · <span className={`badge ${m.paid?'green':'blue'}`} style={{fontSize:10}}>{m.paid?'Paid':'Pending'}</span>
+                      </div>
+                    ))
+                  : <div style={{fontSize:11.5,color:'var(--text-muted)',marginTop:2}}>No payment milestones linked</div>
+                }
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!result && (
+        <div className="card">
+          <div className="module-coming">
+            <div className="big-icon">🔗</div>
+            <h3>Cross-Reference Tracer</h3>
+            <p className="text-muted">Enter any document number above to see the full chain — Requisition → Quotation → PO/WO → Payments</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// UPDATED SETTINGS — Role & Permission Matrix
+// ════════════════════════════════════════════════════
+const ACTIONS = [
+  { key:'raise_requisition',  label:'Raise Requisition' },
+  { key:'enter_quotation',    label:'Enter Quotation' },
+  { key:'approve_quotation',  label:'Approve Quotation' },
+  { key:'issue_po',           label:'Issue Purchase Order' },
+  { key:'issue_wo',           label:'Issue Work Order' },
+  { key:'mark_payment',       label:'Mark Payment Received' },
+  { key:'view_cashflow',      label:'View Cash Flow' },
+  { key:'edit_settings',      label:'Edit Settings' },
+];
+
+const ROLES = [
+  { key:'owner',       label:'Owner' },
+  { key:'manager',     label:'Manager' },
+  { key:'accounts',    label:'Accounts' },
+  { key:'field_staff', label:'Field Staff' },
+  { key:'viewer',      label:'Viewer' },
+];
+
+function usePermSettings() {
+  const [perms, setPerms] = useState(DEFAULT_PERMISSIONS);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    function start() {
+      const { db, doc, onSnapshot } = window.fb;
+      const unsub = onSnapshot(doc(db, 'settings', 'permissions'), snap => {
+        if (snap.exists()) setPerms(s => ({ ...DEFAULT_PERMISSIONS, ...snap.data() }));
+        setLoading(false);
+      }, () => setLoading(false));
+      return unsub;
+    }
+    if (window.fb) { const u = start(); return () => u && u(); }
+    let u; const h = () => { u = start(); };
+    window.addEventListener('firebase-ready', h, { once: true });
+    return () => { window.removeEventListener('firebase-ready', h); if (u) u(); };
+  }, []);
+
+  async function savePerms(newPerms) {
+    const { db, doc, setDoc } = window.fb;
+    await setDoc(doc(db, 'settings', 'permissions'), newPerms, { merge: true });
+  }
+
+  return { perms, setPerms, savePerms, loading };
+}
+
+function PermissionMatrix({ currentUser }) {
+  const { perms, setPerms, savePerms } = usePermSettings();
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  function toggle(role, action) {
+    if (role === 'owner') return; // owner always has all permissions
+    setPerms(p => ({ ...p, [role]: { ...(p[role]||{}), [action]: !(p[role]||{})[action] } }));
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try { await savePerms(perms); setSaved(true); setTimeout(()=>setSaved(false),2000); }
+    catch(e) { console.error(e); alert('Could not save permissions.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <span className="card-title">Role & Permission Matrix</span>
+        <PermGate user={currentUser} action="edit_settings">
+          <button className="btn btn-sm btn-primary" onClick={handleSave} disabled={saving}>
+            {saving?'Saving…':saved?'✓ Saved':'Save Permissions'}
+          </button>
+        </PermGate>
+      </div>
+      <div className="card-body" style={{overflowX:'auto'}}>
+        <table style={{width:'100%',minWidth:600}}>
+          <thead>
+            <tr>
+              <th style={{textAlign:'left',fontSize:11,color:'var(--text-muted)',padding:'6px 10px',width:200}}>Action</th>
+              {ROLES.map(r=>(
+                <th key={r.key} style={{textAlign:'center',fontSize:11,color:'var(--text-muted)',padding:'6px 10px'}}>
+                  {r.label}
+                  {r.key==='owner'&&<div style={{fontSize:9,color:'var(--primary)'}}>all access</div>}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {ACTIONS.map(a=>(
+              <tr key={a.key} style={{borderTop:'1px solid var(--grey-50)'}}>
+                <td style={{fontSize:12.5,padding:'8px 10px',color:'var(--text)'}}>{a.label}</td>
+                {ROLES.map(r=>{
+                  const granted = r.key==='owner' ? true : !!(perms[r.key]||{})[a.key];
+                  return (
+                    <td key={r.key} style={{textAlign:'center',padding:'8px 10px'}}>
+                      <div onClick={()=>toggle(r.key,a.key)} style={{
+                        width:36,height:20,borderRadius:10,margin:'0 auto',cursor:r.key==='owner'?'not-allowed':'pointer',
+                        background:granted?'var(--green)':'var(--border)',position:'relative',transition:'background .15s'
+                      }}>
+                        <div style={{
+                          position:'absolute',top:2,left:granted?18:2,width:16,height:16,borderRadius:'50%',
+                          background:'#fff',transition:'left .15s',boxShadow:'0 1px 3px rgba(0,0,0,.2)'
+                        }} />
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{fontSize:11,color:'var(--text-muted)',marginTop:10}}>Owner always has full access — cannot be restricted.</div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// UPDATED QUOTATION — adds REQ link + quotNo + Approved flag + Approved-by log
+// ════════════════════════════════════════════════════
+// Note: quotation Firestore functions (addQuotation, updateQuotation etc.) already defined above.
+// Just rebuilding the UI components that use currentUser for approval.
+
+function QuotationApprovalAction({ quotation, currentUser, onApproved, onRejected }) {
+  const [working, setWorking] = useState(false);
+
+  async function handleApprove() {
+    if (!can(currentUser, 'approve_quotation')) { alert('You do not have permission to approve quotations.'); return; }
+    setWorking(true);
+    try {
+      await updateQuotation(quotation.docId, {
+        approved: true,
+        approvedBy: currentUser.name,
+        approvedByUid: currentUser.uid,
+        approvedAt: Date.now(),
+        stage: 'Finalization of T&C'
+      });
+      onApproved && onApproved();
+    } catch(e) { console.error(e); alert('Could not approve.'); }
+    finally { setWorking(false); }
+  }
+
+  async function handleReject() {
+    setWorking(true);
+    try {
+      await updateQuotation(quotation.docId, { approved: false, rejectedBy: currentUser.name, rejectedAt: Date.now() });
+      onRejected && onRejected();
+    } catch(e) { console.error(e); alert('Could not update.'); }
+    finally { setWorking(false); }
+  }
+
+  if (quotation.approved) {
+    return (
+      <div style={{display:'flex',alignItems:'center',gap:6}}>
+        <span className="badge green">✓ Approved</span>
+        <span style={{fontSize:10.5,color:'var(--text-muted)'}}>by {quotation.approvedBy}</span>
+        <button className="btn btn-sm btn-ghost" style={{fontSize:10}} onClick={handleReject} disabled={working}>Revoke</button>
+      </div>
+    );
+  }
+
+  return (
+    <PermGate user={currentUser} action="approve_quotation" fallback={
+      <span style={{fontSize:11,color:'var(--text-muted)'}}>Pending approval</span>
+    }>
+      <button className="btn btn-sm btn-primary" style={{background:'var(--green)'}} onClick={handleApprove} disabled={working}>
+        {working?'…':'✓ Approve'}
+      </button>
+    </PermGate>
+  );
+}
+
+// ─── Nav Config ──────────────────────────────────────
+const NAV = [
+  { section: 'Operations' },
+  { id:'dashboard',      label:'Dashboard',       icon:'⊞' },
+  { id:'tasks',          label:'Tasks',            icon:'☑' },
+  { id:'projects',       label:'Projects',         icon:'📐' },
+  { section: 'Procurement' },
+  { id:'requisitions',   label:'Requisitions',     icon:'📝' },
+  { id:'quotations',     label:'Quotations',       icon:'📋' },
+  { id:'workorders',     label:'Work Orders',      icon:'🔧' },
+  { id:'purchaseorders', label:'Purchase Orders',  icon:'📦' },
+  { id:'crossref',       label:'Cross-Reference',  icon:'🔗' },
+  { section: 'Finance' },
+  { id:'paymenttracker', label:'Payment Tracker',  icon:'💳' },
+  { id:'billpayments',   label:'Bill Payments',    icon:'📑' },
+  { id:'cashflow',       label:'Cash Flow',        icon:'📈' },
+  { id:'pettycash',      label:'Petty Cash',       icon:'💰' },
+  { section: 'Records' },
+  { id:'vendors',        label:'Vendor Master',    icon:'🏭' },
+  { id:'documents',      label:'Document Vault',   icon:'🗄' },
+  { section: 'Team' },
+  { id:'chat',           label:'Team Chat',        icon:'💬' },
+  { id:'reminders',      label:'Reminders',        icon:'🔔' },
+  { id:'reports',        label:'Reports',          icon:'📊' },
+  { id:'settings',       label:'Settings',         icon:'⚙' },
+];
+
+// ─── Module router ─────────────────────────────────────
+function Module({ id, setActive, currentUser }) {
+  switch(id) {
+    case 'dashboard':      return <Dashboard setActive={setActive} />;
+    case 'tasks':          return <Tasks />;
+    case 'requisitions':   return <Requisitions currentUser={currentUser} />;
+    case 'quotations':     return <QuotationsWithUser currentUser={currentUser} />;
+    case 'workorders':     return <WorkOrders />;
+    case 'purchaseorders': return <PurchaseOrders />;
+    case 'crossref':       return <CrossReference />;
+    case 'cashflow':       return <CashFlow />;
+    case 'paymenttracker': return <PaymentTracker />;
+    case 'billpayments':   return <BillPayments />;
+    case 'chat':           return <TeamChat />;
+    case 'settings':       return <SettingsWithUser currentUser={currentUser} />;
+    case 'projects':       return <ComingSoon title="Project Management" icon="📐" desc="Full project P&L, material tracking, milestone triggers, and shared cost allocation." />;
+    case 'pettycash':      return <ComingSoon title="Petty Cash" icon="💰" desc="Day-to-day cash expenses with receipt photos and monthly reconciliation." />;
+    case 'vendors':        return <VendorMaster />;
+    case 'documents':      return <ComingSoon title="Document Vault" icon="🗄" desc="Centralised file storage with expiry alerts for licences and certificates." />;
+    case 'reminders':      return <ComingSoon title="Reminders" icon="🔔" desc="Auto-generated from milestones, tasks, bills, and document expiry." />;
+    case 'reports':        return <ComingSoon title="Reports" icon="📊" desc="Task performance, cash flow, project P&L, vendor spend, and more." />;
+    default:               return <Dashboard setActive={setActive} />;
+  }
+}
+
+// ─── Wrapper: Quotations with currentUser for approval ─
+function QuotationsWithUser({ currentUser }) {
+  const { items, loading } = useQuotations();
+  const { items: reqs } = useRequisitions();
+  const [showNew, setShowNew] = useState(false);
+  const [stageFilter, setStageFilter] = useState('all');
+  const [approvedFilter, setApprovedFilter] = useState('all');
+  const [issuingFor, setIssuingFor] = useState(null);
+  const [viewSchedule, setViewSchedule] = useState(null);
+
+  const filtered = items.filter(q =>
+    (stageFilter==='all' || q.stage===stageFilter) &&
+    (approvedFilter==='all' || (approvedFilter==='approved'&&q.approved) || (approvedFilter==='pending'&&!q.approved))
+  );
+  const pipelineValue = items.filter(q=>!q.approved).reduce((s,q)=>s+Number(q.value||0),0);
+
+  async function advanceStage(q) {
+    const idx = QUOTE_STAGES.indexOf(q.stage);
+    if (idx < QUOTE_STAGES.length - 2) {
+      try { await updateQuotation(q.docId, { stage: QUOTE_STAGES[idx+1] }); }
+      catch(e) { console.error(e); alert('Could not update stage.'); }
+    } else if (idx === QUOTE_STAGES.length - 2) {
+      setIssuingFor(q);
+    }
+  }
+
+  function reqLabel(id) {
+    const r = reqs.find(r=>r.docId===id||r.req===id);
+    return r ? `${r.req} — ${r.description.slice(0,30)}` : (id||'—');
+  }
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Quotations</div>
+          <div className="section-sub">{loading?'Loading…':`${items.length} quotation${items.length===1?'':'s'} · pipeline ${inr(pipelineValue)}`}</div>
+        </div>
+        <div className="flex gap-2">
+          <PermGate user={currentUser} action="enter_quotation" fallback={null}>
+            <button className="btn btn-primary" onClick={()=>setShowNew(true)}>+ New Quotation</button>
+          </PermGate>
+          <ClearCollectionButton label="Clear All" count={items.length} onClear={clearAllQuotations} />
+        </div>
+      </div>
+
+      <div className="card" style={{marginBottom:14}}>
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <div className="flex gap-2">
+            <select className="form-input form-select" style={{width:200}} onChange={e=>setStageFilter(e.target.value)}>
+              <option value="all">All Stages</option>
+              {QUOTE_STAGES.map(s=><option key={s}>{s}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:160}} onChange={e=>setApprovedFilter(e.target.value)}>
+              <option value="all">All</option>
+              <option value="approved">Approved only</option>
+              <option value="pending">Pending approval</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+        ) : filtered.length===0 ? (
+          <div className="module-coming">
+            <div className="big-icon">📋</div>
+            <h3>No quotations yet</h3>
+            <p className="text-muted">Add vendor quotations. Link to a requisition. Approve the best one to issue a PO or WO.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>Quot #</th><th>Vendor</th><th>REQ Ref</th><th>Value</th><th>Payment Schedule</th><th>Stage</th><th>Approval</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(q=>(
+                <tr key={q.docId} style={{background:q.approved?'#F0FFF4':''}}>
+                  <td className="mono" style={{whiteSpace:'nowrap'}}>{q.quotNo||'—'}</td>
+                  <td className="fw-600">{q.vendorName}</td>
+                  <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{reqLabel(q.linkedReq)}</td>
+                  <td className="amount fw-600">{inr(q.value||0)}</td>
+                  <td>
+                    {q.paymentSchedule&&q.paymentSchedule.length>0
+                      ? <span className="btn btn-sm btn-ghost" style={{cursor:'pointer'}} onClick={()=>setViewSchedule(q)}>{q.paymentSchedule.length} stage{q.paymentSchedule.length===1?'':'s'}</span>
+                      : <span className="text-muted text-sm">—</span>}
+                  </td>
+                  <td><span className={`badge ${STAGE_COLOR[q.stage]||'grey'}`}>{q.stage}</span></td>
+                  <td>
+                    <QuotationApprovalAction quotation={q} currentUser={currentUser} />
+                  </td>
+                  <td>
+                    <div className="flex gap-2">
+                      {q.approved && q.stage==='Finalization of T&C' && (
+                        <PermGate user={currentUser} action="issue_po">
+                          <button className="btn btn-sm btn-primary" style={{background:'var(--green)'}} onClick={()=>setIssuingFor(q)}>Issue PO →</button>
+                        </PermGate>
+                      )}
+                      {!q.approved && q.stage!=='Issuing of PO/WO' && q.stage!=='Finalization of T&C' && (
+                        <button className="btn btn-sm btn-ghost" onClick={()=>advanceStage(q)}>Advance →</button>
+                      )}
+                      <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteQuotation(q.docId);}}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {showNew && <NewQuotationWithREQ onClose={()=>setShowNew(false)} reqs={reqs} />}
+      {issuingFor && <IssuePOModal quotation={issuingFor} onClose={()=>setIssuingFor(null)} onIssued={()=>setIssuingFor(null)} />}
+      {viewSchedule && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setViewSchedule(null)}>
+          <div style={{background:'var(--surface)',borderRadius:10,width:420,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+            <div style={{background:'var(--primary)',padding:'14px 18px'}}>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payment Schedule — {viewSchedule.vendorName}</span>
+            </div>
+            <div style={{padding:'16px 20px'}}>
+              <table style={{width:'100%'}}>
+                <thead><tr>
+                  {['Stage','%','Amount','Date'].map(h=><th key={h} style={{fontSize:10,textAlign:'left',color:'var(--text-muted)',padding:'4px 0'}}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {(viewSchedule.paymentSchedule||[]).map((r,i)=>(
+                    <tr key={i} style={{borderTop:'1px solid var(--grey-50)'}}>
+                      <td style={{padding:'6px 0',fontSize:12.5}}>{r.name}</td>
+                      <td style={{fontSize:12.5}}>{r.pct}%</td>
+                      <td className="amount" style={{fontSize:12.5}}>{inr(r.amount||0)}</td>
+                      <td style={{fontSize:12.5}}>{r.date||'—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{padding:'0 20px 16px',display:'flex',justifyContent:'flex-end'}}>
+              <button onClick={()=>setViewSchedule(null)} className="btn btn-ghost">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── New Quotation with REQ dropdown and Quot Number ─
+function NewQuotationWithREQ({ onClose, reqs }) {
+  const { items: allQuotes } = useQuotations();
+  const [form, setForm] = useState({
+    quotNo:'', vendorName:'', description:'', value:'',
+    receivedDate: new Date().toISOString().slice(0,10),
+    linkedReq:'', stage:'Receipt of Quotation', notes:''
+  });
+  const [schedule, setSchedule] = useState([]);
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  // Auto-generate quotNo based on linked REQ + suffix letter
+  useEffect(()=>{
+    if(form.linkedReq){
+      const req = reqs.find(r=>r.docId===form.linkedReq);
+      if(req){
+        const existing = allQuotes.filter(q=>q.linkedReq===form.linkedReq);
+        const suffix = String.fromCharCode(65+existing.length); // A, B, C...
+        const base = req.req.replace('REQ/','QUOT/');
+        set('quotNo', `${base}/${suffix}`);
+      }
+    }
+  },[form.linkedReq]);
+
+  async function handleSave(){
+    if(!form.vendorName.trim()||!form.value) return;
+    setSaving(true);
+    try{
+      await addQuotation({...form,value:Number(form.value),paymentSchedule:schedule});
+      onClose();
+    }catch(e){console.error(e);alert('Could not save quotation.');}
+    finally{setSaving(false);}
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:620,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Quotation</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Reference Requisition</label>
+              <select className="form-input form-select" value={form.linkedReq} onChange={e=>set('linkedReq',e.target.value)}>
+                <option value="">Select requisition (optional)…</option>
+                {reqs.map(r=><option key={r.docId} value={r.docId}>{r.req} — {r.description.slice(0,40)}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Quotation Number</label>
+              <input className="form-input font-mono" value={form.quotNo} onChange={e=>set('quotNo',e.target.value)} placeholder="Auto-filled from REQ link" />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Vendor Name</label>
+            <input className="form-input" value={form.vendorName} onChange={e=>set('vendorName',e.target.value)} placeholder="Vendor / supplier name" autoFocus />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Description</label>
+            <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. RO membranes — 5 units, 4040 size" />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Total Value (₹)</label>
+              <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} placeholder="0" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Received Date</label>
+              <input className="form-input" type="date" value={form.receivedDate} onChange={e=>set('receivedDate',e.target.value)} />
+            </div>
+          </div>
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
+          <div className="form-group">
+            <label className="form-label">Stage</label>
+            <select className="form-input form-select" value={form.stage} onChange={e=>set('stage',e.target.value)}>
+              {QUOTE_STAGES.map(s=><option key={s}>{s}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Notes / Negotiation Points</label>
+            <textarea className="form-input" rows="2" value={form.notes} onChange={e=>set('notes',e.target.value)} style={{resize:'vertical'}} />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.vendorName.trim()||!form.value} className="btn btn-primary"
+            style={{opacity:saving||!form.vendorName.trim()||!form.value?.6:1}}>
+            {saving?'Saving…':'Save Quotation'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Settings wrapper with currentUser ─────────────
+function SettingsWithUser({ currentUser }) {
+  return (
+    <div>
+      <div className="section-header">
+        <div className="section-title">Settings</div>
+      </div>
+      <div style={{marginBottom:20}}>
+        <PermissionMatrix currentUser={currentUser} />
+      </div>
+      <Settings currentUser={currentUser} />
+    </div>
+  );
 }
 
 // ─── Topbar titles ─────────────────────────────────────
 const TITLES = {
-  dashboard:'Dashboard', tasks:'Tasks', workorders:'Work Orders', quotations:'Quotations',
-  paymenttracker:'Payment Tracker', billpayments:'Bill Payments', cashflow:'Cash Flow',
-  pettycash:'Petty Cash', purchaseorders:'Purchase Orders', projects:'Projects',
-  vendors:'Vendor Master', documents:'Document Vault', chat:'Team Chat',
-  reminders:'Reminders', reports:'Reports', settings:'Settings',
+  dashboard:'Dashboard', tasks:'Tasks', requisitions:'Requisitions',
+  quotations:'Quotations', workorders:'Work Orders', purchaseorders:'Purchase Orders',
+  crossref:'Cross-Reference', paymenttracker:'Payment Tracker',
+  billpayments:'Bill Payments', cashflow:'Cash Flow', pettycash:'Petty Cash',
+  projects:'Projects', vendors:'Vendor Master', documents:'Document Vault',
+  chat:'Team Chat', reminders:'Reminders', reports:'Reports', settings:'Settings',
 };
 
 // ─── App ──────────────────────────────────────────────
 function App() {
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
   const [active, setActive] = useState('dashboard');
   const today = new Date().toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' });
+
+  function handleLogin(user) {
+    setCurrentUser(user);
+    setLoggedIn(true);
+  }
+
+  function handleLogout() {
+    window.currentUser = null;
+    setCurrentUser(null);
+    setLoggedIn(false);
+    setActive('dashboard');
+  }
+
+  if (!loggedIn || !currentUser) {
+    return <LoginScreen onLogin={handleLogin} />;
+  }
 
   return (
     <div className="app">
@@ -3256,32 +4288,44 @@ function App() {
           <div className="sidebar-sub">Internal Workflow Platform</div>
         </div>
         {NAV.map((item, i) => {
-          if (item.section) return (
-            <div className="sidebar-section" key={i}>{item.section}</div>
-          );
+          if (item.section) return <div className="sidebar-section" key={i}>{item.section}</div>;
           return (
-            <div className={`nav-item ${active === item.id ? 'active' : ''}`} key={item.id} onClick={() => setActive(item.id)}>
+            <div className={`nav-item ${active===item.id?'active':''}`} key={item.id} onClick={()=>setActive(item.id)}>
               <span className="icon">{item.icon}</span>
               <span>{item.label}</span>
               {item.badge && <span className="nav-badge">{item.badge}</span>}
             </div>
           );
         })}
+
+        {/* User info at bottom of sidebar */}
+        <div style={{marginTop:'auto',padding:'12px 10px',borderTop:'1px solid rgba(255,255,255,.10)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 6px',borderRadius:8,cursor:'pointer'}} onClick={handleLogout} title="Click to sign out">
+            <div style={{width:30,height:30,borderRadius:'50%',background:'rgba(255,255,255,.15)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,flexShrink:0}}>
+              {currentUser.initials}
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:12,fontWeight:600,color:'#fff',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{currentUser.name}</div>
+              <div style={{fontSize:10,color:'rgba(255,255,255,.5)',textTransform:'capitalize'}}>{currentUser.role.replace('_',' ')} · Sign out</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Main area */}
       <div className="main">
         <div className="topbar">
-          <div className="topbar-title">{TITLES[active] || 'Dashboard'}</div>
+          <div className="topbar-title">{TITLES[active]||'Dashboard'}</div>
           <div className="topbar-right">
             <span style={{fontSize:11,color:'var(--text-muted)'}}>{today}</span>
             <button className="icon-btn" title="Notifications">🔔</button>
-            <div className="avatar" title="Vatsal — Owner">V</div>
+            <div className="avatar" title={`${currentUser.name} — ${currentUser.role}`} onClick={handleLogout} style={{cursor:'pointer',title:'Sign out'}}>
+              {currentUser.initials}
+            </div>
           </div>
         </div>
-
         <div className="content">
-          <Module id={active} setActive={setActive} />
+          <Module id={active} setActive={setActive} currentUser={currentUser} />
         </div>
       </div>
     </div>
