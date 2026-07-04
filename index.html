@@ -236,6 +236,9 @@
     getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, setDoc,
     onSnapshot, query, orderBy, getDocs, writeBatch
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import {
+    getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyBFFn0EoV3qM7IU6A2XGofbVRvsT103e3I",
@@ -249,15 +252,17 @@
 
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
+  const auth = getAuth(app);
 
-  // Expose a small Firestore helper API on window for the Babel/React script to use.
+  // Expose Firestore + Auth helpers on window for the Babel/React script
   window.fb = {
-    db,
+    db, auth,
     collection, addDoc, updateDoc, deleteDoc, doc, setDoc,
-    onSnapshot, query, orderBy, getDocs, writeBatch
+    onSnapshot, query, orderBy, getDocs, writeBatch,
+    signInWithEmailAndPassword, signOut, onAuthStateChanged
   };
 
-  // Let the React app know Firebase is ready.
+  // Let the React app know Firebase is ready
   window.dispatchEvent(new Event('firebase-ready'));
 </script>
 
@@ -3327,65 +3332,114 @@ function PermGate({ user, action, customPerms, children, fallback }) {
 // Before Firebase Auth: shows a dev-mode user picker
 // After Firebase Auth: this is replaced by real login screen
 function LoginScreen({ onLogin }) {
-  const [selected, setSelected] = useState('vatsal');
-  const [pin, setPin] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  // Simple 4-digit PIN per user for demo — Firebase Auth replaces this
-  const DEMO_PINS = { vatsal:'1234', dakshata:'2345', rahul:'3456', priya:'4567', manoj:'5678', amit:'6789' };
-
-  function handleLogin() {
-    const user = STAFF.find(s => s.uid === selected);
-    if (!user) return;
-    if (pin !== DEMO_PINS[selected]) { setError('Incorrect PIN. Try again.'); return; }
-    window.currentUser = user;
-    onLogin(user);
+  async function handleLogin() {
+    if (!email.trim() || !password) return;
+    setLoading(true);
+    setError('');
+    try {
+      const { auth, signInWithEmailAndPassword, db, doc } = window.fb;
+      // Sign in with Firebase Auth
+      const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const uid = cred.user.uid;
+      // Fetch user profile from Firestore users collection
+      const { getDoc } = await Promise.resolve({ getDoc: async (ref) => {
+        return new Promise((resolve, reject) => {
+          const { onSnapshot } = window.fb;
+          const unsub = onSnapshot(ref, snap => { unsub(); resolve(snap); }, reject);
+        });
+      }});
+      const userRef = doc(db, 'users', uid);
+      const snap = await getDoc(userRef);
+      let profile;
+      if (snap.exists()) {
+        const data = snap.data();
+        profile = {
+          uid,
+          name: data.name || cred.user.email,
+          email: cred.user.email,
+          initials: data.initials || (data.name ? data.name[0].toUpperCase() : 'U'),
+          role: data.role || 'viewer'
+        };
+      } else {
+        // No Firestore profile yet — default to viewer
+        profile = {
+          uid,
+          name: cred.user.email,
+          email: cred.user.email,
+          initials: cred.user.email[0].toUpperCase(),
+          role: 'viewer'
+        };
+      }
+      window.currentUser = profile;
+      onLogin(profile);
+    } catch(e) {
+      console.error('Login error:', e);
+      if (e.code === 'auth/invalid-credential' || e.code === 'auth/wrong-password' || e.code === 'auth/user-not-found') {
+        setError('Incorrect email or password. Please try again.');
+      } else if (e.code === 'auth/invalid-email') {
+        setError('Please enter a valid email address.');
+      } else if (e.code === 'auth/too-many-requests') {
+        setError('Too many failed attempts. Please wait a moment and try again.');
+      } else {
+        setError('Sign in failed. Check your connection and try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
   }
-
-  const user = STAFF.find(s => s.uid === selected);
 
   return (
     <div style={{minHeight:'100vh',background:'var(--primary-dark)',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'var(--font-sans)'}}>
-      <div style={{background:'var(--surface)',borderRadius:12,width:360,boxShadow:'0 8px 40px rgba(0,0,0,.3)',overflow:'hidden'}}>
-        <div style={{background:'var(--primary)',padding:'28px 28px 24px',textAlign:'center'}}>
-          <div style={{fontSize:32,marginBottom:8}}>💧</div>
-          <div style={{fontWeight:800,fontSize:16,color:'#fff',letterSpacing:.3}}>Nirman Watertech</div>
-          <div style={{fontSize:11.5,color:'rgba(255,255,255,.65)',marginTop:3}}>Internal Workflow Platform</div>
+      <div style={{background:'var(--surface)',borderRadius:12,width:380,boxShadow:'0 8px 40px rgba(0,0,0,.3)',overflow:'hidden'}}>
+        {/* Header */}
+        <div style={{background:'var(--primary)',padding:'32px 28px 28px',textAlign:'center'}}>
+          <div style={{fontSize:36,marginBottom:10}}>💧</div>
+          <div style={{fontWeight:800,fontSize:18,color:'#fff',letterSpacing:.3}}>Nirmaan Watertech</div>
+          <div style={{fontSize:12,color:'rgba(255,255,255,.65)',marginTop:4}}>Internal Workflow Platform</div>
         </div>
-        <div style={{padding:'24px 28px'}}>
-          <div style={{fontSize:11.5,fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.5,marginBottom:10}}>Select User</div>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:18}}>
-            {STAFF.map(s => (
-              <div key={s.uid} onClick={() => { setSelected(s.uid); setError(''); setPin(''); }}
-                style={{display:'flex',alignItems:'center',gap:8,padding:'8px 10px',borderRadius:8,cursor:'pointer',
-                  border:`2px solid ${selected===s.uid?'var(--primary)':'var(--border)'}`,
-                  background:selected===s.uid?'var(--primary-50)':'transparent',transition:'all .12s'}}>
-                <div style={{width:28,height:28,borderRadius:'50%',background:selected===s.uid?'var(--primary)':'var(--grey-50)',
-                  color:selected===s.uid?'#fff':'var(--text-muted)',display:'flex',alignItems:'center',justifyContent:'center',
-                  fontSize:11,fontWeight:700}}>
-                  {s.initials}
-                </div>
-                <div>
-                  <div style={{fontSize:12,fontWeight:600,color:'var(--text)'}}>{s.name}</div>
-                  <div style={{fontSize:10,color:'var(--text-muted)',textTransform:'capitalize'}}>{s.role.replace('_',' ')}</div>
-                </div>
-              </div>
-            ))}
+        {/* Form */}
+        <div style={{padding:'28px 28px 24px'}}>
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:11.5,fontWeight:600,color:'var(--text-secondary)',display:'block',marginBottom:5}}>Email Address</label>
+            <input
+              type="email"
+              value={email}
+              onChange={e => { setEmail(e.target.value); setError(''); }}
+              onKeyDown={e => e.key === 'Enter' && handleLogin()}
+              placeholder="you@nirmaanwatertech.com"
+              autoFocus
+              style={{width:'100%',padding:'10px 12px',border:`1px solid ${error?'var(--red)':'var(--border)'}`,borderRadius:6,fontSize:13,fontFamily:'var(--font-sans)',outline:'none',boxSizing:'border-box',transition:'border-color .12s'}}
+            />
           </div>
-          <div style={{marginBottom:14}}>
-            <label style={{fontSize:11.5,fontWeight:600,color:'var(--text-secondary)',display:'block',marginBottom:4}}>PIN</label>
-            <input type="password" maxLength={4} value={pin} onChange={e=>{setPin(e.target.value);setError('');}}
-              onKeyDown={e=>e.key==='Enter'&&handleLogin()}
-              placeholder="4-digit PIN"
-              style={{width:'100%',padding:'9px 12px',border:`1px solid ${error?'var(--red)':'var(--border)'}`,borderRadius:6,fontSize:14,fontFamily:'var(--font-mono)',letterSpacing:4,textAlign:'center',outline:'none',boxSizing:'border-box'}} />
-            {error && <div style={{fontSize:11,color:'var(--red)',marginTop:4}}>{error}</div>}
+          <div style={{marginBottom:20}}>
+            <label style={{fontSize:11.5,fontWeight:600,color:'var(--text-secondary)',display:'block',marginBottom:5}}>Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => { setPassword(e.target.value); setError(''); }}
+              onKeyDown={e => e.key === 'Enter' && handleLogin()}
+              placeholder="Your password"
+              style={{width:'100%',padding:'10px 12px',border:`1px solid ${error?'var(--red)':'var(--border)'}`,borderRadius:6,fontSize:13,fontFamily:'var(--font-sans)',outline:'none',boxSizing:'border-box',transition:'border-color .12s'}}
+            />
           </div>
-          <button onClick={handleLogin} style={{width:'100%',background:'var(--primary)',color:'#fff',border:'none',borderRadius:6,padding:'10px',fontWeight:700,fontSize:13,cursor:'pointer'}}>
-            Sign In as {user?.name}
+          {error && (
+            <div style={{background:'var(--red-50)',border:'1px solid #FFCDD2',borderRadius:6,padding:'8px 12px',fontSize:12,color:'var(--red)',marginBottom:16}}>
+              {error}
+            </div>
+          )}
+          <button
+            onClick={handleLogin}
+            disabled={loading || !email.trim() || !password}
+            style={{width:'100%',background: loading||!email.trim()||!password ? '#90CAF9' : 'var(--primary)',color:'#fff',border:'none',borderRadius:6,padding:'11px',fontWeight:700,fontSize:13,cursor: loading||!email.trim()||!password ? 'not-allowed' : 'pointer',transition:'background .15s'}}>
+            {loading ? 'Signing in…' : 'Sign In'}
           </button>
-          <div style={{fontSize:10.5,color:'var(--text-muted)',textAlign:'center',marginTop:12}}>
-            Demo PINs: Vatsal 1234 · Dakshata 2345 · Field staff 3456–6789
-            <br/>Firebase Auth will replace this screen
+          <div style={{fontSize:11,color:'var(--text-muted)',textAlign:'center',marginTop:16}}>
+            Nirmaan Watertech Solutions · Mulund West, Mumbai
           </div>
         </div>
       </div>
@@ -4344,25 +4398,92 @@ const TITLES = {
 
 // ─── App ──────────────────────────────────────────────
 function App() {
-  const [loggedIn, setLoggedIn] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true); // true while checking session
   const [active, setActive] = useState('dashboard');
   const today = new Date().toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' });
 
-  function handleLogin(user) {
-    setCurrentUser(user);
-    setLoggedIn(true);
+  // Listen for Firebase Auth state — persists across page reloads
+  useEffect(() => {
+    function startAuthListener() {
+      const { auth, onAuthStateChanged, db, doc, onSnapshot } = window.fb;
+      const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
+        if (firebaseUser) {
+          // User is signed in — fetch their Firestore profile
+          const userRef = doc(db, 'users', firebaseUser.uid);
+          const profileUnsub = onSnapshot(userRef, (snap) => {
+            if (snap.exists()) {
+              const data = snap.data();
+              const profile = {
+                uid: firebaseUser.uid,
+                name: data.name || firebaseUser.email,
+                email: firebaseUser.email,
+                initials: data.initials || (data.name ? data.name[0].toUpperCase() : 'U'),
+                role: data.role || 'viewer'
+              };
+              window.currentUser = profile;
+              setCurrentUser(profile);
+            } else {
+              // Auth user exists but no Firestore profile — treat as viewer
+              const profile = {
+                uid: firebaseUser.uid,
+                name: firebaseUser.email,
+                email: firebaseUser.email,
+                initials: firebaseUser.email[0].toUpperCase(),
+                role: 'viewer'
+              };
+              window.currentUser = profile;
+              setCurrentUser(profile);
+            }
+            setAuthLoading(false);
+          });
+          return profileUnsub;
+        } else {
+          // Not signed in
+          window.currentUser = null;
+          setCurrentUser(null);
+          setAuthLoading(false);
+        }
+      });
+      return unsub;
+    }
+
+    if (window.fb) {
+      const unsub = startAuthListener();
+      return () => unsub && unsub();
+    } else {
+      let unsub;
+      const handler = () => { unsub = startAuthListener(); };
+      window.addEventListener('firebase-ready', handler, { once: true });
+      return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+    }
+  }, []);
+
+  async function handleLogout() {
+    try {
+      const { auth, signOut } = window.fb;
+      await signOut(auth);
+      window.currentUser = null;
+      setCurrentUser(null);
+      setActive('dashboard');
+    } catch(e) {
+      console.error('Logout error:', e);
+    }
   }
 
-  function handleLogout() {
-    window.currentUser = null;
-    setCurrentUser(null);
-    setLoggedIn(false);
-    setActive('dashboard');
+  // Show loading spinner while checking auth state
+  if (authLoading) {
+    return (
+      <div style={{minHeight:'100vh',background:'var(--primary-dark)',display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:16}}>
+        <div style={{fontSize:36}}>💧</div>
+        <div style={{color:'rgba(255,255,255,.7)',fontSize:13}}>Loading Nirmaan Watertech…</div>
+      </div>
+    );
   }
 
-  if (!loggedIn || !currentUser) {
-    return <LoginScreen onLogin={handleLogin} />;
+  // Show login screen if not authenticated
+  if (!currentUser) {
+    return <LoginScreen onLogin={(user) => { setCurrentUser(user); }} />;
   }
 
   return (
