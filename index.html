@@ -312,6 +312,25 @@ const BILL_STATUS_COLOR = { 'Overdue':'red','Due Today':'amber','Upcoming':'blue
 
 
 // ─── Reusable Components ──────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  componentDidCatch(e, info) { console.error('Module error:', e, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{padding:32,textAlign:'center'}}>
+          <div style={{fontSize:32,marginBottom:12}}>⚠️</div>
+          <div style={{fontWeight:700,fontSize:14,color:'var(--red)',marginBottom:8}}>Something went wrong in this module</div>
+          <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:16,fontFamily:'var(--font-mono)'}}>{this.state.error.message}</div>
+          <button className="btn btn-primary" onClick={()=>this.setState({error:null})}>Try Again</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const StatusBadge = ({ status }) => {
   const c = STATUS_COLOR[status] || 'grey';
   return <span className={`badge ${c}`}>{status}</span>;
@@ -3214,15 +3233,8 @@ const DEFAULT_PERMISSIONS = {
 if (!window.currentUser) window.currentUser = STAFF[0]; // default Vatsal
 
 function useCurrentUser() {
-  const [user, setUser] = useState(window.currentUser);
-  useEffect(() => {
-    // Poll for Firebase Auth user once it's wired — no-op for now
-    const interval = setInterval(() => {
-      if (window.currentUser !== user) setUser(window.currentUser);
-    }, 500);
-    return () => clearInterval(interval);
-  }, [user]);
-  return user;
+  // App manages currentUser state directly — this hook is a placeholder for Firebase Auth integration
+  return window.currentUser || STAFF[0];
 }
 
 function can(user, action, customPerms) {
@@ -3467,7 +3479,7 @@ function NewRequisitionModal({ onClose, nextNumber, currentUser }) {
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving||!form.description.trim()} className="btn btn-primary"
-            style={{opacity:saving||!form.description.trim()?.6:1}}>
+            style={{opacity: (saving||!form.description.trim()) ? 0.6 : 1}}>
             {saving?'Saving…':'Submit Requisition'}
           </button>
         </div>
@@ -4222,7 +4234,7 @@ function NewQuotationWithREQ({ onClose, reqs }) {
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving||!form.vendorName.trim()||!form.value} className="btn btn-primary"
-            style={{opacity:saving||!form.vendorName.trim()||!form.value?.6:1}}>
+            style={{opacity: (saving||!form.vendorName.trim()||!form.value) ? 0.6 : 1}}>
             {saving?'Saving…':'Save Quotation'}
           </button>
         </div>
@@ -4325,7 +4337,9 @@ function App() {
           </div>
         </div>
         <div className="content">
-          <Module id={active} setActive={setActive} currentUser={currentUser} />
+          <ErrorBoundary key={active}>
+            <Module id={active} setActive={setActive} currentUser={currentUser} />
+          </ErrorBoundary>
         </div>
       </div>
     </div>
