@@ -336,6 +336,79 @@ const StatusBadge = ({ status }) => {
   return <span className={`badge ${c}`}>{status}</span>;
 };
 
+// ─── Reusable two-step clear button ───────────────────
+function ClearCollectionButton({ label, count, onClear }) {
+  const [step, setStep] = useState(0);
+  const [typed, setTyped] = useState('');
+  const [working, setWorking] = useState(false);
+  const CONFIRM_PHRASE = 'DELETE';
+  function close() { setStep(0); setTyped(''); }
+
+  async function handleClear() {
+    setWorking(true);
+    try { await onClear(); close(); }
+    catch(e) { console.error(e); alert('Could not clear data — check Firestore connection.'); }
+    finally { setWorking(false); }
+  }
+
+  return (
+    <>
+      <button onClick={() => setStep(1)} disabled={count === 0}
+        style={{background:'transparent',border:'1px solid #EF9A9A',color:'var(--red)',borderRadius:4,padding:'6px 14px',fontSize:12,fontWeight:600,cursor:count===0?'not-allowed':'pointer',opacity:count===0?.5:1}}>
+        🗑 {label}
+      </button>
+      {step === 1 && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={close}>
+          <div style={{background:'var(--surface)',borderRadius:10,width:420,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+            <div style={{background:'var(--red)',padding:'14px 18px',display:'flex',alignItems:'center',gap:10}}>
+              <span style={{fontSize:20}}>🗑</span>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{label}</span>
+            </div>
+            <div style={{padding:'20px 20px 8px'}}>
+              <div style={{fontSize:13,color:'var(--text)',marginBottom:10,lineHeight:1.6}}>
+                You are about to <strong>permanently delete all {count} record{count===1?'':'s'}</strong>.<br/><br/>
+                <span style={{color:'var(--red)',fontWeight:600}}>This cannot be undone.</span>
+              </div>
+            </div>
+            <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+              <button onClick={close} className="btn btn-ghost">Cancel</button>
+              <button onClick={() => setStep(2)} style={{background:'var(--red)',color:'#fff',border:'none',borderRadius:4,padding:'7px 18px',fontWeight:600,fontSize:12.5,cursor:'pointer'}}>
+                Yes, delete →
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {step === 2 && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.55)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={close}>
+          <div style={{background:'var(--surface)',borderRadius:10,width:440,boxShadow:'0 8px 40px rgba(0,0,0,.28)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+            <div style={{background:'#B71C1C',padding:'14px 18px',display:'flex',alignItems:'center',gap:10}}>
+              <span style={{fontSize:20}}>⛔</span>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Final Confirmation</span>
+            </div>
+            <div style={{padding:'22px 22px 8px'}}>
+              <div style={{fontSize:13,color:'var(--text)',marginBottom:16}}>Type the word below to confirm:</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:18,fontWeight:800,color:'var(--red)',letterSpacing:4,textAlign:'center',background:'var(--red-50)',padding:'10px',borderRadius:6,marginBottom:16,border:'1px dashed #EF9A9A'}}>
+                {CONFIRM_PHRASE}
+              </div>
+              <input className="form-input font-mono" placeholder={`Type ${CONFIRM_PHRASE} to confirm`} value={typed}
+                onChange={e => setTyped(e.target.value.toUpperCase())} autoFocus
+                style={{fontSize:14,fontWeight:600,letterSpacing:2,textAlign:'center',borderColor:typed===CONFIRM_PHRASE?'var(--red)':typed.length>0?'#EF9A9A':'var(--border)'}} />
+            </div>
+            <div style={{padding:'16px 22px 22px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+              <button onClick={close} className="btn btn-ghost" disabled={working}>Cancel</button>
+              <button onClick={handleClear} disabled={typed!==CONFIRM_PHRASE||working}
+                style={{background:typed===CONFIRM_PHRASE?'#B71C1C':'#BDBDBD',color:'#fff',border:'none',borderRadius:4,padding:'7px 20px',fontWeight:700,fontSize:12.5,cursor:typed===CONFIRM_PHRASE&&!working?'pointer':'not-allowed'}}>
+                {working?'Deleting…':'🗑 Delete Permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Dashboard Module ─────────────────────────────────
 function Dashboard({ setActive }) {
   const [alerts, setAlerts] = useState([true, true]);
