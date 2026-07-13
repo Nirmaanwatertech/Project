@@ -3160,8 +3160,309 @@ function Receipts() {
 
 
 // ════════════════════════════════════════════════════
-// CAPITAL & LOANS — financing inflows
+// PETTY CASH — day-to-day small cash expenses
 // ════════════════════════════════════════════════════
+const PETTY_COLLECTION = 'petty_cash';
+const PETTY_CATEGORIES = [
+  'Auto / Fuel',
+  'Tea & Snacks',
+  'Courier',
+  'Stationery',
+  'Site Travel',
+  'Minor Hardware',
+  'Telephone / Recharge',
+  'Printing',
+  'Bank Charges',
+  'Miscellaneous',
+];
+
+function usePettyCash() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const unsub = onSnapshot(
+        query(collection(db, PETTY_COLLECTION), orderBy('createdAt','desc')),
+        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
+        err  => { console.error('Petty cash listener',err); setLoading(false); }
+      );
+      return unsub;
+    }
+    if (window.fb) { const u=start(); return ()=>u&&u(); }
+    let u; const h=()=>{u=start();};
+    window.addEventListener('firebase-ready',h,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); if(u) u(); };
+  },[]);
+  return {items,loading};
+}
+
+async function addPettyEntry(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, PETTY_COLLECTION), {...data, createdAt:Date.now()});
+}
+async function deletePettyEntry(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, PETTY_COLLECTION, docId));
+}
+async function clearAllPettyCash() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(collection(db, PETTY_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d=>batch.delete(d.ref));
+  await batch.commit();
+}
+
+// ─── New Petty Cash Entry Modal ────────────────────
+function NewPettyModal({ onClose, currentUser }) {
+  const [form, setForm] = useState({
+    date: new Date().toISOString().slice(0,10),
+    amount: '',
+    category: 'Auto / Fuel',
+    paidBy: currentUser ? currentUser.name : '',
+    description: '',
+    project: '',
+  });
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  async function handleSave() {
+    if (!form.amount || !form.description.trim() || !form.date) return;
+    setSaving(true);
+    try {
+      await addPettyEntry({...form, amount: Number(form.amount)});
+      onClose();
+    } catch(e){ console.error(e); alert('Could not save entry.'); }
+    finally{ setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:480,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--secondary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ Petty Cash Entry</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Date</label>
+              <input className="form-input" type="date" value={form.date} onChange={e=>set('date',e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Amount (₹)</label>
+              <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount',e.target.value)} placeholder="0" autoFocus />
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Category</label>
+              <select className="form-input form-select" value={form.category} onChange={e=>set('category',e.target.value)}>
+                {PETTY_CATEGORIES.map(c=><option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Paid By</label>
+              <select className="form-input form-select" value={form.paidBy} onChange={e=>set('paidBy',e.target.value)}>
+                {['Neer','Dakshata','Rahul','Priya','Manoj','Amit'].map(n=><option key={n}>{n}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Description</label>
+            <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. Petrol for site visit — Thane" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Project / Site <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional)</span></label>
+            <input className="form-input" value={form.project} onChange={e=>set('project',e.target.value)} placeholder="e.g. Green Valley CHS, Thane" />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.amount||!form.description.trim()} className="btn btn-primary"
+            style={{background:'var(--secondary)',opacity:saving||!form.amount||!form.description.trim()?0.6:1}}>
+            {saving?'Saving…':'Save Entry'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Petty Cash Module ──────────────────────────────
+function PettyCash({ currentUser }) {
+  const { items, loading } = usePettyCash();
+  const [showNew, setShowNew] = useState(false);
+  const [catFilter, setCatFilter] = useState('all');
+  const [paidByFilter, setPaidByFilter] = useState('all');
+  const [monthFilter, setMonthFilter] = useState('all');
+
+  // Month options from entries
+  const months = [...new Set(items.map(i=>i.date?.slice(0,7)).filter(Boolean))].sort().reverse();
+
+  const filtered = items.filter(i=>
+    (catFilter==='all' || i.category===catFilter) &&
+    (paidByFilter==='all' || i.paidBy===paidByFilter) &&
+    (monthFilter==='all' || (i.date||'').startsWith(monthFilter))
+  );
+
+  const total = filtered.reduce((s,i)=>s+Number(i.amount||0),0);
+  const totalAll = items.reduce((s,i)=>s+Number(i.amount||0),0);
+
+  // Category breakdown for filtered period
+  const byCategory = PETTY_CATEGORIES.map(cat=>({
+    cat,
+    amt: filtered.filter(i=>i.category===cat).reduce((s,i)=>s+Number(i.amount||0),0)
+  })).filter(c=>c.amt>0).sort((a,b)=>b.amt-a.amt);
+
+  // Paid by breakdown
+  const byPerson = [...new Set(items.map(i=>i.paidBy).filter(Boolean))].map(p=>({
+    person:p,
+    amt: filtered.filter(i=>i.paidBy===p).reduce((s,i)=>s+Number(i.amount||0),0)
+  })).filter(p=>p.amt>0).sort((a,b)=>b.amt-a.amt);
+
+  const thisMonth = new Date().toISOString().slice(0,7);
+  const thisMonthTotal = items.filter(i=>(i.date||'').startsWith(thisMonth)).reduce((s,i)=>s+Number(i.amount||0),0);
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Petty Cash</div>
+          <div className="section-sub">{loading?'Loading…':`${items.length} entries · all time`}</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" style={{background:'var(--secondary)'}} onClick={()=>setShowNew(true)}>+ Add Entry</button>
+          <ClearCollectionButton label="Clear All" count={items.length} onClear={clearAllPettyCash} />
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+        <div className="stat-card">
+          <div className="stat-label">This Month</div>
+          <div className="stat-value red">{inr(thisMonthTotal)}</div>
+          <div className="stat-sub">{new Date().toLocaleString('en-IN',{month:'long',year:'numeric'})}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Filtered Total</div>
+          <div className="stat-value">{inr(total)}</div>
+          <div className="stat-sub">{filtered.length} entries</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Top Category</div>
+          <div className="stat-value blue" style={{fontSize:14}}>{byCategory[0]?.cat||'—'}</div>
+          <div className="stat-sub">{byCategory[0]?inr(byCategory[0].amt):''}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">All-Time Total</div>
+          <div className="stat-value">{inr(totalAll)}</div>
+        </div>
+      </div>
+
+      {/* Category + Person breakdown */}
+      {filtered.length > 0 && (
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
+          <div className="card">
+            <div className="card-header"><span className="card-title">By Category</span></div>
+            <div className="card-body">
+              {byCategory.map(c=>(
+                <div key={c.cat} style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                  <span style={{fontSize:12,color:'var(--text-secondary)',width:150,flexShrink:0}}>{c.cat}</span>
+                  <div className="progress-wrap" style={{flex:1}}>
+                    <div className="progress-fill blue" style={{width:`${total>0?Math.round((c.amt/total)*100):0}%`}} />
+                  </div>
+                  <span className="amount text-sm" style={{width:80,textAlign:'right'}}>{inr(c.amt)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="card">
+            <div className="card-header"><span className="card-title">By Staff</span></div>
+            <div className="card-body">
+              {byPerson.map(p=>(
+                <div key={p.person} style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                  <div style={{width:28,height:28,borderRadius:'50%',background:'var(--primary)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,flexShrink:0}}>
+                    {p.person[0]}
+                  </div>
+                  <span style={{fontSize:12,color:'var(--text-secondary)',flex:1}}>{p.person}</span>
+                  <div className="progress-wrap" style={{width:100}}>
+                    <div className="progress-fill teal" style={{width:`${total>0?Math.round((p.amt/total)*100):0}%`,background:'var(--secondary)'}} />
+                  </div>
+                  <span className="amount text-sm" style={{width:80,textAlign:'right'}}>{inr(p.amt)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filters + table */}
+      <div className="card">
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <div className="flex gap-2">
+            <select className="form-input form-select" style={{width:160}} onChange={e=>setCatFilter(e.target.value)}>
+              <option value="all">All Categories</option>
+              {PETTY_CATEGORIES.map(c=><option key={c}>{c}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:140}} onChange={e=>setPaidByFilter(e.target.value)}>
+              <option value="all">All Staff</option>
+              {[...new Set(items.map(i=>i.paidBy).filter(Boolean))].map(p=><option key={p}>{p}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:150}} onChange={e=>setMonthFilter(e.target.value)}>
+              <option value="all">All Months</option>
+              {months.map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}</option>)}
+            </select>
+          </div>
+        </div>
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+        ) : filtered.length===0 ? (
+          <div className="module-coming">
+            <div className="big-icon">💰</div>
+            <h3>No petty cash entries yet</h3>
+            <p className="text-muted">Record day-to-day small cash expenses — fuel, courier, tea, stationery, etc.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>Date</th><th>Category</th><th>Description</th><th>Paid By</th><th>Project</th><th>Amount</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(i=>(
+                <tr key={i.docId}>
+                  <td>{i.date}</td>
+                  <td><span className="badge grey">{i.category}</span></td>
+                  <td>{i.description}</td>
+                  <td>
+                    <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <div style={{width:22,height:22,borderRadius:'50%',background:'var(--primary)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700}}>
+                        {(i.paidBy||'?')[0]}
+                      </div>
+                      {i.paidBy||'—'}
+                    </div>
+                  </td>
+                  <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{i.project||'—'}</td>
+                  <td className="amount fw-600" style={{color:'var(--red)'}}>{inr(i.amount||0)}</td>
+                  <td>
+                    <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this entry?'))deletePettyEntry(i.docId);}}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+              {/* Totals row */}
+              <tr style={{background:'var(--grey-50)',fontWeight:700}}>
+                <td colSpan={5} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Total ({filtered.length} entries)</td>
+                <td className="amount" style={{color:'var(--red)',fontWeight:700}}>{inr(total)}</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {showNew && <NewPettyModal onClose={()=>setShowNew(false)} currentUser={currentUser} />}
+    </div>
+  );
+}
 const CAPITAL_COLLECTION = 'capital_loans';
 const CAPITAL_TYPES = ['Investor Fund','Bank Loan','Overdraft','Owner Capital Injection','Grant','Other'];
 
@@ -4454,6 +4755,7 @@ function Settings() {
               { label:'Clear Quotations', desc:'Removes all quotations and pipeline data.', scope:'quotations' },
               { label:'Clear Purchase Orders', desc:'Removes all client and vendor POs.', scope:'purchaseorders' },
               { label:'Clear Vendor Master', desc:'Removes all vendor profiles and ratings.', scope:'vendors' },
+              { label:'Clear Petty Cash', desc:'Removes all petty cash entries.', scope:'pettycash' },
               { label:'Reset All Data', desc:'Wipes everything and returns to a blank slate.', scope:'all' },
             ].map(item => (
               <ClearDataCard key={item.scope} item={item} />
@@ -4474,7 +4776,7 @@ function ClearDataCard({ item }) {
   const CONFIRM_PHRASE = 'DELETE';
 
   const isAll = item.scope === 'all';
-  const isWired = ['tasks','workorders','bills','cashflow','milestones','quotations','purchaseorders','vendors'].includes(item.scope);
+  const isWired = ['tasks','workorders','bills','cashflow','milestones','quotations','purchaseorders','vendors','pettycash'].includes(item.scope);
   const cardBg = isAll ? '#FFF0F0' : '#FFFAFA';
 
   async function handleClear() {
@@ -4496,11 +4798,14 @@ function ClearDataCard({ item }) {
         await clearAllPOs();
       } else if (item.scope === 'vendors') {
         await clearAllVendors();
+      } else if (item.scope === 'pettycash') {
+        await clearAllPettyCash();
       } else if (item.scope === 'all') {
         await Promise.all([
           clearAllTasks(), clearAllWorkOrders(), clearCashFlowData(),
           clearAllMilestones(), clearAllQuotations(), clearAllPOs(),
-          clearAllVendors(), clearAllBills(), clearAllAdvances(), clearAllRequisitions()
+          clearAllVendors(), clearAllBills(), clearAllAdvances(),
+          clearAllRequisitions(), clearAllPettyCash()
         ]);
       }
       setCleared(true);
@@ -5447,7 +5752,7 @@ function Module({ id, setActive, currentUser }) {
     case 'chat':           return <TeamChat />;
     case 'settings':       return <SettingsWithUser currentUser={currentUser} />;
     case 'projects':       return <ComingSoon title="Project Management" icon="📐" desc="Full project P&L, material tracking, milestone triggers, and shared cost allocation." />;
-    case 'pettycash':      return <ComingSoon title="Petty Cash" icon="💰" desc="Day-to-day cash expenses with receipt photos and monthly reconciliation." />;
+    case 'pettycash':      return <PettyCash currentUser={currentUser} />;
     case 'vendors':        return <VendorMaster />;
     case 'documents':      return <ComingSoon title="Document Vault" icon="🗄" desc="Centralised file storage with expiry alerts for licences and certificates." />;
     case 'reminders':      return <ComingSoon title="Reminders" icon="🔔" desc="Auto-generated from milestones, tasks, bills, and document expiry." />;
