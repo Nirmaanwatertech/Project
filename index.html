@@ -2380,6 +2380,1016 @@ function BillPayments() {
   );
 }
 
+// ════════════════════════════════════════════════════
+// RECEIPTS — client inflows against billing schedule
+// ════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════
+// RECEIPTS — three-layer client billing system
+// Billing Schedule → RA Bills → Receipts
+// ════════════════════════════════════════════════════
+const BILLING_COLLECTION  = 'billing_schedules';
+const RABILLS_COLLECTION  = 'ra_bills';
+const RECEIPTS_COLLECTION = 'receipts';
+
+// ─── Firestore hooks ───────────────────────────────
+function useBillingSchedules() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const unsub = onSnapshot(
+        query(collection(db, BILLING_COLLECTION), orderBy('createdAt','desc')),
+        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
+        err  => { console.error('Billing listener',err); setLoading(false); }
+      );
+      return unsub;
+    }
+    if (window.fb) { const u=start(); return ()=>u&&u(); }
+    let u; const h=()=>{u=start();};
+    window.addEventListener('firebase-ready',h,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); if(u) u(); };
+  },[]);
+  return {items,loading};
+}
+
+function useRABills() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const unsub = onSnapshot(
+        query(collection(db, RABILLS_COLLECTION), orderBy('createdAt','desc')),
+        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
+        err  => { console.error('RA Bills listener',err); setLoading(false); }
+      );
+      return unsub;
+    }
+    if (window.fb) { const u=start(); return ()=>u&&u(); }
+    let u; const h=()=>{u=start();};
+    window.addEventListener('firebase-ready',h,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); if(u) u(); };
+  },[]);
+  return {items,loading};
+}
+
+function useReceipts() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const unsub = onSnapshot(
+        query(collection(db, RECEIPTS_COLLECTION), orderBy('createdAt','desc')),
+        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
+        err  => { console.error('Receipts listener',err); setLoading(false); }
+      );
+      return unsub;
+    }
+    if (window.fb) { const u=start(); return ()=>u&&u(); }
+    let u; const h=()=>{u=start();};
+    window.addEventListener('firebase-ready',h,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); if(u) u(); };
+  },[]);
+  return {items,loading};
+}
+
+// ─── CRUD helpers ──────────────────────────────────
+async function addBillingSchedule(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, BILLING_COLLECTION), {...data, createdAt:Date.now()});
+}
+async function deleteBillingSchedule(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, BILLING_COLLECTION, docId));
+}
+async function addRABill(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, RABILLS_COLLECTION), {...data, createdAt:Date.now()});
+}
+async function updateRABill(docId, data) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(doc(db, RABILLS_COLLECTION, docId), data);
+}
+async function deleteRABill(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, RABILLS_COLLECTION, docId));
+}
+async function addReceipt(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, RECEIPTS_COLLECTION), {...data, createdAt:Date.now()});
+}
+async function deleteReceipt(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, RECEIPTS_COLLECTION, docId));
+}
+async function clearAllReceipts() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const [s1,s2,s3] = await Promise.all([
+    getDocs(collection(db, BILLING_COLLECTION)),
+    getDocs(collection(db, RABILLS_COLLECTION)),
+    getDocs(collection(db, RECEIPTS_COLLECTION)),
+  ]);
+  const batch = writeBatch(db);
+  [...s1.docs,...s2.docs,...s3.docs].forEach(d=>batch.delete(d.ref));
+  await batch.commit();
+}
+
+function nextRABillNumber(existing) {
+  return `RA/${FY}/${String(existing+1).padStart(3,'0')}`;
+}
+
+// ════════════════════════════════════════════════════
+// MODAL 1 — New Billing Schedule
+// ════════════════════════════════════════════════════
+function NewBillingScheduleModal({ onClose }) {
+  const [form, setForm] = useState({ client:'', projectRef:'', contractValue:'' });
+  const [milestones, setMilestones] = useState([
+    { id:genRowId(), name:'Advance',    pct:'', amount:'', expectedDate:'' },
+    { id:genRowId(), name:'RA Bill 1',  pct:'', amount:'', expectedDate:'' },
+    { id:genRowId(), name:'Final Bill', pct:'', amount:'', expectedDate:'' },
+  ]);
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  function addMilestone(){setMilestones(m=>[...m,{id:genRowId(),name:'',pct:'',amount:'',expectedDate:''}]);}
+  function removeMilestone(id){setMilestones(m=>m.filter(r=>r.id!==id));}
+  function updateMilestone(id,field,value){
+    setMilestones(m=>m.map(r=>{
+      if(r.id!==id) return r;
+      const next={...r,[field]:value};
+      if(field==='pct'&&form.contractValue){
+        const pct=parseFloat(value);
+        if(!isNaN(pct)) next.amount=String(Math.round((pct/100)*Number(form.contractValue)));
+      }
+      return next;
+    }));
+  }
+
+  const pctTotal = milestones.reduce((s,m)=>s+(parseFloat(m.pct)||0),0);
+  const amtTotal = milestones.reduce((s,m)=>s+(Number(m.amount)||0),0);
+
+  async function handleSave(){
+    if(!form.client.trim()) return;
+    setSaving(true);
+    try {
+      await addBillingSchedule({
+        ...form,
+        contractValue: Number(form.contractValue)||0,
+        milestones: milestones.filter(m=>m.name.trim()),
+      });
+      onClose();
+    } catch(e){ console.error(e); alert('Could not save.'); }
+    finally{ setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:640,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--green)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Billing Schedule</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Client Name</label>
+              <input className="form-input" value={form.client} onChange={e=>set('client',e.target.value)} placeholder="e.g. Green Valley CHS" autoFocus />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Project / Site Reference</label>
+              <input className="form-input" value={form.projectRef} onChange={e=>set('projectRef',e.target.value)} placeholder="e.g. WTP installation, Thane" />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Contract Value (₹)</label>
+            <input className="form-input font-mono" value={form.contractValue}
+              onChange={e=>{set('contractValue',e.target.value);}}
+              placeholder="Total contract amount — entering this auto-calculates milestone amounts from %" />
+          </div>
+
+          <div style={{borderTop:'1px solid var(--border)',paddingTop:14,marginTop:4}}>
+            <label className="form-label" style={{marginBottom:8,display:'block'}}>Billing Milestones</label>
+            <div style={{border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',marginBottom:8}}>
+              <table style={{width:'100%'}}>
+                <thead>
+                  <tr style={{background:'var(--grey-50)'}}>
+                    <th style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)'}}>Milestone Name</th>
+                    <th style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)',width:60}}>%</th>
+                    <th style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)',width:120}}>Amount (₹)</th>
+                    <th style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)',width:140}}>Expected Date</th>
+                    <th style={{width:30}}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {milestones.map(m=>(
+                    <tr key={m.id} style={{borderTop:'1px solid var(--grey-50)'}}>
+                      <td style={{padding:4}}>
+                        <input className="form-input" style={{fontSize:11.5,padding:'5px 7px'}} value={m.name}
+                          onChange={e=>updateMilestone(m.id,'name',e.target.value)} placeholder="e.g. Advance 20%" />
+                      </td>
+                      <td style={{padding:4}}>
+                        <input className="form-input font-mono" style={{fontSize:11.5,padding:'5px 7px'}} value={m.pct}
+                          onChange={e=>updateMilestone(m.id,'pct',e.target.value)} placeholder="20" />
+                      </td>
+                      <td style={{padding:4}}>
+                        <input className="form-input font-mono" style={{fontSize:11.5,padding:'5px 7px'}} value={m.amount}
+                          onChange={e=>updateMilestone(m.id,'amount',e.target.value)} placeholder="0" />
+                      </td>
+                      <td style={{padding:4}}>
+                        <input className="form-input" type="date" style={{fontSize:11.5,padding:'5px 7px'}} value={m.expectedDate}
+                          onChange={e=>updateMilestone(m.id,'expectedDate',e.target.value)} />
+                      </td>
+                      <td style={{padding:4,textAlign:'center'}}>
+                        <span onClick={()=>removeMilestone(m.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex items-center justify-between">
+              <button type="button" onClick={addMilestone} className="btn btn-sm btn-outline">+ Add Milestone</button>
+              <span style={{fontSize:11,color: Math.abs(pctTotal-100)>0.01&&pctTotal>0?'var(--red)':'var(--text-muted)',fontWeight:Math.abs(pctTotal-100)>0.01&&pctTotal>0?600:400}}>
+                Total: {pctTotal}% · {inr(amtTotal)}
+                {Math.abs(pctTotal-100)>0.01&&pctTotal>0&&' ⚠ should total 100%'}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.client.trim()} className="btn btn-primary"
+            style={{background:'var(--green)',opacity:saving||!form.client.trim()?0.6:1}}>
+            {saving?'Saving…':'Save Billing Schedule'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// MODAL 2 — Submit RA Bill
+// ════════════════════════════════════════════════════
+function SubmitRABillModal({ onClose, schedules, existingCount }) {
+  const [form, setForm] = useState({
+    raBillNo: nextRABillNumber(existingCount),
+    scheduleId: '', client:'', projectRef:'', milestoneIndex: '',
+    amountClaimed: '', dateSubmitted: new Date().toISOString().slice(0,10),
+    notes: ''
+  });
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  const selectedSchedule = schedules.find(s=>s.docId===form.scheduleId);
+  const selectedMilestone = selectedSchedule && form.milestoneIndex!==''
+    ? selectedSchedule.milestones[Number(form.milestoneIndex)]
+    : null;
+
+  function handleScheduleSelect(docId){
+    const sc = schedules.find(s=>s.docId===docId);
+    set('scheduleId',docId);
+    set('client',sc?sc.client:'');
+    set('projectRef',sc?sc.projectRef:'');
+    set('milestoneIndex','');
+    set('amountClaimed','');
+  }
+  function handleMilestoneSelect(idx){
+    set('milestoneIndex',idx);
+    const sc = schedules.find(s=>s.docId===form.scheduleId);
+    if(sc&&sc.milestones[idx]) set('amountClaimed',String(sc.milestones[idx].amount||''));
+  }
+
+  async function handleSave(){
+    if(!form.scheduleId||!form.amountClaimed||!form.dateSubmitted) return;
+    setSaving(true);
+    try {
+      await addRABill({
+        ...form,
+        amountClaimed: Number(form.amountClaimed),
+        amountReceived: 0,
+        balancePending: Number(form.amountClaimed),
+        status: 'Submitted',
+        milestoneName: selectedMilestone?.name||'',
+      });
+      onClose();
+    } catch(e){ console.error(e); alert('Could not submit RA Bill.'); }
+    finally{ setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:540,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>📄 Submit Running Bill</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">RA Bill Number</label>
+              <input className="form-input font-mono" value={form.raBillNo} onChange={e=>set('raBillNo',e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Date Submitted</label>
+              <input className="form-input" type="date" value={form.dateSubmitted} onChange={e=>set('dateSubmitted',e.target.value)} />
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Client / Project</label>
+            <select className="form-input form-select" value={form.scheduleId} onChange={e=>handleScheduleSelect(e.target.value)}>
+              <option value="">Select billing schedule…</option>
+              {schedules.map(sc=>(
+                <option key={sc.docId} value={sc.docId}>{sc.client} — {sc.projectRef||'No ref'}</option>
+              ))}
+            </select>
+          </div>
+
+          {selectedSchedule && (
+            <div className="form-group">
+              <label className="form-label">Against Billing Schedule Milestone</label>
+              <select className="form-input form-select" value={form.milestoneIndex} onChange={e=>handleMilestoneSelect(e.target.value)}>
+                <option value="">Select milestone this bill applies to…</option>
+                {(selectedSchedule.milestones||[]).map((m,i)=>(
+                  <option key={i} value={i}>{m.name} — {inr(m.amount||0)}{m.pct?` (${m.pct}%)`:''}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {selectedMilestone && (
+            <div style={{background:'var(--primary-50)',borderRadius:6,padding:'8px 12px',fontSize:12,marginBottom:14}}>
+              <div className="flex justify-between">
+                <span>Milestone: <strong>{selectedMilestone.name}</strong></span>
+                <span className="amount fw-600">{inr(selectedMilestone.amount||0)}</span>
+              </div>
+              {selectedMilestone.expectedDate && (
+                <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>Expected date: {selectedMilestone.expectedDate}</div>
+              )}
+            </div>
+          )}
+
+          <div className="form-group">
+            <label className="form-label">Amount Claimed (₹)</label>
+            <input className="form-input font-mono" value={form.amountClaimed} onChange={e=>set('amountClaimed',e.target.value)} placeholder="0" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Notes</label>
+            <input className="form-input" value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Optional — scope, period, etc." />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.scheduleId||!form.amountClaimed} className="btn btn-primary"
+            style={{opacity:saving||!form.scheduleId||!form.amountClaimed?0.6:1}}>
+            {saving?'Saving…':'Submit RA Bill'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// MODAL 3 — Record Receipt against RA Bill
+// ════════════════════════════════════════════════════
+function RecordReceiptModal({ raBill, onClose, allReceipts }) {
+  const alreadyReceived = allReceipts.filter(r=>r.raBillId===raBill.docId).reduce((s,r)=>s+Number(r.amountReceived||0),0);
+  const pendingBalance = Math.max(0, Number(raBill.amountClaimed||0) - alreadyReceived);
+
+  const [form, setForm] = useState({
+    amountReceived: String(pendingBalance),
+    dateReceived: new Date().toISOString().slice(0,10),
+    paymentMode: 'NEFT', refNumber: '', notes: ''
+  });
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  const newBalance = Math.max(0, pendingBalance - Number(form.amountReceived||0));
+  const isShort = Number(form.amountReceived||0) < pendingBalance;
+  const isOver = Number(form.amountReceived||0) > pendingBalance;
+
+  async function handleSave(){
+    if(!form.amountReceived||!form.dateReceived) return;
+    setSaving(true);
+    try {
+      const amt = Number(form.amountReceived);
+      await addReceipt({
+        raBillId:        raBill.docId,
+        raBillNo:        raBill.raBillNo,
+        scheduleId:      raBill.scheduleId,
+        client:          raBill.client,
+        projectRef:      raBill.projectRef,
+        milestoneName:   raBill.milestoneName,
+        amountClaimed:   raBill.amountClaimed,
+        amountReceived:  amt,
+        dateReceived:    form.dateReceived,
+        paymentMode:     form.paymentMode,
+        refNumber:       form.refNumber,
+        notes:           form.notes,
+      });
+      // Update RA Bill received total and status
+      const totalReceived = alreadyReceived + amt;
+      const newPending = Math.max(0, Number(raBill.amountClaimed||0) - totalReceived);
+      const status = newPending <= 0 ? 'Fully Received' : 'Partially Received';
+      await updateRABill(raBill.docId, {
+        amountReceived: totalReceived,
+        balancePending: newPending,
+        status
+      });
+      onClose();
+    } catch(e){ console.error(e); alert('Could not record receipt.'); }
+    finally{ setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:480,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--green)',padding:'14px 18px'}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>✓ Record Receipt — {raBill.raBillNo}</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          {/* Cross-reference summary */}
+          <div style={{background:'var(--green-50)',border:'1px solid #C8E6C9',borderRadius:6,padding:'10px 14px',fontSize:12,marginBottom:16}}>
+            <div style={{fontWeight:700,fontSize:12.5,marginBottom:6,color:'var(--green)'}}>Cross-Reference</div>
+            <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Client</span><strong>{raBill.client}</strong></div>
+            <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Project</span><span>{raBill.projectRef||'—'}</span></div>
+            <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Billing Milestone</span><span>{raBill.milestoneName||'—'}</span></div>
+            <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>RA Bill No.</span><span className="mono">{raBill.raBillNo}</span></div>
+            <div style={{borderTop:'1px solid #C8E6C9',marginTop:8,paddingTop:8}}>
+              <div className="flex justify-between"><span style={{color:'var(--text-muted)'}}>Total Claimed</span><span className="amount fw-600">{inr(raBill.amountClaimed||0)}</span></div>
+              <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Already Received</span><span className="amount" style={{color:'var(--green)'}}>{inr(alreadyReceived)}</span></div>
+              <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Balance Pending</span><span className="amount fw-600" style={{color:'var(--red)'}}>{inr(pendingBalance)}</span></div>
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Amount Received Now (₹)</label>
+            <input className="form-input font-mono" value={form.amountReceived}
+              onChange={e=>set('amountReceived',e.target.value)} autoFocus />
+            {form.amountReceived && (
+              <div style={{fontSize:11.5,marginTop:4,color:isOver?'var(--amber)':isShort?'var(--primary)':'var(--green)',fontWeight:500}}>
+                {isOver  && `⚠ Exceeds balance by ${inr(Number(form.amountReceived)-pendingBalance)}`}
+                {isShort && `Partial payment — balance remaining: ${inr(newBalance)}`}
+                {!isOver && !isShort && '✓ Full balance cleared'}
+              </div>
+            )}
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Date Received</label>
+              <input className="form-input" type="date" value={form.dateReceived} onChange={e=>set('dateReceived',e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Payment Mode</label>
+              <select className="form-input form-select" value={form.paymentMode} onChange={e=>set('paymentMode',e.target.value)}>
+                {PAYMENT_MODES.map(m=><option key={m}>{m}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Reference / UTR Number</label>
+            <input className="form-input font-mono" value={form.refNumber} onChange={e=>set('refNumber',e.target.value)} placeholder="Transaction reference" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Notes</label>
+            <input className="form-input" value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Optional" />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.amountReceived||!form.dateReceived} className="btn btn-primary"
+            style={{background:'var(--green)',opacity:saving||!form.amountReceived||!form.dateReceived?0.6:1}}>
+            {saving?'Saving…':'Record Receipt'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// RECEIPTS MODULE — main view
+// ════════════════════════════════════════════════════
+function Receipts() {
+  const { items: schedules,  loading: schedLoading  } = useBillingSchedules();
+  const { items: raBills,    loading: raBillLoading  } = useRABills();
+  const { items: receipts,   loading: recLoading     } = useReceipts();
+
+  const [tab, setTab] = useState('schedules');
+  const [showNewSchedule,  setShowNewSchedule]  = useState(false);
+  const [showNewRABill,    setShowNewRABill]     = useState(false);
+  const [recordingFor,     setRecordingFor]      = useState(null);
+  const [expandedSchedule, setExpandedSchedule] = useState(null);
+
+  // ── Computed helpers ──
+  function receivedForRABill(raBillId) {
+    return receipts.filter(r=>r.raBillId===raBillId).reduce((s,r)=>s+Number(r.amountReceived||0),0);
+  }
+  function raBillsForSchedule(scheduleId) {
+    return raBills.filter(b=>b.scheduleId===scheduleId);
+  }
+  function receiptsForRABill(raBillId) {
+    return receipts.filter(r=>r.raBillId===raBillId);
+  }
+
+  // ── Stats ──
+  const totalContract   = schedules.reduce((s,sc)=>s+Number(sc.contractValue||0),0);
+  const totalClaimed    = raBills.reduce((s,b)=>s+Number(b.amountClaimed||0),0);
+  const totalReceived   = receipts.reduce((s,r)=>s+Number(r.amountReceived||0),0);
+  const totalPending    = raBills.reduce((s,b)=>s+Number(b.balancePending||0),0);
+
+  const RA_STATUS_COLOR = {
+    'Submitted':'blue','Partially Received':'amber','Fully Received':'green'
+  };
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Receipts</div>
+          <div className="section-sub">Billing schedules → RA Bills → Receipts</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" style={{background:'var(--green)'}} onClick={()=>setShowNewSchedule(true)}>+ Billing Schedule</button>
+          <button className="btn btn-primary" onClick={()=>setShowNewRABill(true)}>+ Submit RA Bill</button>
+          <ClearCollectionButton label="Clear All" count={schedules.length+raBills.length+receipts.length} onClear={clearAllReceipts} />
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Total Contract Value</div><div className="stat-value">{inr(totalContract)}</div></div>
+        <div className="stat-card"><div className="stat-label">Total Billed (Claimed)</div><div className="stat-value blue">{inr(totalClaimed)}</div></div>
+        <div className="stat-card"><div className="stat-label">Total Received</div><div className="stat-value green">{inr(totalReceived)}</div></div>
+        <div className="stat-card"><div className="stat-label">Balance Pending</div><div className="stat-value red">{inr(totalPending)}</div></div>
+      </div>
+
+      {/* Tabs */}
+      <div className="tabs">
+        <div className={`tab ${tab==='schedules'?'active':''}`} onClick={()=>setTab('schedules')}>📋 Billing Schedules</div>
+        <div className={`tab ${tab==='rabills'?'active':''}`} onClick={()=>setTab('rabills')}>
+          📄 RA Bills
+          {totalPending>0 && <span className="nav-badge" style={{background:'var(--amber)',marginLeft:8}}>{raBills.filter(b=>b.status!=='Fully Received').length}</span>}
+        </div>
+        <div className={`tab ${tab==='receipts'?'active':''}`} onClick={()=>setTab('receipts')}>✓ All Receipts</div>
+      </div>
+
+      {/* ── TAB 1: BILLING SCHEDULES ── */}
+      {tab==='schedules' && (
+        <div className="card">
+          {schedLoading ? (
+            <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+          ) : schedules.length===0 ? (
+            <div className="module-coming">
+              <div className="big-icon">📋</div>
+              <h3>No billing schedules yet</h3>
+              <p className="text-muted">Create a billing schedule per client to define milestones — Advance, RA Bill 1, RA Bill 2, Final, etc.</p>
+            </div>
+          ) : schedules.map(sc => {
+            const scRABills  = raBillsForSchedule(sc.docId);
+            const scReceived = scRABills.reduce((s,b)=>s+Number(b.amountReceived||0),0);
+            const scClaimed  = scRABills.reduce((s,b)=>s+Number(b.amountClaimed||0),0);
+            const scPending  = scRABills.reduce((s,b)=>s+Number(b.balancePending||0),0);
+            const pct        = sc.contractValue>0 ? Math.round((scReceived/sc.contractValue)*100) : 0;
+            const isExp      = expandedSchedule===sc.docId;
+
+            return (
+              <div key={sc.docId} style={{borderBottom:'1px solid var(--border)'}}>
+                {/* Schedule header */}
+                <div style={{padding:'12px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:12}}
+                  onClick={()=>setExpandedSchedule(isExp?null:sc.docId)}>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700,fontSize:13}}>{sc.client}</div>
+                    <div style={{fontSize:11.5,color:'var(--text-muted)',marginTop:2}}>
+                      {sc.projectRef && <span>{sc.projectRef} · </span>}
+                      Contract: <span className="amount">{inr(sc.contractValue||0)}</span> · {sc.milestones?.length||0} milestones · {scRABills.length} RA bills submitted
+                    </div>
+                  </div>
+                  <div style={{textAlign:'right',minWidth:260}}>
+                    <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginBottom:5,flexWrap:'wrap'}}>
+                      <span style={{fontSize:11.5}}>Billed: <strong className="amount">{inr(scClaimed)}</strong></span>
+                      <span style={{fontSize:11.5,color:'var(--green)'}}>Rcvd: <strong className="amount">{inr(scReceived)}</strong></span>
+                      <span style={{fontSize:11.5,color:scPending>0?'var(--red)':'var(--green)'}}>Pending: <strong className="amount">{inr(scPending)}</strong></span>
+                    </div>
+                    <div style={{display:'flex',alignItems:'center',gap:8}}>
+                      <div className="progress-wrap" style={{flex:1,height:8}}>
+                        <div className="progress-fill green" style={{width:`${Math.min(100,pct)}%`}} />
+                      </div>
+                      <span style={{fontSize:11,color:'var(--text-muted)',width:32}}>{pct}%</span>
+                    </div>
+                  </div>
+                  <span style={{fontSize:12,color:'var(--text-muted)',marginLeft:4}}>{isExp?'▲':'▼'}</span>
+                </div>
+
+                {/* Expanded: milestone + RA bills breakdown */}
+                {isExp && (
+                  <div style={{background:'var(--grey-50)',borderTop:'1px solid var(--border)',padding:'12px 16px'}}>
+                    <div style={{fontSize:11.5,fontWeight:600,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.4,marginBottom:8}}>Billing Milestones</div>
+                    <table style={{width:'100%',background:'var(--surface)',borderRadius:6,overflow:'hidden',marginBottom:12}}>
+                      <thead>
+                        <tr style={{background:'var(--primary-50)'}}>
+                          {['Milestone','%','Amount','Expected','Billed (RA Bills)','Received','Status'].map(h=>(
+                            <th key={h} style={{fontSize:10,padding:'6px 10px',textAlign:'left',color:'var(--primary)'}}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(sc.milestones||[]).map((m,i)=>{
+                          const msRABills  = scRABills.filter(b=>b.milestoneName===m.name);
+                          const msClaimed  = msRABills.reduce((s,b)=>s+Number(b.amountClaimed||0),0);
+                          const msReceived = msRABills.reduce((s,b)=>s+Number(b.amountReceived||0),0);
+                          const msStatus   = msReceived>0 && msReceived>=msClaimed ? 'Received' : msClaimed>0 ? 'Partially Billed' : 'Not Yet Billed';
+                          return (
+                            <tr key={i} style={{borderTop:'1px solid var(--grey-50)',background:msStatus==='Received'?'var(--green-50)':''}}>
+                              <td style={{padding:'7px 10px',fontSize:12.5,fontWeight:600}}>{m.name}</td>
+                              <td style={{padding:'7px 10px',fontSize:12}}>{m.pct||'—'}%</td>
+                              <td style={{padding:'7px 10px'}} className="amount">{inr(m.amount||0)}</td>
+                              <td style={{padding:'7px 10px',fontSize:12,color:'var(--text-muted)'}}>{m.expectedDate||'—'}</td>
+                              <td style={{padding:'7px 10px'}} className="amount" style={{color:'var(--primary)'}}>{msClaimed>0?inr(msClaimed):'—'}</td>
+                              <td style={{padding:'7px 10px'}} className="amount" style={{color:'var(--green)',fontWeight:600}}>{msReceived>0?inr(msReceived):'—'}</td>
+                              <td style={{padding:'7px 10px'}}>
+                                <span className={`badge ${msStatus==='Received'?'green':msStatus==='Partially Billed'?'amber':'grey'}`}>{msStatus}</span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+
+                    {scRABills.length>0 && (
+                      <>
+                        <div style={{fontSize:11.5,fontWeight:600,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.4,marginBottom:8}}>RA Bills Submitted</div>
+                        <table style={{width:'100%',background:'var(--surface)',borderRadius:6,overflow:'hidden',marginBottom:10}}>
+                          <thead>
+                            <tr style={{background:'var(--grey-50)'}}>
+                              {['RA Bill #','Milestone','Date','Claimed','Received','Pending','Status',''].map(h=>(
+                                <th key={h} style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {scRABills.map(b=>(
+                              <tr key={b.docId} style={{borderTop:'1px solid var(--grey-50)'}}>
+                                <td style={{padding:'6px 8px'}} className="mono">{b.raBillNo}</td>
+                                <td style={{padding:'6px 8px',fontSize:12}}>{b.milestoneName||'—'}</td>
+                                <td style={{padding:'6px 8px',fontSize:12}}>{b.dateSubmitted}</td>
+                                <td style={{padding:'6px 8px'}} className="amount">{inr(b.amountClaimed||0)}</td>
+                                <td style={{padding:'6px 8px'}} className="amount" style={{color:'var(--green)',fontWeight:600}}>{inr(b.amountReceived||0)}</td>
+                                <td style={{padding:'6px 8px'}} className="amount" style={{color:Number(b.balancePending||0)>0?'var(--red)':'var(--green)'}}>{inr(b.balancePending||0)}</td>
+                                <td style={{padding:'6px 8px'}}><span className={`badge ${RA_STATUS_COLOR[b.status]||'grey'}`}>{b.status}</span></td>
+                                <td style={{padding:'6px 8px'}}>
+                                  {b.status!=='Fully Received' && (
+                                    <button className="btn btn-sm btn-primary" style={{background:'var(--green)'}}
+                                      onClick={()=>setRecordingFor(b)}>
+                                      Record Receipt
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </>
+                    )}
+
+                    <div className="flex gap-2">
+                      <button className="btn btn-sm btn-ghost" style={{color:'var(--red)'}}
+                        onClick={()=>{if(confirm('Delete this billing schedule and all linked RA bills?'))deleteBillingSchedule(sc.docId);}}>
+                        Delete Schedule
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── TAB 2: RA BILLS ── */}
+      {tab==='rabills' && (
+        <div className="card">
+          {raBillLoading ? (
+            <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+          ) : raBills.length===0 ? (
+            <div className="module-coming">
+              <div className="big-icon">📄</div>
+              <h3>No RA bills submitted yet</h3>
+              <p className="text-muted">Submit a running bill against a billing schedule milestone.</p>
+            </div>
+          ) : (
+            <table>
+              <thead>
+                <tr><th>RA Bill #</th><th>Client</th><th>Project</th><th>Milestone</th><th>Date Submitted</th><th>Claimed</th><th>Received</th><th>Pending</th><th>Status</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                {raBills.map(b=>(
+                  <tr key={b.docId} style={{background:b.status==='Fully Received'?'var(--green-50)':b.status==='Partially Received'?'var(--amber-50)':''}}>
+                    <td className="mono" style={{whiteSpace:'nowrap'}}>{b.raBillNo}</td>
+                    <td className="fw-600">{b.client}</td>
+                    <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{b.projectRef||'—'}</td>
+                    <td>{b.milestoneName||'—'}</td>
+                    <td>{b.dateSubmitted}</td>
+                    <td className="amount fw-600">{inr(b.amountClaimed||0)}</td>
+                    <td className="amount" style={{color:'var(--green)',fontWeight:600}}>{inr(b.amountReceived||0)}</td>
+                    <td className="amount" style={{color:Number(b.balancePending||0)>0?'var(--red)':'var(--green)',fontWeight:600}}>{inr(b.balancePending||0)}</td>
+                    <td><span className={`badge ${RA_STATUS_COLOR[b.status]||'grey'}`}>{b.status}</span></td>
+                    <td>
+                      <div className="flex gap-2">
+                        {b.status!=='Fully Received' && (
+                          <button className="btn btn-sm btn-primary" style={{background:'var(--green)'}} onClick={()=>setRecordingFor(b)}>
+                            Record Receipt
+                          </button>
+                        )}
+                        <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this RA Bill?'))deleteRABill(b.docId);}}>Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* ── TAB 3: ALL RECEIPTS ── */}
+      {tab==='receipts' && (
+        <div className="card">
+          {recLoading ? (
+            <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+          ) : receipts.length===0 ? (
+            <div className="module-coming">
+              <div className="big-icon">✓</div>
+              <h3>No receipts yet</h3>
+              <p className="text-muted">Record receipts from the RA Bills tab.</p>
+            </div>
+          ) : (
+            <table>
+              <thead>
+                <tr><th>Date</th><th>Client</th><th>Project</th><th>RA Bill #</th><th>Milestone</th><th>Claimed</th><th>Received</th><th>Mode</th><th>Ref #</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                {receipts.map(r=>(
+                  <tr key={r.docId} style={{background:'var(--green-50)'}}>
+                    <td>{r.dateReceived}</td>
+                    <td className="fw-600">{r.client}</td>
+                    <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{r.projectRef||'—'}</td>
+                    <td className="mono">{r.raBillNo}</td>
+                    <td>{r.milestoneName||'—'}</td>
+                    <td className="amount">{inr(r.amountClaimed||0)}</td>
+                    <td className="amount fw-600" style={{color:'var(--green)'}}>{inr(r.amountReceived||0)}</td>
+                    <td><span className="badge teal">{r.paymentMode}</span></td>
+                    <td className="mono" style={{fontSize:11}}>{r.refNumber||'—'}</td>
+                    <td><button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this receipt?'))deleteReceipt(r.docId);}}>Delete</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {showNewSchedule && <NewBillingScheduleModal onClose={()=>setShowNewSchedule(false)} />}
+      {showNewRABill   && <SubmitRABillModal onClose={()=>setShowNewRABill(false)} schedules={schedules} existingCount={raBills.length} />}
+      {recordingFor    && <RecordReceiptModal raBill={recordingFor} onClose={()=>setRecordingFor(null)} allReceipts={receipts} />}
+    </div>
+  );
+}
+
+
+// ════════════════════════════════════════════════════
+// CAPITAL & LOANS — financing inflows
+// ════════════════════════════════════════════════════
+const CAPITAL_COLLECTION = 'capital_loans';
+const CAPITAL_TYPES = ['Investor Fund','Bank Loan','Overdraft','Owner Capital Injection','Grant','Other'];
+
+function useCapitalLoans() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const q = query(collection(db, CAPITAL_COLLECTION), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, snap => {
+        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
+        setLoading(false);
+      }, err => { console.error('Capital listener', err); setLoading(false); });
+      return unsub;
+    }
+    if (window.fb) { const u = start(); return () => u && u(); }
+    let u; const h = () => { u = start(); };
+    window.addEventListener('firebase-ready', h, { once: true });
+    return () => { window.removeEventListener('firebase-ready', h); if (u) u(); };
+  }, []);
+  return { items, loading };
+}
+async function addCapitalEntry(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, CAPITAL_COLLECTION), { ...data, createdAt: Date.now() });
+}
+async function deleteCapitalEntry(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, CAPITAL_COLLECTION, docId));
+}
+async function clearAllCapital() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(collection(db, CAPITAL_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+function NewCapitalModal({ onClose }) {
+  const [form, setForm] = useState({
+    type: 'Bank Loan', source: '', amount: '', dateReceived: new Date().toISOString().slice(0,10),
+    paymentMode: 'NEFT', refNumber: '', notes: '',
+    isLoan: true, emiAmount: '', tenureMonths: '', emiStartDate: '', interestRate: ''
+  });
+  const [saving, setSaving] = useState(false);
+  function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
+
+  const isLoanType = ['Bank Loan','Overdraft'].includes(form.type);
+
+  async function handleSave() {
+    if (!form.source.trim() || !form.amount || !form.dateReceived) return;
+    setSaving(true);
+    try {
+      await addCapitalEntry({
+        ...form,
+        amount: Number(form.amount),
+        emiAmount: Number(form.emiAmount) || 0,
+        tenureMonths: Number(form.tenureMonths) || 0,
+        interestRate: Number(form.interestRate) || 0,
+        isRepayable: isLoanType
+      });
+      onClose();
+    } catch(e) { console.error(e); alert('Could not save entry.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:520,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'#1B5E20',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ Capital / Loan Inflow</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Type</label>
+              <select className="form-input form-select" value={form.type} onChange={e=>set('type',e.target.value)}>
+                {CAPITAL_TYPES.map(t=><option key={t}>{t}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Source / Lender Name</label>
+              <input className="form-input" value={form.source} onChange={e=>set('source',e.target.value)} placeholder="e.g. HDFC Bank, Mr. Ramesh" autoFocus />
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Amount Received (₹)</label>
+              <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount',e.target.value)} placeholder="0" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Date Received</label>
+              <input className="form-input" type="date" value={form.dateReceived} onChange={e=>set('dateReceived',e.target.value)} />
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Payment Mode</label>
+              <select className="form-input form-select" value={form.paymentMode} onChange={e=>set('paymentMode',e.target.value)}>
+                {PAYMENT_MODES.map(m=><option key={m}>{m}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Reference / Transaction ID</label>
+              <input className="form-input font-mono" value={form.refNumber} onChange={e=>set('refNumber',e.target.value)} placeholder="UTR / Ref no." />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Notes</label>
+            <input className="form-input" value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Purpose, terms, etc." />
+          </div>
+
+          {/* Repayment section for loans */}
+          {isLoanType && (
+            <div style={{borderTop:'1px solid var(--border)',paddingTop:14,marginTop:4}}>
+              <div style={{fontSize:11.5,fontWeight:600,color:'var(--text-muted)',marginBottom:12,textTransform:'uppercase',letterSpacing:.4}}>Repayment Terms (for Cash Flow)</div>
+              <div className="form-grid">
+                <div className="form-group">
+                  <label className="form-label">Monthly EMI (₹)</label>
+                  <input className="form-input font-mono" value={form.emiAmount} onChange={e=>set('emiAmount',e.target.value)} placeholder="0" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Tenure (months)</label>
+                  <input className="form-input font-mono" value={form.tenureMonths} onChange={e=>set('tenureMonths',e.target.value)} placeholder="e.g. 36" />
+                </div>
+              </div>
+              <div className="form-grid">
+                <div className="form-group">
+                  <label className="form-label">EMI Start Date</label>
+                  <input className="form-input" type="date" value={form.emiStartDate} onChange={e=>set('emiStartDate',e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Interest Rate (% p.a.)</label>
+                  <input className="form-input font-mono" value={form.interestRate} onChange={e=>set('interestRate',e.target.value)} placeholder="e.g. 12.5" />
+                </div>
+              </div>
+              {form.emiAmount && form.tenureMonths && (
+                <div style={{background:'var(--primary-50)',borderRadius:6,padding:'8px 12px',fontSize:12,color:'var(--primary)'}}>
+                  Total repayment: <strong className="amount">{inr(Number(form.emiAmount)*Number(form.tenureMonths))}</strong>
+                  {form.amount && <> · Interest burden: <strong className="amount">{inr(Math.max(0,Number(form.emiAmount)*Number(form.tenureMonths)-Number(form.amount)))}</strong></>}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.source.trim()||!form.amount||!form.dateReceived} className="btn btn-primary"
+            style={{background:'#1B5E20',opacity:saving||!form.source.trim()||!form.amount||!form.dateReceived?0.6:1}}>
+            {saving?'Saving…':'Save Entry'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CapitalLoans() {
+  const { items, loading } = useCapitalLoans();
+  const [showNew, setShowNew] = useState(false);
+
+  const totalInflow = items.reduce((s,i) => s + Number(i.amount||0), 0);
+  const totalRepayable = items.filter(i=>i.isRepayable).reduce((s,i) => s + Number(i.emiAmount||0)*Number(i.tenureMonths||0), 0);
+  const investorFunds = items.filter(i=>!i.isRepayable).reduce((s,i) => s + Number(i.amount||0), 0);
+
+  const TYPE_COLOR = {
+    'Bank Loan':'blue','Overdraft':'amber','Investor Fund':'green',
+    'Owner Capital Injection':'teal','Grant':'green','Other':'grey'
+  };
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Capital & Loans</div>
+          <div className="section-sub">Financing inflows — investor funds, bank loans, owner capital</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" style={{background:'#1B5E20'}} onClick={()=>setShowNew(true)}>+ Add Inflow</button>
+          <ClearCollectionButton label="Clear All" count={items.length} onClear={clearAllCapital} />
+        </div>
+      </div>
+
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Total Capital Received</div><div className="stat-value green">{inr(totalInflow)}</div></div>
+        <div className="stat-card"><div className="stat-label">Non-Repayable (Equity)</div><div className="stat-value teal" style={{color:'var(--secondary)'}}>{inr(investorFunds)}</div></div>
+        <div className="stat-card"><div className="stat-label">Total Loan Repayment</div><div className="stat-value red">{inr(totalRepayable)}</div><div className="stat-sub">Total EMIs over tenure</div></div>
+      </div>
+
+      <div className="card">
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+        ) : items.length===0 ? (
+          <div className="module-coming">
+            <div className="big-icon">🏦</div>
+            <h3>No capital entries yet</h3>
+            <p className="text-muted">Record investor funds, bank loans, owner capital injections, or any other financing inflow.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>Type</th><th>Source</th><th>Date</th><th>Amount</th><th>Mode</th><th>Ref #</th><th>EMI</th><th>Tenure</th><th>Total Repayment</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {items.map(item => (
+                <tr key={item.docId}>
+                  <td><span className={`badge ${TYPE_COLOR[item.type]||'grey'}`}>{item.type}</span></td>
+                  <td className="fw-600">{item.source}</td>
+                  <td>{item.dateReceived}</td>
+                  <td className="amount fw-600" style={{color:'var(--green)'}}>{inr(item.amount||0)}</td>
+                  <td><span className="badge grey">{item.paymentMode}</span></td>
+                  <td className="mono" style={{fontSize:11}}>{item.refNumber||'—'}</td>
+                  <td className="amount">{item.emiAmount > 0 ? inr(item.emiAmount) : '—'}</td>
+                  <td>{item.tenureMonths > 0 ? `${item.tenureMonths}m` : '—'}</td>
+                  <td className="amount" style={{color:'var(--red)'}}>{item.isRepayable && item.emiAmount > 0 ? inr(Number(item.emiAmount)*Number(item.tenureMonths)) : '—'}</td>
+                  <td><button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this entry?'))deleteCapitalEntry(item.docId);}}>Delete</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {showNew && <NewCapitalModal onClose={()=>setShowNew(false)} />}
+    </div>
+  );
+}
+
 // ─── Chat Module ───────────────────────────────────────
 const CHANNELS = [
   { id:'general', label:'# general', unread:2 },
@@ -4403,6 +5413,8 @@ const NAV = [
   { id:'purchaseorders', label:'Purchase Orders',  icon:'📦' },
   { id:'crossref',       label:'Cross-Reference',  icon:'🔗' },
   { section: 'Finance' },
+  { id:'receipts',       label:'Receipts',         icon:'📥' },
+  { id:'capital',        label:'Capital & Loans',  icon:'🏦' },
   { id:'paymenttracker', label:'Payment Tracker',  icon:'💳' },
   { id:'billpayments',   label:'Bill Payments',    icon:'📑' },
   { id:'cashflow',       label:'Cash Flow',        icon:'📈' },
@@ -4427,6 +5439,8 @@ function Module({ id, setActive, currentUser }) {
     case 'workorders':     return <WorkOrders />;
     case 'purchaseorders': return <PurchaseOrders />;
     case 'crossref':       return <CrossReference />;
+    case 'receipts':       return <Receipts />;
+    case 'capital':        return <CapitalLoans />;
     case 'cashflow':       return <CashFlow />;
     case 'paymenttracker': return <PaymentTracker />;
     case 'billpayments':   return <BillPayments />;
@@ -4704,10 +5718,11 @@ function SettingsWithUser({ currentUser }) {
 const TITLES = {
   dashboard:'Dashboard', tasks:'Tasks', requisitions:'Requisitions',
   quotations:'Quotations', workorders:'Work Orders', purchaseorders:'Purchase Orders',
-  crossref:'Cross-Reference', paymenttracker:'Payment Tracker',
-  billpayments:'Bill Payments', cashflow:'Cash Flow', pettycash:'Petty Cash',
-  projects:'Projects', vendors:'Vendor Master', documents:'Document Vault',
-  chat:'Team Chat', reminders:'Reminders', reports:'Reports', settings:'Settings',
+  crossref:'Cross-Reference', receipts:'Receipts', capital:'Capital & Loans',
+  paymenttracker:'Payment Tracker', billpayments:'Bill Payments',
+  cashflow:'Cash Flow', pettycash:'Petty Cash', projects:'Projects',
+  vendors:'Vendor Master', documents:'Document Vault', chat:'Team Chat',
+  reminders:'Reminders', reports:'Reports', settings:'Settings',
 };
 
 // ─── App ──────────────────────────────────────────────
