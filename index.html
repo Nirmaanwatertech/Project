@@ -1848,11 +1848,13 @@ function CashFlow() {
 
 // ─── Bills Module ─────────────────────────────────────
 const BILLS_COLLECTION = 'bills';
+const ADVANCES_COLLECTION = 'advances';
+const PAYMENT_MODES = ['NEFT','RTGS','Cheque','Cash','UPI','Other'];
 
+// ─── Bills hooks and helpers ───────────────────────
 function useBills() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-
   useEffect(() => {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
@@ -1863,20 +1865,14 @@ function useBills() {
       }, (err) => { console.error('Bills listener error', err); setLoading(false); });
       return unsub;
     }
-    if (window.fb) {
-      const unsub = start();
-      return () => unsub && unsub();
-    } else {
-      let unsub;
-      const handler = () => { unsub = start(); };
-      window.addEventListener('firebase-ready', handler, { once: true });
-      return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
-    }
+    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    let unsub;
+    const handler = () => { unsub = start(); };
+    window.addEventListener('firebase-ready', handler, { once: true });
+    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
   }, []);
-
   return { items, loading };
 }
-
 async function addBill(data) {
   const { db, collection, addDoc } = window.fb;
   await addDoc(collection(db, BILLS_COLLECTION), { ...data, createdAt: Date.now(), paid: false });
@@ -1897,6 +1893,49 @@ async function clearAllBills() {
   await batch.commit();
 }
 
+// ─── Advance payments hooks and helpers ───────────
+function useAdvances() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const q = query(collection(db, ADVANCES_COLLECTION), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, (snap) => {
+        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
+        setLoading(false);
+      }, (err) => { console.error('Advances listener error', err); setLoading(false); });
+      return unsub;
+    }
+    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    let unsub;
+    const handler = () => { unsub = start(); };
+    window.addEventListener('firebase-ready', handler, { once: true });
+    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+  }, []);
+  return { items, loading };
+}
+async function addAdvance(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, ADVANCES_COLLECTION), { ...data, createdAt: Date.now(), adjustedAmount: 0, status: 'Unadjusted' });
+}
+async function updateAdvance(docId, data) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(doc(db, ADVANCES_COLLECTION, docId), data);
+}
+async function deleteAdvance(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, ADVANCES_COLLECTION, docId));
+}
+async function clearAllAdvances() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(collection(db, ADVANCES_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+// ─── New Bill Modal ────────────────────────────────
 function NewBillModal({ onClose }) {
   const [form, setForm] = useState({
     payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '', notes: ''
@@ -1908,7 +1947,7 @@ function NewBillModal({ onClose }) {
     if (!form.payee.trim() || !form.amount || !form.due) return;
     setSaving(true);
     try {
-      await addBill({ ...form, amount: Number(form.amount) });
+      await addBill({ ...form, amount: Number(form.amount), entryType: 'invoice' });
       onClose();
     } catch (e) { console.error(e); alert('Could not save bill.'); }
     finally { setSaving(false); }
@@ -1958,7 +1997,8 @@ function NewBillModal({ onClose }) {
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleSave} disabled={saving || !form.payee.trim() || !form.amount || !form.due} className="btn btn-primary" style={{opacity: saving || !form.payee.trim() || !form.amount || !form.due ? .6 : 1}}>
+          <button onClick={handleSave} disabled={saving || !form.payee.trim() || !form.amount || !form.due} className="btn btn-primary"
+            style={{opacity: saving || !form.payee.trim() || !form.amount || !form.due ? 0.6 : 1}}>
             {saving ? 'Saving…' : 'Save Bill'}
           </button>
         </div>
@@ -1967,13 +2007,187 @@ function NewBillModal({ onClose }) {
   );
 }
 
+// ─── New Advance Payment Modal ─────────────────────
+function NewAdvanceModal({ onClose, pos, bills }) {
+  const [form, setForm] = useState({
+    vendor: '', amount: '', datePaid: new Date().toISOString().slice(0,10),
+    paymentMode: 'NEFT', refNumber: '', narration: '',
+    linkedPO: '', linkedBill: ''
+  });
+  const [saving, setSaving] = useState(false);
+  function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
+
+  async function handleSave() {
+    if (!form.vendor.trim() || !form.amount || !form.datePaid) return;
+    setSaving(true);
+    try {
+      const amt = Number(form.amount);
+      await addAdvance({
+        ...form,
+        amount: amt,
+        balanceAmount: amt, // full amount unadjusted initially
+      });
+      onClose();
+    } catch (e) { console.error(e); alert('Could not save advance payment.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:520,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--secondary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ Record Advance Payment</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div style={{background:'var(--secondary-50)',border:'1px solid #B2DFDB',borderRadius:6,padding:'8px 12px',fontSize:12,color:'var(--secondary)',marginBottom:16}}>
+            Use this when you've paid a vendor before a PO or bill exists. You can link it to a PO/Bill later.
+          </div>
+          <div className="form-group">
+            <label className="form-label">Vendor / Paid To</label>
+            <input className="form-input" value={form.vendor} onChange={e=>set('vendor',e.target.value)} placeholder="Vendor or payee name" autoFocus />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Amount Paid (₹)</label>
+              <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount',e.target.value)} placeholder="0" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Date Paid</label>
+              <input className="form-input" type="date" value={form.datePaid} onChange={e=>set('datePaid',e.target.value)} />
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Payment Mode</label>
+              <select className="form-input form-select" value={form.paymentMode} onChange={e=>set('paymentMode',e.target.value)}>
+                {PAYMENT_MODES.map(m=><option key={m}>{m}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Reference / Transaction ID</label>
+              <input className="form-input font-mono" value={form.refNumber} onChange={e=>set('refNumber',e.target.value)} placeholder="UTR / Cheque no." />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Narration / Purpose</label>
+            <input className="form-input" value={form.narration} onChange={e=>set('narration',e.target.value)} placeholder="e.g. Advance for RO membranes — Green Valley project" />
+          </div>
+          <div style={{borderTop:'1px solid var(--border)',marginTop:4,paddingTop:14}}>
+            <div style={{fontSize:11.5,fontWeight:600,color:'var(--text-muted)',marginBottom:10,textTransform:'uppercase',letterSpacing:.4}}>Link to existing PO / Bill (optional)</div>
+            <div className="form-grid">
+              <div className="form-group">
+                <label className="form-label">Link to Purchase Order</label>
+                <select className="form-input form-select" value={form.linkedPO} onChange={e=>set('linkedPO',e.target.value)}>
+                  <option value="">None</option>
+                  {(pos||[]).map(p=><option key={p.docId} value={p.po}>{p.po} — {p.vendorName}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Link to Bill</label>
+                <select className="form-input form-select" value={form.linkedBill} onChange={e=>set('linkedBill',e.target.value)}>
+                  <option value="">None</option>
+                  {(bills||[]).filter(b=>!b.paid).map(b=><option key={b.docId} value={b.docId}>{b.payee} — {inr(b.amount||0)}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.vendor.trim()||!form.amount||!form.datePaid} className="btn btn-primary"
+            style={{background:'var(--secondary)',opacity:saving||!form.vendor.trim()||!form.amount||!form.datePaid?0.6:1}}>
+            {saving?'Saving…':'Record Advance'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Link Advance to PO/Bill Modal ────────────────
+function LinkAdvanceModal({ advance, onClose, pos, bills }) {
+  const [linkedPO, setLinkedPO] = useState(advance.linkedPO || '');
+  const [linkedBill, setLinkedBill] = useState(advance.linkedBill || '');
+  const [adjustedAmount, setAdjustedAmount] = useState(String(advance.adjustedAmount || ''));
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      const adj = Number(adjustedAmount) || 0;
+      const balance = Number(advance.amount) - adj;
+      const status = adj === 0 ? 'Unadjusted' : balance <= 0 ? 'Fully Adjusted' : 'Partially Adjusted';
+      await updateAdvance(advance.docId, { linkedPO, linkedBill, adjustedAmount: adj, balanceAmount: Math.max(0, balance), status });
+      onClose();
+    } catch(e) { console.error(e); alert('Could not update advance.'); }
+    finally { setSaving(false); }
+  }
+
+  const balance = Number(advance.amount) - (Number(adjustedAmount) || 0);
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:480,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px'}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Link Advance — {advance.vendor}</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div style={{background:'var(--primary-50)',borderRadius:6,padding:'10px 12px',marginBottom:16,fontSize:12}}>
+            <div className="flex justify-between"><span>Total Advance Paid</span><span className="amount fw-600">{inr(advance.amount||0)}</span></div>
+            <div className="flex justify-between mt-1"><span>Adjusted so far</span><span className="amount">{inr(advance.adjustedAmount||0)}</span></div>
+            <div className="flex justify-between mt-1 fw-600" style={{color:'var(--primary)'}}><span>Balance remaining</span><span className="amount">{inr(advance.balanceAmount||advance.amount||0)}</span></div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Link to Purchase Order</label>
+            <select className="form-input form-select" value={linkedPO} onChange={e=>setLinkedPO(e.target.value)}>
+              <option value="">None</option>
+              {(pos||[]).map(p=><option key={p.docId} value={p.po}>{p.po} — {p.vendorName} ({inr(p.value||0)})</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Link to Bill</label>
+            <select className="form-input form-select" value={linkedBill} onChange={e=>setLinkedBill(e.target.value)}>
+              <option value="">None</option>
+              {(bills||[]).map(b=><option key={b.docId} value={b.docId}>{b.payee} — {inr(b.amount||0)}{b.paid?' (Paid)':''}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Amount Adjusted Against This PO/Bill (₹)</label>
+            <input className="form-input font-mono" value={adjustedAmount} onChange={e=>setAdjustedAmount(e.target.value)} placeholder="0" />
+            {adjustedAmount && (
+              <div style={{fontSize:11.5,marginTop:5,color: balance < 0 ? 'var(--red)' : 'var(--green)'}}>
+                Balance after adjustment: {inr(Math.max(0,balance))}
+                {balance < 0 && ' ⚠ Exceeds advance amount'}
+              </div>
+            )}
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="btn btn-primary" style={{opacity:saving?0.6:1}}>
+            {saving?'Saving…':'Save Link'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Bill Payments Module ──────────────────────────
 function BillPayments() {
   const { items, loading } = useBills();
+  const { items: advances, loading: advLoading } = useAdvances();
+  const { items: pos } = usePurchaseOrders();
   const [catFilter, setCatFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [showNew, setShowNew] = useState(false);
+  const [tab, setTab] = useState('bills'); // 'bills' | 'advances'
+  const [showNewBill, setShowNewBill] = useState(false);
+  const [showNewAdvance, setShowNewAdvance] = useState(false);
+  const [linkingAdvance, setLinkingAdvance] = useState(null);
 
   const todayStr = new Date().toISOString().slice(0,10);
+
+  // Bills with computed status
   const withStatus = items.map(b => {
     let status;
     if (b.paid) status = 'Paid';
@@ -1981,7 +2195,11 @@ function BillPayments() {
     else if (b.due < todayStr) status = 'Overdue';
     else status = 'Upcoming';
     const days = (status === 'Overdue' && b.due) ? Math.floor((new Date(todayStr) - new Date(b.due)) / 86400000) : 0;
-    return { ...b, computedStatus: status, days };
+    // Find linked advance deduction
+    const linkedAdv = advances.filter(a => a.linkedBill === b.docId);
+    const advanceDeducted = linkedAdv.reduce((s,a) => s + Number(a.adjustedAmount||0), 0);
+    const netPayable = Math.max(0, Number(b.amount||0) - advanceDeducted);
+    return { ...b, computedStatus: status, days, advanceDeducted, netPayable };
   });
 
   const filtered = withStatus.filter(b =>
@@ -1989,80 +2207,175 @@ function BillPayments() {
     (statusFilter === 'all' || b.computedStatus === statusFilter)
   );
 
-  const overdueTotal = withStatus.filter(b => b.computedStatus === 'Overdue').reduce((s,b) => s + Number(b.amount||0), 0);
-  const overdueCount = withStatus.filter(b => b.computedStatus === 'Overdue').length;
-  const dueTodayTotal = withStatus.filter(b => b.computedStatus === 'Due Today').reduce((s,b) => s + Number(b.amount||0), 0);
-  const next7 = new Date(Date.now() + 7*86400000).toISOString().slice(0,10);
-  const dueWeekTotal = withStatus.filter(b => !b.paid && b.due >= todayStr && b.due <= next7).reduce((s,b) => s + Number(b.amount||0), 0);
-  const paidTotal = withStatus.filter(b => b.paid).reduce((s,b) => s + Number(b.amount||0), 0);
+  // Stats
+  const overdueTotal = withStatus.filter(b=>b.computedStatus==='Overdue').reduce((s,b)=>s+b.netPayable,0);
+  const overdueCount = withStatus.filter(b=>b.computedStatus==='Overdue').length;
+  const dueTodayTotal = withStatus.filter(b=>b.computedStatus==='Due Today').reduce((s,b)=>s+b.netPayable,0);
+  const next7 = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
+  const dueWeekTotal = withStatus.filter(b=>!b.paid&&b.due>=todayStr&&b.due<=next7).reduce((s,b)=>s+b.netPayable,0);
+  const paidTotal = withStatus.filter(b=>b.paid).reduce((s,b)=>s+Number(b.amount||0),0);
+
+  // Advance stats
+  const totalAdvances = advances.reduce((s,a)=>s+Number(a.amount||0),0);
+  const unadjustedAdvances = advances.filter(a=>a.status!=='Fully Adjusted').reduce((s,a)=>s+Number(a.balanceAmount||0),0);
+
+  // PO label lookup
+  function poLabel(poNo) {
+    const p = pos.find(p=>p.po===poNo);
+    return p ? `${p.po} — ${p.vendorName}` : poNo;
+  }
+
+  const ADV_STATUS_COLOR = { 'Unadjusted':'red', 'Partially Adjusted':'amber', 'Fully Adjusted':'green' };
 
   return (
     <div>
       <div className="section-header">
         <div>
           <div className="section-title">Bill Payments</div>
-          <div className="section-sub">{loading ? 'Loading from Firestore…' : `${items.length} bill${items.length===1?'':'s'} · live data`}</div>
+          <div className="section-sub">
+            {tab==='bills'
+              ? (loading?'Loading…':`${items.length} bill${items.length===1?'':'s'} · live data`)
+              : (advLoading?'Loading…':`${advances.length} advance${advances.length===1?'':'s'} · ${inr(unadjustedAdvances)} unadjusted`)}
+          </div>
         </div>
         <div className="flex gap-2">
-          <button className="btn btn-primary" onClick={() => setShowNew(true)}>+ Add Bill</button>
-          <ClearCollectionButton label="Clear All Bills" count={items.length} onClear={clearAllBills} />
+          {tab==='bills'
+            ? <button className="btn btn-primary" onClick={()=>setShowNewBill(true)}>+ Add Bill</button>
+            : <button className="btn btn-primary" style={{background:'var(--secondary)'}} onClick={()=>setShowNewAdvance(true)}>+ Record Advance</button>}
+          {tab==='bills'
+            ? <ClearCollectionButton label="Clear Bills" count={items.length} onClear={clearAllBills} />
+            : <ClearCollectionButton label="Clear Advances" count={advances.length} onClear={clearAllAdvances} />}
         </div>
       </div>
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
-        <div className="stat-card"><div className="stat-label">Overdue Bills</div><div className="stat-value red">{inr(overdueTotal)}</div><div className="stat-sub">{overdueCount} bill{overdueCount===1?'':'s'}</div></div>
-        <div className="stat-card"><div className="stat-label">Due Today</div><div className="stat-value amber">{inr(dueTodayTotal)}</div></div>
-        <div className="stat-card"><div className="stat-label">Due This Week</div><div className="stat-value blue">{inr(dueWeekTotal)}</div></div>
-        <div className="stat-card"><div className="stat-label">Paid Total</div><div className="stat-value green">{inr(paidTotal)}</div></div>
-      </div>
-      <div className="card">
-        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
-          <div className="flex gap-2">
-            <select className="form-input form-select" style={{width:150}} onChange={e=>setCatFilter(e.target.value)}>
-              <option value="all">All Categories</option>
-              <option>Vendor</option><option>Fixed</option><option>Professional</option><option>Utilities</option><option>Logistics</option><option>GST/Govt</option>
-            </select>
-            <select className="form-input form-select" style={{width:140}} onChange={e=>setStatusFilter(e.target.value)}>
-              <option value="all">All Status</option>
-              <option>Overdue</option><option>Due Today</option><option>Upcoming</option><option>Paid</option>
-            </select>
-          </div>
+
+      {/* Tabs */}
+      <div className="tabs">
+        <div className={`tab ${tab==='bills'?'active':''}`} onClick={()=>setTab('bills')}>📑 Bills & Invoices</div>
+        <div className={`tab ${tab==='advances'?'active':''}`} onClick={()=>setTab('advances')}>
+          💰 Advance Payments
+          {unadjustedAdvances > 0 && <span className="nav-badge" style={{background:'var(--amber)',marginLeft:8}}>{advances.filter(a=>a.status!=='Fully Adjusted').length}</span>}
         </div>
-        {loading ? (
-          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
-        ) : filtered.length === 0 ? (
-          <div className="module-coming">
-            <div className="big-icon">📑</div>
-            <h3>No bills yet</h3>
-            <p className="text-muted">Add your first bill — saved permanently to your database.</p>
-          </div>
-        ) : (
-          <table>
-            <thead>
-              <tr><th>Payee</th><th>Category</th><th>Invoice #</th><th>Invoice Date</th><th>Due Date</th><th>Amount</th><th>Status</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              {filtered.map(b => (
-                <tr key={b.docId} className={b.computedStatus==='Overdue'?'overdue':b.computedStatus==='Due Today'?'due-today':''}>
-                  <td className="fw-600">{b.payee}</td>
-                  <td><span className="badge grey">{b.category}</span></td>
-                  <td className="mono">{b.invoiceNo || '—'}</td>
-                  <td className="text-muted">{b.invoiceDate || '—'}</td>
-                  <td>{b.due}{b.days > 0 && <span style={{color:'var(--red)',fontWeight:600,marginLeft:4}}>+{b.days}d</span>}</td>
-                  <td className="amount fw-600">{inr(b.amount||0)}</td>
-                  <td><span className={`badge ${BILL_STATUS_COLOR[b.computedStatus]}`}>{b.computedStatus}</span></td>
-                  <td>
-                    <div className="flex gap-2">
-                      {!b.paid && <button className="btn btn-sm btn-primary" onClick={() => markBillPaid(b.docId)}>Mark Paid</button>}
-                      <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this bill?')) deleteBill(b.docId); }}>Delete</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
       </div>
-      {showNew && <NewBillModal onClose={() => setShowNew(false)} />}
+
+      {/* ── BILLS TAB ── */}
+      {tab==='bills' && (
+        <>
+          <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+            <div className="stat-card"><div className="stat-label">Overdue (Net)</div><div className="stat-value red">{inr(overdueTotal)}</div><div className="stat-sub">{overdueCount} bill{overdueCount===1?'':'s'}</div></div>
+            <div className="stat-card"><div className="stat-label">Due Today (Net)</div><div className="stat-value amber">{inr(dueTodayTotal)}</div></div>
+            <div className="stat-card"><div className="stat-label">Due This Week (Net)</div><div className="stat-value blue">{inr(dueWeekTotal)}</div></div>
+            <div className="stat-card"><div className="stat-label">Paid Total</div><div className="stat-value green">{inr(paidTotal)}</div></div>
+          </div>
+          <div className="card">
+            <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+              <div className="flex gap-2">
+                <select className="form-input form-select" style={{width:150}} onChange={e=>setCatFilter(e.target.value)}>
+                  <option value="all">All Categories</option>
+                  <option>Vendor</option><option>Fixed</option><option>Professional</option><option>Utilities</option><option>Logistics</option><option>GST/Govt</option>
+                </select>
+                <select className="form-input form-select" style={{width:140}} onChange={e=>setStatusFilter(e.target.value)}>
+                  <option value="all">All Status</option>
+                  <option>Overdue</option><option>Due Today</option><option>Upcoming</option><option>Paid</option>
+                </select>
+              </div>
+            </div>
+            {loading ? (
+              <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+            ) : filtered.length===0 ? (
+              <div className="module-coming"><div className="big-icon">📑</div><h3>No bills yet</h3><p className="text-muted">Add your first bill.</p></div>
+            ) : (
+              <table>
+                <thead>
+                  <tr><th>Payee</th><th>Category</th><th>Invoice #</th><th>Due Date</th><th>Bill Amount</th><th>Advance Deducted</th><th>Net Payable</th><th>Status</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  {filtered.map(b => (
+                    <tr key={b.docId} className={b.computedStatus==='Overdue'?'overdue':b.computedStatus==='Due Today'?'due-today':''}>
+                      <td className="fw-600">{b.payee}</td>
+                      <td><span className="badge grey">{b.category}</span></td>
+                      <td className="mono">{b.invoiceNo||'—'}</td>
+                      <td>{b.due}{b.days>0&&<span style={{color:'var(--red)',fontWeight:600,marginLeft:4}}>+{b.days}d</span>}</td>
+                      <td className="amount">{inr(b.amount||0)}</td>
+                      <td className="amount" style={{color:'var(--green)'}}>
+                        {b.advanceDeducted > 0 ? <>− {inr(b.advanceDeducted)}</> : <span className="text-muted">—</span>}
+                      </td>
+                      <td className="amount fw-600" style={{color: b.advanceDeducted > 0 ? 'var(--primary)' : 'var(--text)'}}>
+                        {inr(b.netPayable)}
+                      </td>
+                      <td><span className={`badge ${BILL_STATUS_COLOR[b.computedStatus]}`}>{b.computedStatus}</span></td>
+                      <td>
+                        <div className="flex gap-2">
+                          {!b.paid && <button className="btn btn-sm btn-primary" onClick={()=>markBillPaid(b.docId)}>Mark Paid</button>}
+                          <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteBill(b.docId);}}>Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ── ADVANCES TAB ── */}
+      {tab==='advances' && (
+        <>
+          <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+            <div className="stat-card"><div className="stat-label">Total Advances Paid</div><div className="stat-value red">{inr(totalAdvances)}</div></div>
+            <div className="stat-card"><div className="stat-label">Unadjusted Balance</div><div className="stat-value amber">{inr(unadjustedAdvances)}</div><div className="stat-sub">{advances.filter(a=>a.status!=='Fully Adjusted').length} pending</div></div>
+            <div className="stat-card"><div className="stat-label">Fully Adjusted</div><div className="stat-value green">{advances.filter(a=>a.status==='Fully Adjusted').length}</div></div>
+          </div>
+          <div className="card">
+            {advLoading ? (
+              <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+            ) : advances.length===0 ? (
+              <div className="module-coming">
+                <div className="big-icon">💰</div>
+                <h3>No advance payments yet</h3>
+                <p className="text-muted">Record an advance payment to a vendor before a PO or bill is raised.</p>
+              </div>
+            ) : (
+              <table>
+                <thead>
+                  <tr><th>Vendor</th><th>Date Paid</th><th>Mode</th><th>Ref #</th><th>Amount</th><th>Adjusted</th><th>Balance</th><th>Linked To</th><th>Status</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  {advances.map(a => (
+                    <tr key={a.docId} style={{background: a.status==='Unadjusted' ? 'var(--amber-50)' : a.status==='Fully Adjusted' ? 'var(--green-50)' : ''}}>
+                      <td className="fw-600">{a.vendor}</td>
+                      <td>{a.datePaid}</td>
+                      <td><span className="badge grey">{a.paymentMode}</span></td>
+                      <td className="mono" style={{fontSize:11}}>{a.refNumber||'—'}</td>
+                      <td className="amount fw-600">{inr(a.amount||0)}</td>
+                      <td className="amount" style={{color:'var(--green)'}}>{inr(a.adjustedAmount||0)}</td>
+                      <td className="amount fw-600" style={{color: Number(a.balanceAmount||0)>0?'var(--amber)':'var(--green)'}}>{inr(a.balanceAmount||0)}</td>
+                      <td style={{fontSize:11.5}}>
+                        {a.linkedPO && <div className="mono">{a.linkedPO}</div>}
+                        {a.linkedBill && <div style={{color:'var(--text-muted)'}}>Bill linked</div>}
+                        {!a.linkedPO && !a.linkedBill && <span className="text-muted">Not linked yet</span>}
+                      </td>
+                      <td><span className={`badge ${ADV_STATUS_COLOR[a.status]||'grey'}`}>{a.status}</span></td>
+                      <td>
+                        <div className="flex gap-2">
+                          {a.status !== 'Fully Adjusted' && (
+                            <button className="btn btn-sm btn-ghost" onClick={()=>setLinkingAdvance(a)}>Link / Adjust</button>
+                          )}
+                          <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteAdvance(a.docId);}}>Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
+
+      {showNewBill && <NewBillModal onClose={()=>setShowNewBill(false)} />}
+      {showNewAdvance && <NewAdvanceModal onClose={()=>setShowNewAdvance(false)} pos={pos} bills={items} />}
+      {linkingAdvance && <LinkAdvanceModal advance={linkingAdvance} onClose={()=>setLinkingAdvance(null)} pos={pos} bills={items} />}
     </div>
   );
 }
@@ -3162,7 +3475,7 @@ function ClearDataCard({ item }) {
       } else if (item.scope === 'workorders') {
         await clearAllWorkOrders();
       } else if (item.scope === 'bills') {
-        await clearAllBills();
+        await Promise.all([clearAllBills(), clearAllAdvances()]);
       } else if (item.scope === 'cashflow') {
         await clearCashFlowData();
       } else if (item.scope === 'milestones') {
@@ -3176,7 +3489,8 @@ function ClearDataCard({ item }) {
       } else if (item.scope === 'all') {
         await Promise.all([
           clearAllTasks(), clearAllWorkOrders(), clearCashFlowData(),
-          clearAllMilestones(), clearAllQuotations(), clearAllPOs(), clearAllVendors()
+          clearAllMilestones(), clearAllQuotations(), clearAllPOs(),
+          clearAllVendors(), clearAllBills(), clearAllAdvances(), clearAllRequisitions()
         ]);
       }
       setCleared(true);
