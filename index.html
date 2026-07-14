@@ -734,8 +734,13 @@ async function clearAllTasks() {
 }
 
 // ─── New Task Modal ────────────────────────────────────
-function NewTaskModal({ onClose }) {
-  const [form, setForm] = useState({
+function NewTaskModal({ onClose, existing }) {
+  const isEdit = !!existing;
+  const [form, setForm] = useState(existing ? {
+    name: existing.name||'', client: existing.client||'', wo: existing.wo||'',
+    assigned: existing.assigned||'Rahul', priority: existing.priority||'Medium',
+    status: existing.status||'Pending', due: existing.due||''
+  } : {
     name: '', client: '', wo: '', assigned: 'Rahul', priority: 'Medium', status: 'Pending', due: ''
   });
   const [saving, setSaving] = useState(false);
@@ -746,7 +751,8 @@ function NewTaskModal({ onClose }) {
     if (!form.name.trim()) return;
     setSaving(true);
     try {
-      await addTask(form);
+      if (isEdit) await updateTask(existing.docId, form);
+      else await addTask(form);
       onClose();
     } catch (e) {
       console.error(e);
@@ -760,7 +766,7 @@ function NewTaskModal({ onClose }) {
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div style={{background:'var(--surface)',borderRadius:10,width:480,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary)',padding:'14px 18px'}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Task</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Task' : '+ New Task'}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-group">
@@ -807,7 +813,7 @@ function NewTaskModal({ onClose }) {
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving || !form.name.trim()} className="btn btn-primary" style={{opacity: saving || !form.name.trim() ? .6 : 1}}>
-            {saving ? 'Saving…' : 'Save Task'}
+            {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Save Task'}
           </button>
         </div>
       </div>
@@ -968,6 +974,7 @@ function Tasks() {
   const [filter, setFilter] = useState('all');
   const [showNew, setShowNew] = useState(false);
   const [remarkTask, setRemarkTask] = useState(null);
+  const [editTask, setEditTask] = useState(null);
 
   // Auto-detect overdue: due date in the past and not Completed
   const todayStr = new Date().toISOString().slice(0,10);
@@ -1037,6 +1044,7 @@ function Tasks() {
                   <td className={t.effectiveStatus==='Overdue'?'fw-600':''} style={t.effectiveStatus==='Overdue'?{color:'var(--red)'}:{}}>{t.due || '—'}</td>
                   <td>
                     <div className="flex gap-2">
+                      <button className="btn btn-sm btn-ghost" onClick={() => setEditTask(t)}>Edit</button>
                       {t.effectiveStatus !== 'Completed' && (
                         <button className="btn btn-sm btn-ghost" onClick={() => markComplete(t)}>Complete</button>
                       )}
@@ -1056,6 +1064,7 @@ function Tasks() {
       </div>
 
       {showNew && <NewTaskModal onClose={() => setShowNew(false)} />}
+      {editTask && <NewTaskModal onClose={() => setEditTask(null)} existing={editTask} />}
       {remarkTask && <RemarkModal task={remarkTask} onClose={() => setRemarkTask(null)} onSaved={() => setRemarkTask(null)} />}
     </div>
   );
@@ -1123,13 +1132,20 @@ function finalizedQuotations(quotations) {
   return quotations.filter(q => q.stage === 'Finalization of T&C' || q.stage === 'Issuing of PO/WO');
 }
 
-function NewWOModal({ onClose, nextNumber, quotations }) {
-  const [form, setForm] = useState({
+function NewWOModal({ onClose, nextNumber, quotations, existing }) {
+  const isEdit = !!existing;
+  const [form, setForm] = useState(isEdit ? {
+    wo: existing.wo||nextNumber, vendorName: existing.vendorName||'',
+    description: existing.description||'', value: existing.value ? String(existing.value) : '',
+    linkedQuotation: existing.linkedQuotation||'', stage: existing.stage||'Draft',
+    due: existing.due||'', notes: existing.notes||'',
+    penaltyClause: existing.penaltyClause||'', disputeClause: existing.disputeClause||''
+  } : {
     wo: nextNumber, vendorName: '', description: '', value: '',
     linkedQuotation: '', stage: 'Draft', due: '', notes: '',
     penaltyClause: '', disputeClause: ''
   });
-  const [schedule, setSchedule] = useState([]);
+  const [schedule, setSchedule] = useState(isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) : []);
   const [saving, setSaving] = useState(false);
   function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
 
@@ -1155,7 +1171,8 @@ function NewWOModal({ onClose, nextNumber, quotations }) {
     if (!form.vendorName.trim() || !form.description.trim()) return;
     setSaving(true);
     try {
-      await addWorkOrder({ ...form, value: Number(form.value) || 0, paymentSchedule: schedule });
+      if (isEdit) await updateWorkOrder(existing.docId, { ...form, value: Number(form.value)||0, paymentSchedule: schedule });
+      else await addWorkOrder({ ...form, value: Number(form.value) || 0, paymentSchedule: schedule });
       onClose();
     } catch (e) { console.error(e); alert('Could not save work order.'); }
     finally { setSaving(false); }
@@ -1167,7 +1184,7 @@ function NewWOModal({ onClose, nextNumber, quotations }) {
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div style={{background:'var(--surface)',borderRadius:10,width:620,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--secondary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ Issue Work Order</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Work Order' : '+ Issue Work Order'}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-grid">
@@ -1228,7 +1245,7 @@ function NewWOModal({ onClose, nextNumber, quotations }) {
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving || !form.vendorName.trim() || !form.description.trim()} className="btn btn-primary"
             style={{background:'var(--secondary)', opacity: saving || !form.vendorName.trim() || !form.description.trim() ? .6 : 1}}>
-            {saving ? 'Saving…' : 'Issue Work Order'}
+            {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Issue Work Order'}
           </button>
         </div>
       </div>
@@ -1244,6 +1261,7 @@ function WorkOrders() {
   const [showNew, setShowNew] = useState(false);
   const [viewSchedule, setViewSchedule] = useState(null);
   const [stageFilter, setStageFilter] = useState('all');
+  const [editWO, setEditWO] = useState(null);
 
   const nextNumber = nextWONumber(items.length);
   const filtered = stageFilter === 'all' ? items : items.filter(w => w.stage === stageFilter);
@@ -1327,6 +1345,7 @@ function WorkOrders() {
                   <td><span className={`badge ${WO_STAGE_COLOR[w.stage]||'grey'}`}>{w.stage}</span></td>
                   <td>
                     <div className="flex gap-2">
+                      <button className="btn btn-sm btn-ghost" onClick={() => setEditWO(w)}>Edit</button>
                       {w.stage !== 'Completed' && w.stage !== 'Cancelled' && (
                         <button className="btn btn-sm btn-ghost" onClick={() => advanceStage(w)}>Advance →</button>
                       )}
@@ -1341,6 +1360,7 @@ function WorkOrders() {
       </div>
 
       {showNew && <NewWOModal onClose={() => setShowNew(false)} nextNumber={nextNumber} quotations={quotations} />}
+      {editWO && <NewWOModal onClose={() => setEditWO(null)} nextNumber={nextNumber} quotations={quotations} existing={editWO} />}
       {viewSchedule && (
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={() => setViewSchedule(null)}>
           <div style={{background:'var(--surface)',borderRadius:10,width:440,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
@@ -1425,14 +1445,23 @@ async function clearAllPOs() {
   await batch.commit();
 }
 
-function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill }) {
-  const [form, setForm] = useState({
+function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existing }) {
+  const isEdit = !!existing;
+  const [form, setForm] = useState(isEdit ? {
+    po: existing.po||nextNumber, vendorName: existing.vendorName||'',
+    description: existing.description||'', value: existing.value ? String(existing.value) : '',
+    linkedQuotation: existing.linkedQuotation||'', stage: existing.stage||'Draft',
+    penaltyClause: existing.penaltyClause||'', disputeClause: existing.disputeClause||''
+  } : {
     po: nextNumber, vendorName: prefill?.party || '', description: prefill?.description || '',
     value: prefill?.value ? String(prefill.value) : '',
     linkedQuotation: prefill?.fromQuotation || '',
     stage: 'Draft', penaltyClause: prefill?.penaltyClause || '', disputeClause: prefill?.disputeClause || ''
   });
-  const [schedule, setSchedule] = useState(prefill?.paymentSchedule ? prefill.paymentSchedule.map(r => ({...r, id: genRowId()})) : []);
+  const [schedule, setSchedule] = useState(
+    isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) :
+    prefill?.paymentSchedule ? prefill.paymentSchedule.map(r => ({...r, id: genRowId()})) : []
+  );
   const [saving, setSaving] = useState(false);
   function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
 
@@ -1457,7 +1486,8 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill }) {
     if (!form.vendorName.trim() || !form.value) return;
     setSaving(true);
     try {
-      await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule });
+      if (isEdit) await updatePO(existing.docId, { ...form, value: Number(form.value), paymentSchedule: schedule });
+      else await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule });
       onClose();
     } catch (e) { console.error(e); alert('Could not save purchase order.'); }
     finally { setSaving(false); }
@@ -1469,7 +1499,7 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill }) {
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div style={{background:'var(--surface)',borderRadius:10,width:620,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ Issue Purchase Order</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Purchase Order' : '+ Issue Purchase Order'}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-grid">
@@ -1545,6 +1575,7 @@ function PurchaseOrders() {
   const { items: vendors } = useVendors();
   const { items: quotations } = useQuotations();
   const [showNew, setShowNew] = useState(false);
+  const [editPO, setEditPO] = useState(null);
   const [viewSchedule, setViewSchedule] = useState(null);
   const [stageFilter, setStageFilter] = useState('all');
 
@@ -1628,6 +1659,7 @@ function PurchaseOrders() {
                   <td><span className={`badge ${PO_STAGE_COLOR[p.stage]||'grey'}`}>{p.stage}</span></td>
                   <td>
                     <div className="flex gap-2">
+                      <button className="btn btn-sm btn-ghost" onClick={() => setEditPO(p)}>Edit</button>
                       {p.stage !== 'Closed' && (
                         <button className="btn btn-sm btn-ghost" onClick={() => advanceStage(p)}>Advance →</button>
                       )}
@@ -1642,6 +1674,7 @@ function PurchaseOrders() {
       </div>
 
       {showNew && <NewPOModal onClose={() => setShowNew(false)} nextNumber={nextNumber} vendors={vendors} quotations={quotations} />}
+      {editPO && <NewPOModal onClose={() => setEditPO(null)} nextNumber={nextNumber} vendors={vendors} quotations={quotations} existing={editPO} />}
       {viewSchedule && (
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={() => setViewSchedule(null)}>
           <div style={{background:'var(--surface)',borderRadius:10,width:440,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
@@ -1936,8 +1969,13 @@ async function clearAllAdvances() {
 }
 
 // ─── New Bill Modal ────────────────────────────────
-function NewBillModal({ onClose }) {
-  const [form, setForm] = useState({
+function NewBillModal({ onClose, existing }) {
+  const isEdit = !!existing;
+  const [form, setForm] = useState(isEdit ? {
+    payee: existing.payee||'', category: existing.category||'Vendor',
+    invoiceNo: existing.invoiceNo||'', invoiceDate: existing.invoiceDate||'',
+    due: existing.due||'', amount: existing.amount ? String(existing.amount) : '', notes: existing.notes||''
+  } : {
     payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '', notes: ''
   });
   const [saving, setSaving] = useState(false);
@@ -1947,7 +1985,12 @@ function NewBillModal({ onClose }) {
     if (!form.payee.trim() || !form.amount || !form.due) return;
     setSaving(true);
     try {
-      await addBill({ ...form, amount: Number(form.amount), entryType: 'invoice' });
+      if (isEdit) {
+        const { db, doc, updateDoc } = window.fb;
+        await updateDoc(doc(db, BILLS_COLLECTION, existing.docId), { ...form, amount: Number(form.amount) });
+      } else {
+        await addBill({ ...form, amount: Number(form.amount), entryType: 'invoice' });
+      }
       onClose();
     } catch (e) { console.error(e); alert('Could not save bill.'); }
     finally { setSaving(false); }
@@ -1957,7 +2000,7 @@ function NewBillModal({ onClose }) {
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div style={{background:'var(--surface)',borderRadius:10,width:480,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ Add Bill</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Bill' : '+ Add Bill'}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-group">
@@ -1999,7 +2042,7 @@ function NewBillModal({ onClose }) {
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving || !form.payee.trim() || !form.amount || !form.due} className="btn btn-primary"
             style={{opacity: saving || !form.payee.trim() || !form.amount || !form.due ? 0.6 : 1}}>
-            {saving ? 'Saving…' : 'Save Bill'}
+            {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Save Bill'}
           </button>
         </div>
       </div>
@@ -2184,6 +2227,8 @@ function BillPayments() {
   const [showNewBill, setShowNewBill] = useState(false);
   const [showNewAdvance, setShowNewAdvance] = useState(false);
   const [linkingAdvance, setLinkingAdvance] = useState(null);
+  const [editBill, setEditBill] = useState(null);
+  const [editAdvance, setEditAdvance] = useState(null);
 
   const todayStr = new Date().toISOString().slice(0,10);
 
@@ -2358,6 +2403,7 @@ function BillPayments() {
                       <td><span className={`badge ${ADV_STATUS_COLOR[a.status]||'grey'}`}>{a.status}</span></td>
                       <td>
                         <div className="flex gap-2">
+                          <button className="btn btn-sm btn-ghost" onClick={()=>setEditAdvance(a)}>Edit</button>
                           {a.status !== 'Fully Adjusted' && (
                             <button className="btn btn-sm btn-ghost" onClick={()=>setLinkingAdvance(a)}>Link / Adjust</button>
                           )}
@@ -2374,6 +2420,7 @@ function BillPayments() {
       )}
 
       {showNewBill && <NewBillModal onClose={()=>setShowNewBill(false)} />}
+      {editBill && <NewBillModal onClose={()=>setEditBill(null)} existing={editBill} />}
       {showNewAdvance && <NewAdvanceModal onClose={()=>setShowNewAdvance(false)} pos={pos} bills={items} />}
       {linkingAdvance && <LinkAdvanceModal advance={linkingAdvance} onClose={()=>setLinkingAdvance(null)} pos={pos} bills={items} />}
     </div>
@@ -3214,8 +3261,13 @@ async function clearAllPettyCash() {
 }
 
 // ─── New Petty Cash Entry Modal ────────────────────
-function NewPettyModal({ onClose, currentUser }) {
-  const [form, setForm] = useState({
+function NewPettyModal({ onClose, currentUser, existing }) {
+  const isEdit = !!existing;
+  const [form, setForm] = useState(isEdit ? {
+    date: existing.date||'', amount: existing.amount ? String(existing.amount) : '',
+    category: existing.category||'Auto / Fuel', paidBy: existing.paidBy||'',
+    description: existing.description||'', project: existing.project||''
+  } : {
     date: new Date().toISOString().slice(0,10),
     amount: '',
     category: 'Auto / Fuel',
@@ -3230,7 +3282,12 @@ function NewPettyModal({ onClose, currentUser }) {
     if (!form.amount || !form.description.trim() || !form.date) return;
     setSaving(true);
     try {
-      await addPettyEntry({...form, amount: Number(form.amount)});
+      if (isEdit) {
+        const { db, doc, updateDoc } = window.fb;
+        await updateDoc(doc(db, PETTY_COLLECTION, existing.docId), {...form, amount: Number(form.amount)});
+      } else {
+        await addPettyEntry({...form, amount: Number(form.amount)});
+      }
       onClose();
     } catch(e){ console.error(e); alert('Could not save entry.'); }
     finally{ setSaving(false); }
@@ -3240,7 +3297,7 @@ function NewPettyModal({ onClose, currentUser }) {
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div style={{background:'var(--surface)',borderRadius:10,width:480,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--secondary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ Petty Cash Entry</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Entry' : '+ Petty Cash Entry'}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-grid">
@@ -3280,7 +3337,7 @@ function NewPettyModal({ onClose, currentUser }) {
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving||!form.amount||!form.description.trim()} className="btn btn-primary"
             style={{background:'var(--secondary)',opacity:saving||!form.amount||!form.description.trim()?0.6:1}}>
-            {saving?'Saving…':'Save Entry'}
+            {saving?'Saving…': isEdit ? 'Save Changes' : 'Save Entry'}
           </button>
         </div>
       </div>
@@ -3295,6 +3352,7 @@ function PettyCash({ currentUser }) {
   const [catFilter, setCatFilter] = useState('all');
   const [paidByFilter, setPaidByFilter] = useState('all');
   const [monthFilter, setMonthFilter] = useState('all');
+  const [editEntry, setEditEntry] = useState(null);
 
   // Month options from entries
   const months = [...new Set(items.map(i=>i.date?.slice(0,7)).filter(Boolean))].sort().reverse();
@@ -3444,6 +3502,7 @@ function PettyCash({ currentUser }) {
                   <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{i.project||'—'}</td>
                   <td className="amount fw-600" style={{color:'var(--red)'}}>{inr(i.amount||0)}</td>
                   <td>
+                    <button className="btn btn-sm btn-ghost" onClick={()=>setEditEntry(i)}>Edit</button>
                     <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this entry?'))deletePettyEntry(i.docId);}}>Delete</button>
                   </td>
                 </tr>
@@ -3460,6 +3519,7 @@ function PettyCash({ currentUser }) {
       </div>
 
       {showNew && <NewPettyModal onClose={()=>setShowNew(false)} currentUser={currentUser} />}
+      {editEntry && <NewPettyModal onClose={()=>setEditEntry(null)} currentUser={currentUser} existing={editEntry} />}
     </div>
   );
 }
@@ -3502,8 +3562,17 @@ async function clearAllCapital() {
   await batch.commit();
 }
 
-function NewCapitalModal({ onClose }) {
-  const [form, setForm] = useState({
+function NewCapitalModal({ onClose, existing }) {
+  const isEdit = !!existing;
+  const [form, setForm] = useState(isEdit ? {
+    type: existing.type||'Bank Loan', source: existing.source||'',
+    amount: existing.amount ? String(existing.amount) : '',
+    dateReceived: existing.dateReceived||'', paymentMode: existing.paymentMode||'NEFT',
+    refNumber: existing.refNumber||'', notes: existing.notes||'',
+    isLoan: existing.isLoan||false, emiAmount: existing.emiAmount ? String(existing.emiAmount) : '',
+    tenureMonths: existing.tenureMonths ? String(existing.tenureMonths) : '',
+    emiStartDate: existing.emiStartDate||'', interestRate: existing.interestRate ? String(existing.interestRate) : ''
+  } : {
     type: 'Bank Loan', source: '', amount: '', dateReceived: new Date().toISOString().slice(0,10),
     paymentMode: 'NEFT', refNumber: '', notes: '',
     isLoan: true, emiAmount: '', tenureMonths: '', emiStartDate: '', interestRate: ''
@@ -3517,14 +3586,20 @@ function NewCapitalModal({ onClose }) {
     if (!form.source.trim() || !form.amount || !form.dateReceived) return;
     setSaving(true);
     try {
-      await addCapitalEntry({
+      const saveData = {
         ...form,
         amount: Number(form.amount),
         emiAmount: Number(form.emiAmount) || 0,
         tenureMonths: Number(form.tenureMonths) || 0,
         interestRate: Number(form.interestRate) || 0,
         isRepayable: isLoanType
-      });
+      };
+      if (isEdit) {
+        const { db, doc, updateDoc } = window.fb;
+        await updateDoc(doc(db, CAPITAL_COLLECTION, existing.docId), saveData);
+      } else {
+        await addCapitalEntry(saveData);
+      }
       onClose();
     } catch(e) { console.error(e); alert('Could not save entry.'); }
     finally { setSaving(false); }
@@ -3534,7 +3609,7 @@ function NewCapitalModal({ onClose }) {
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div style={{background:'var(--surface)',borderRadius:10,width:520,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'#1B5E20',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ Capital / Loan Inflow</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Entry' : '+ Capital / Loan Inflow'}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-grid">
@@ -3613,7 +3688,7 @@ function NewCapitalModal({ onClose }) {
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving||!form.source.trim()||!form.amount||!form.dateReceived} className="btn btn-primary"
             style={{background:'#1B5E20',opacity:saving||!form.source.trim()||!form.amount||!form.dateReceived?0.6:1}}>
-            {saving?'Saving…':'Save Entry'}
+            {saving?'Saving…': isEdit ? 'Save Changes' : 'Save Entry'}
           </button>
         </div>
       </div>
@@ -3624,6 +3699,7 @@ function NewCapitalModal({ onClose }) {
 function CapitalLoans() {
   const { items, loading } = useCapitalLoans();
   const [showNew, setShowNew] = useState(false);
+  const [editCapital, setEditCapital] = useState(null);
 
   const totalInflow = items.reduce((s,i) => s + Number(i.amount||0), 0);
   const totalRepayable = items.filter(i=>i.isRepayable).reduce((s,i) => s + Number(i.emiAmount||0)*Number(i.tenureMonths||0), 0);
@@ -3679,7 +3755,10 @@ function CapitalLoans() {
                   <td className="amount">{item.emiAmount > 0 ? inr(item.emiAmount) : '—'}</td>
                   <td>{item.tenureMonths > 0 ? `${item.tenureMonths}m` : '—'}</td>
                   <td className="amount" style={{color:'var(--red)'}}>{item.isRepayable && item.emiAmount > 0 ? inr(Number(item.emiAmount)*Number(item.tenureMonths)) : '—'}</td>
-                  <td><button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this entry?'))deleteCapitalEntry(item.docId);}}>Delete</button></td>
+                  <td>
+                    <button className="btn btn-sm btn-ghost" onClick={()=>setEditCapital(item)}>Edit</button>
+                    <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this entry?'))deleteCapitalEntry(item.docId);}}>Delete</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -3687,6 +3766,7 @@ function CapitalLoans() {
         )}
       </div>
       {showNew && <NewCapitalModal onClose={()=>setShowNew(false)} />}
+      {editCapital && <NewCapitalModal onClose={()=>setEditCapital(null)} existing={editCapital} />}
     </div>
   );
 }
@@ -4157,7 +4237,7 @@ function NewQuotationModal({ onClose }) {
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div style={{background:'var(--surface)',borderRadius:10,width:600,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Quotation</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Quotation' : '+ New Quotation'}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-group">
@@ -4449,8 +4529,13 @@ async function clearAllMilestones() {
   await batch.commit();
 }
 
-function NewMilestoneModal({ onClose, pos }) {
-  const [form, setForm] = useState({ name: '', pct: '', amount: '', due: '', po: '', wo: '' });
+function NewMilestoneModal({ onClose, pos, existing }) {
+  const isEdit = !!existing;
+  const [form, setForm] = useState(isEdit ? {
+    name: existing.name||'', pct: existing.pct||'',
+    amount: existing.amount ? String(existing.amount) : '',
+    due: existing.due||'', po: existing.po||'', wo: existing.wo||''
+  } : { name: '', pct: '', amount: '', due: '', po: '', wo: '' });
   const [saving, setSaving] = useState(false);
   function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
 
@@ -4458,7 +4543,12 @@ function NewMilestoneModal({ onClose, pos }) {
     if (!form.name.trim() || !form.amount || !form.due) return;
     setSaving(true);
     try {
-      await addMilestone({ ...form, amount: Number(form.amount) });
+      if (isEdit) {
+        const { db, doc, updateDoc } = window.fb;
+        await updateDoc(doc(db, MILESTONES_COLLECTION, existing.docId), { ...form, amount: Number(form.amount) });
+      } else {
+        await addMilestone({ ...form, amount: Number(form.amount) });
+      }
       onClose();
     } catch (e) { console.error(e); alert('Could not save milestone.'); }
     finally { setSaving(false); }
@@ -4468,7 +4558,7 @@ function NewMilestoneModal({ onClose, pos }) {
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div style={{background:'var(--surface)',borderRadius:10,width:480,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Payment Milestone</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Milestone' : '+ New Payment Milestone'}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-group">
@@ -4510,7 +4600,7 @@ function NewMilestoneModal({ onClose, pos }) {
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving || !form.name.trim() || !form.amount || !form.due} className="btn btn-primary" style={{opacity: saving || !form.name.trim() || !form.amount || !form.due ? .6 : 1}}>
-            {saving ? 'Saving…' : 'Save Milestone'}
+            {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Save Milestone'}
           </button>
         </div>
       </div>
@@ -4522,6 +4612,7 @@ function PaymentTracker() {
   const { items, loading } = useMilestones();
   const { items: pos } = usePurchaseOrders();
   const [showNew, setShowNew] = useState(false);
+  const [editMilestone, setEditMilestone] = useState(null);
 
   const todayStr = new Date().toISOString().slice(0,10);
   const withStatus = items.map(m => {
@@ -4586,7 +4677,8 @@ function PaymentTracker() {
                   <td>
                     {!m.paid ? (
                       <div className="flex gap-2">
-                        <button className="btn btn-sm btn-primary" onClick={() => markMilestonePaid(m.docId)}>Mark Paid</button>
+                        <button className="btn btn-sm btn-ghost" onClick={() => setEditMilestone(m)}>Edit</button>
+                      <button className="btn btn-sm btn-primary" onClick={() => markMilestonePaid(m.docId)}>Mark Paid</button>
                         <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this milestone?')) deleteMilestone(m.docId); }}>Delete</button>
                       </div>
                     ) : (
@@ -4600,6 +4692,7 @@ function PaymentTracker() {
         )}
       </div>
       {showNew && <NewMilestoneModal onClose={() => setShowNew(false)} pos={pos} />}
+      {editMilestone && <NewMilestoneModal onClose={() => setEditMilestone(null)} pos={pos} existing={editMilestone} />}
     </div>
   );
 }
@@ -5166,13 +5259,19 @@ function LineItemEditor({ items, setItems }) {
   );
 }
 
-function NewRequisitionModal({ onClose, nextNumber, currentUser }) {
-  const [form, setForm] = useState({
+function NewRequisitionModal({ onClose, nextNumber, currentUser, existing }) {
+  const isEdit = !!existing;
+  const [form, setForm] = useState(isEdit ? {
+    req: existing.req||nextNumber, date: existing.date||'',
+    raisedBy: existing.raisedBy||currentUser.name, raisedByUid: existing.raisedByUid||currentUser.uid,
+    category: existing.category||'Materials', priority: existing.priority||'Normal',
+    project: existing.project||'', description: existing.description||'', status: existing.status||'Open'
+  } : {
     req: nextNumber, date: new Date().toISOString().slice(0,10),
     raisedBy: currentUser.name, raisedByUid: currentUser.uid,
     category: 'Materials', priority: 'Normal', project: '', description: '', status: 'Open'
   });
-  const [lineItems, setLineItems] = useState([]);
+  const [lineItems, setLineItems] = useState(isEdit && existing.lineItems ? existing.lineItems : []);
   const [saving, setSaving] = useState(false);
   function set(f,v) { setForm(s=>({...s,[f]:v})); }
 
@@ -5180,7 +5279,12 @@ function NewRequisitionModal({ onClose, nextNumber, currentUser }) {
     if (!form.description.trim()) return;
     setSaving(true);
     try {
-      await addRequisition({ ...form, lineItems, totalEstimated: lineItems.reduce((s,r)=>s+Number(r.estimatedValue||0),0) });
+      if (isEdit) {
+        const { db, doc, updateDoc } = window.fb;
+        await updateDoc(doc(db, REQ_COLLECTION, existing.docId), { ...form, lineItems, totalEstimated: lineItems.reduce((s,r)=>s+Number(r.estimatedValue||0),0) });
+      } else {
+        await addRequisition({ ...form, lineItems, totalEstimated: lineItems.reduce((s,r)=>s+Number(r.estimatedValue||0),0) });
+      }
       onClose();
     } catch(e) { console.error(e); alert('Could not save requisition.'); }
     finally { setSaving(false); }
@@ -5190,7 +5294,7 @@ function NewRequisitionModal({ onClose, nextNumber, currentUser }) {
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div style={{background:'var(--surface)',borderRadius:10,width:640,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary-dark)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Requisition</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Requisition' : '+ New Requisition'}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-grid">
@@ -5237,7 +5341,7 @@ function NewRequisitionModal({ onClose, nextNumber, currentUser }) {
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving||!form.description.trim()} className="btn btn-primary"
             style={{opacity: (saving||!form.description.trim()) ? 0.6 : 1}}>
-            {saving?'Saving…':'Submit Requisition'}
+            {saving?'Saving…': isEdit ? 'Save Changes' : 'Submit Requisition'}
           </button>
         </div>
       </div>
@@ -5253,6 +5357,7 @@ function Requisitions({ currentUser }) {
   const [showNew, setShowNew] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all');
   const [expandedId, setExpandedId] = useState(null);
+  const [editReq, setEditReq] = useState(null);
 
   const nextNumber = nextREQNumber(items.length);
   const filtered = statusFilter==='all' ? items : items.filter(r=>r.status===statusFilter);
@@ -5309,7 +5414,8 @@ function Requisitions({ currentUser }) {
                     <td><span className={`badge ${REQ_STATUS_COLOR[r.status]||'grey'}`}>{r.status}</span></td>
                     <td>
                       <div className="flex gap-2">
-                        <button className="btn btn-sm btn-ghost" onClick={e=>{e.stopPropagation();setExpandedId(expandedId===r.docId?null:r.docId)}}>
+                        <button className="btn btn-sm btn-ghost" onClick={e=>{e.stopPropagation();setEditReq(r);}}>Edit</button>
+                      <button className="btn btn-sm btn-ghost" onClick={e=>{e.stopPropagation();setExpandedId(expandedId===r.docId?null:r.docId)}}>
                           {expandedId===r.docId?'▲':'▼'} Details
                         </button>
                         <button className="btn btn-sm btn-ghost" onClick={e=>{e.stopPropagation();if(confirm('Delete?'))deleteRequisition(r.docId);}}>Delete</button>
@@ -5360,6 +5466,7 @@ function Requisitions({ currentUser }) {
         )}
       </div>
       {showNew && <NewRequisitionModal onClose={()=>setShowNew(false)} nextNumber={nextNumber} currentUser={currentUser} />}
+      {editReq && <NewRequisitionModal onClose={()=>setEditReq(null)} nextNumber={nextNumber} currentUser={currentUser} existing={editReq} />}
     </div>
   );
 }
@@ -5770,6 +5877,7 @@ function QuotationsWithUser({ currentUser }) {
   const [approvedFilter, setApprovedFilter] = useState('all');
   const [issuingFor, setIssuingFor] = useState(null);
   const [viewSchedule, setViewSchedule] = useState(null);
+  const [editQuote, setEditQuote] = useState(null);
 
   const filtered = items.filter(q =>
     (stageFilter==='all' || q.stage===stageFilter) &&
@@ -5860,6 +5968,7 @@ function QuotationsWithUser({ currentUser }) {
                           <button className="btn btn-sm btn-primary" style={{background:'var(--green)'}} onClick={()=>setIssuingFor(q)}>Issue PO →</button>
                         </PermGate>
                       )}
+                      <button className="btn btn-sm btn-ghost" onClick={()=>setEditQuote(q)}>Edit</button>
                       {!q.approved && q.stage!=='Issuing of PO/WO' && q.stage!=='Finalization of T&C' && (
                         <button className="btn btn-sm btn-ghost" onClick={()=>advanceStage(q)}>Advance →</button>
                       )}
@@ -5873,6 +5982,7 @@ function QuotationsWithUser({ currentUser }) {
         )}
       </div>
       {showNew && <NewQuotationWithREQ onClose={()=>setShowNew(false)} reqs={reqs} />}
+      {editQuote && <NewQuotationWithREQ onClose={()=>setEditQuote(null)} reqs={reqs} existing={editQuote} />}
       {issuingFor && <IssuePOModal quotation={issuingFor} onClose={()=>setIssuingFor(null)} onIssued={()=>setIssuingFor(null)} />}
       {viewSchedule && (
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setViewSchedule(null)}>
@@ -5908,9 +6018,15 @@ function QuotationsWithUser({ currentUser }) {
 }
 
 // ─── New Quotation with REQ dropdown and Quot Number ─
-function NewQuotationWithREQ({ onClose, reqs }) {
+function NewQuotationWithREQ({ onClose, reqs, existing }) {
+  const isEdit = !!existing;
   const { items: allQuotes } = useQuotations();
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(isEdit ? {
+    quotNo: existing.quotNo||'', vendorName: existing.vendorName||'',
+    description: existing.description||'', value: existing.value ? String(existing.value) : '',
+    receivedDate: existing.receivedDate||'', linkedReq: existing.linkedReq||'',
+    stage: existing.stage||'Receipt of Quotation', notes: existing.notes||''
+  } : {
     quotNo:'', vendorName:'', description:'', value:'',
     receivedDate: new Date().toISOString().slice(0,10),
     linkedReq:'', stage:'Receipt of Quotation', notes:''
@@ -5936,7 +6052,11 @@ function NewQuotationWithREQ({ onClose, reqs }) {
     if(!form.vendorName.trim()||!form.value) return;
     setSaving(true);
     try{
-      await addQuotation({...form,value:Number(form.value),paymentSchedule:schedule});
+      if (isEdit) {
+        await updateQuotation(existing.docId, {...form, value:Number(form.value), paymentSchedule:schedule});
+      } else {
+        await addQuotation({...form,value:Number(form.value),paymentSchedule:schedule});
+      }
       onClose();
     }catch(e){console.error(e);alert('Could not save quotation.');}
     finally{setSaving(false);}
@@ -5946,7 +6066,7 @@ function NewQuotationWithREQ({ onClose, reqs }) {
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div style={{background:'var(--surface)',borderRadius:10,width:620,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Quotation</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Quotation' : '+ New Quotation'}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-grid">
@@ -5996,7 +6116,7 @@ function NewQuotationWithREQ({ onClose, reqs }) {
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving||!form.vendorName.trim()||!form.value} className="btn btn-primary"
             style={{opacity: (saving||!form.vendorName.trim()||!form.value) ? 0.6 : 1}}>
-            {saving?'Saving…':'Save Quotation'}
+            {saving?'Saving…': isEdit ? 'Save Changes' : 'Save Quotation'}
           </button>
         </div>
       </div>
