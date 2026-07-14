@@ -273,6 +273,65 @@ const { useState, useEffect, useRef } = React;
 // ─── Formatters ───────────────────────────────────────
 const inr = (n) => '₹' + Number(n).toLocaleString('en-IN');
 
+// ─── Known Names Hook ─────────────────────────────────
+// Aggregates all vendor/payee names from every collection for autocomplete
+function useKnownNames() {
+  const [names, setNames] = useState({ vendors:[], payees:[], clients:[] });
+
+  useEffect(() => {
+    function start() {
+      const { db, collection, getDocs } = window.fb;
+      async function load() {
+        try {
+          const [vendors, bills, advances, pos, wos, quotes, reqs, petty, capital] = await Promise.all([
+            getDocs(collection(db, 'vendors')),
+            getDocs(collection(db, 'bills')),
+            getDocs(collection(db, 'advances')),
+            getDocs(collection(db, 'purchaseorders')),
+            getDocs(collection(db, 'workorders')),
+            getDocs(collection(db, 'quotations')),
+            getDocs(collection(db, 'requisitions')),
+            getDocs(collection(db, 'petty_cash')),
+            getDocs(collection(db, 'capital_loans')),
+          ]);
+
+          const vendorNames = [
+            ...vendors.docs.map(d=>d.data().company),
+            ...pos.docs.map(d=>d.data().vendorName),
+            ...wos.docs.map(d=>d.data().vendorName),
+            ...quotes.docs.map(d=>d.data().vendorName),
+            ...advances.docs.map(d=>d.data().vendor),
+          ].filter(Boolean);
+
+          const payeeNames = [
+            ...bills.docs.map(d=>d.data().payee),
+            ...advances.docs.map(d=>d.data().vendor),
+            ...petty.docs.map(d=>d.data().paidBy),
+          ].filter(Boolean);
+
+          const clientNames = [
+            ...reqs.docs.map(d=>d.data().client),
+          ].filter(Boolean);
+
+          const capitalSources = capital.docs.map(d=>d.data().source).filter(Boolean);
+
+          setNames({
+            vendors: [...new Set(vendorNames)].sort(),
+            payees:  [...new Set(payeeNames)].sort(),
+            clients: [...new Set(clientNames)].sort(),
+            capital: [...new Set(capitalSources)].sort(),
+          });
+        } catch(e) { console.error('useKnownNames error', e); }
+      }
+      load();
+    }
+    if (window.fb) start();
+    else window.addEventListener('firebase-ready', start, { once: true });
+  }, []);
+
+  return names;
+}
+
 // ─── Mock Data ────────────────────────────────────────
 const ACTIVITY = [
   { id:1, icon:'📸', color:'blue', text: <><strong>Rahul</strong> uploaded 3 site photos — WO-2026-012 Thane society RO</>, time:'10 mins ago' },
@@ -335,6 +394,85 @@ class ErrorBoundary extends React.Component {
     }
     return this.props.children;
   }
+}
+
+// ─── Autocomplete Input ───────────────────────────────
+// Reusable: shows dropdown of past values as you type
+// suggestions = array of strings from existing Firestore data
+function AutocompleteInput({ value, onChange, suggestions, placeholder, className, style }) {
+  const [open, setOpen] = useState(false);
+  const [filtered, setFiltered] = useState([]);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  function handleChange(e) {
+    const val = e.target.value;
+    onChange(val);
+    if (val.trim().length > 0) {
+      const q = val.toLowerCase();
+      const matches = [...new Set(suggestions.filter(s => s && s.toLowerCase().includes(q) && s.toLowerCase() !== q))].slice(0, 8);
+      setFiltered(matches);
+      setOpen(matches.length > 0);
+    } else {
+      // Show all suggestions when field is focused but empty
+      const all = [...new Set(suggestions.filter(Boolean))].slice(0, 8);
+      setFiltered(all);
+      setOpen(all.length > 0);
+    }
+  }
+
+  function handleFocus() {
+    if (!value || value.trim() === '') {
+      const all = [...new Set(suggestions.filter(Boolean))].slice(0, 8);
+      setFiltered(all);
+      setOpen(all.length > 0);
+    }
+  }
+
+  function handleSelect(s) {
+    onChange(s);
+    setOpen(false);
+  }
+
+  return (
+    <div ref={ref} style={{position:'relative'}}>
+      <input
+        className={className || 'form-input'}
+        style={style}
+        value={value}
+        onChange={handleChange}
+        onFocus={handleFocus}
+        placeholder={placeholder}
+        autoComplete="off"
+      />
+      {open && filtered.length > 0 && (
+        <div style={{
+          position:'absolute', top:'100%', left:0, right:0, zIndex:2000,
+          background:'var(--surface)', border:'1px solid var(--border)',
+          borderRadius:'0 0 6px 6px', boxShadow:'0 4px 12px rgba(0,0,0,.12)',
+          maxHeight:200, overflowY:'auto'
+        }}>
+          {filtered.map((s, i) => (
+            <div key={i} onMouseDown={() => handleSelect(s)}
+              style={{padding:'7px 12px', fontSize:12.5, cursor:'pointer', borderTop: i>0?'1px solid var(--grey-50)':'none',
+                display:'flex', alignItems:'center', gap:8}}
+              onMouseEnter={e=>e.currentTarget.style.background='var(--primary-50)'}
+              onMouseLeave={e=>e.currentTarget.style.background=''}>
+              <span style={{color:'var(--text-muted)',fontSize:11}}>↩</span>
+              {s}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const StatusBadge = ({ status }) => {
@@ -1205,7 +1343,7 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
           </div>
           <div className="form-group">
             <label className="form-label">Vendor Name</label>
-            <input className="form-input" value={form.vendorName} onChange={e=>set('vendorName', e.target.value)} placeholder="Vendor / contractor name" />
+            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={useKnownNames().vendors} placeholder="Vendor / contractor name" />
           </div>
           <div className="form-group">
             <label className="form-label">Scope of Work / Description</label>
@@ -1529,7 +1667,7 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
                 )}
               </select>
             ) : (
-              <input className="form-input" value={form.vendorName} onChange={e=>set('vendorName', e.target.value)} placeholder="Vendor name" />
+              <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={useKnownNames().vendors} placeholder="Vendor name" />
             )}
           </div>
           <div className="form-group">
@@ -1971,6 +2109,7 @@ async function clearAllAdvances() {
 // ─── New Bill Modal ────────────────────────────────
 function NewBillModal({ onClose, existing }) {
   const isEdit = !!existing;
+  const knownNames = useKnownNames();
   const [form, setForm] = useState(isEdit ? {
     payee: existing.payee||'', category: existing.category||'Vendor',
     invoiceNo: existing.invoiceNo||'', invoiceDate: existing.invoiceDate||'',
@@ -2005,7 +2144,7 @@ function NewBillModal({ onClose, existing }) {
         <div style={{padding:'18px 20px'}}>
           <div className="form-group">
             <label className="form-label">Payee Name</label>
-            <input className="form-input" value={form.payee} onChange={e=>set('payee', e.target.value)} placeholder="e.g. Aqua Membranes Pvt Ltd" autoFocus />
+            <AutocompleteInput value={form.payee} onChange={v=>set('payee',v)} suggestions={[...knownNames.vendors,...knownNames.payees]} placeholder="e.g. Aqua Membranes Pvt Ltd" />
           </div>
           <div className="form-grid">
             <div className="form-group">
@@ -2052,6 +2191,7 @@ function NewBillModal({ onClose, existing }) {
 
 // ─── New Advance Payment Modal ─────────────────────
 function NewAdvanceModal({ onClose, pos, bills }) {
+  const knownNames = useKnownNames();
   const [form, setForm] = useState({
     vendor: '', amount: '', datePaid: new Date().toISOString().slice(0,10),
     paymentMode: 'NEFT', refNumber: '', narration: '',
@@ -2087,7 +2227,7 @@ function NewAdvanceModal({ onClose, pos, bills }) {
           </div>
           <div className="form-group">
             <label className="form-label">Vendor / Paid To</label>
-            <input className="form-input" value={form.vendor} onChange={e=>set('vendor',e.target.value)} placeholder="Vendor or payee name" autoFocus />
+            <AutocompleteInput value={form.vendor} onChange={v=>set('vendor',v)} suggestions={[...knownNames.vendors,...knownNames.payees]} placeholder="Vendor or payee name" />
           </div>
           <div className="form-grid">
             <div className="form-group">
@@ -2601,7 +2741,7 @@ function NewBillingScheduleModal({ onClose }) {
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Client Name</label>
-              <input className="form-input" value={form.client} onChange={e=>set('client',e.target.value)} placeholder="e.g. Green Valley CHS" autoFocus />
+              <AutocompleteInput value={form.client} onChange={v=>set('client',v)} suggestions={useKnownNames().clients} placeholder="e.g. Green Valley CHS" />
             </div>
             <div className="form-group">
               <label className="form-label">Project / Site Reference</label>
@@ -3330,7 +3470,7 @@ function NewPettyModal({ onClose, currentUser, existing }) {
           </div>
           <div className="form-group">
             <label className="form-label">Project / Site <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional)</span></label>
-            <input className="form-input" value={form.project} onChange={e=>set('project',e.target.value)} placeholder="e.g. Green Valley CHS, Thane" />
+            <AutocompleteInput value={form.project} onChange={v=>set('project',v)} suggestions={useKnownNames().clients} placeholder="e.g. Green Valley CHS, Thane" />
           </div>
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
@@ -3621,7 +3761,7 @@ function NewCapitalModal({ onClose, existing }) {
             </div>
             <div className="form-group">
               <label className="form-label">Source / Lender Name</label>
-              <input className="form-input" value={form.source} onChange={e=>set('source',e.target.value)} placeholder="e.g. HDFC Bank, Mr. Ramesh" autoFocus />
+              <AutocompleteInput value={form.source} onChange={v=>set('source',v)} suggestions={useKnownNames().capital||[]} placeholder="e.g. HDFC Bank, Mr. Ramesh" />
             </div>
           </div>
           <div className="form-grid">
@@ -4327,7 +4467,7 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
             </div>
             <div className="form-group">
               <label className="form-label">Vendor Name</label>
-              <input className="form-input" value={form.vendorName} onChange={e=>set('vendorName', e.target.value)} />
+              <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={useKnownNames().vendors} />
             </div>
           </div>
           <div className="form-group">
@@ -6084,7 +6224,7 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
           </div>
           <div className="form-group">
             <label className="form-label">Vendor Name</label>
-            <input className="form-input" value={form.vendorName} onChange={e=>set('vendorName',e.target.value)} placeholder="Vendor / supplier name" autoFocus />
+            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={useKnownNames().vendors} placeholder="Vendor / supplier name" />
           </div>
           <div className="form-group">
             <label className="form-label">Description</label>
