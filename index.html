@@ -353,24 +353,24 @@ function useKnownNames() {
 
 // ─── Mock Data ────────────────────────────────────────
 const ACTIVITY = [
-  { id:1, icon:'📸', color:'blue', text: <><strong>Rahul</strong> uploaded 3 site photos — WO-2026-012 Thane society RO</>, time:'10 mins ago' },
-  { id:2, icon:'✅', color:'green', text: <><strong>Priya</strong> marked Task #TK-041 complete — valve replacement Mulund</>, time:'45 mins ago' },
-  { id:3, icon:'💬', color:'amber', text: <><strong>Dakshata</strong> sent payment reminder — Sai Builders ₹1,80,000 overdue</>, time:'1h ago' },
+  { id:1, icon:'📸', color:'blue', text: <><strong>Vikram Singh</strong> uploaded 3 site photos — WO-2026-012 Thane society RO</>, time:'10 mins ago' },
+  { id:2, icon:'✅', color:'green', text: <><strong>Manav</strong> marked Task #TK-041 complete — valve replacement Mulund</>, time:'45 mins ago' },
+  { id:3, icon:'💬', color:'amber', text: <><strong>Neer</strong> sent payment reminder — Sai Builders ₹1,80,000 overdue</>, time:'1h ago' },
   { id:4, icon:'📄', color:'blue', text: <><strong>Vatsal</strong> finalized PO-2026-027 — Aqua Membranes ₹2,40,000</>, time:'2h ago' },
-  { id:5, icon:'🚨', color:'red', text: <>WO-2026-009 marked <strong>Overdue</strong> — Manoj added delay remark</>, time:'3h ago' },
+  { id:5, icon:'🚨', color:'red', text: <>WO-2026-009 marked <strong>Overdue</strong> — Hardik added delay remark</>, time:'3h ago' },
 ];
 
 const REMINDERS = [
   { id:1, urgency:'critical', title:'Sai Builders — ₹3,40,000 payment overdue 11 days', meta:'Action: Call MD directly · Linked PO-2026-019' },
   { id:2, urgency:'warning', title:'Vendor bill due tomorrow — Aqua Membranes ₹65,000', meta:'Invoice #INV-AM-2289 · Category: Membrane supply' },
-  { id:3, urgency:'upcoming', title:'WO-2026-014 due in 3 days — Green Valley Society WTP', meta:'Assigned: Manoj, Amit · Progress: 60%' },
+  { id:3, urgency:'upcoming', title:'WO-2026-014 due in 3 days — Green Valley Society WTP', meta:'Assigned: Manav, Kushan · Progress: 60%' },
 ];
 
 const WO_DATA = [
-  { wo:'WO-2026-014', client:'Green Valley CHS', work:'WTP commissioning', assigned:'Manoj', status:'In Progress', pct:60, due:'02 Jul 2026', value:'₹4,80,000' },
-  { wo:'WO-2026-013', client:'Hiranandani Biz Park', work:'Booster pump install', assigned:'Rahul', status:'Scheduled', pct:0, due:'05 Jul 2026', value:'₹1,20,000' },
-  { wo:'WO-2026-012', client:'Thane Park Society', work:'RO plant 1000 LPH', assigned:'Rahul', status:'In Progress', pct:40, due:'28 Jun 2026', value:'₹3,60,000' },
-  { wo:'WO-2026-009', client:'Cosmos Industrial', work:'AMC service visit', assigned:'Priya', status:'Overdue', pct:80, due:'20 Jun 2026', value:'₹45,000' },
+  { wo:'WO-2026-014', client:'Green Valley CHS', work:'WTP commissioning', assigned:'Manav', status:'In Progress', pct:60, due:'02 Jul 2026', value:'₹4,80,000' },
+  { wo:'WO-2026-013', client:'Hiranandani Biz Park', work:'Booster pump install', assigned:'Vikram Singh', status:'Scheduled', pct:0, due:'05 Jul 2026', value:'₹1,20,000' },
+  { wo:'WO-2026-012', client:'Thane Park Society', work:'RO plant 1000 LPH', assigned:'Pritesh', status:'In Progress', pct:40, due:'28 Jun 2026', value:'₹3,60,000' },
+  { wo:'WO-2026-009', client:'Cosmos Industrial', work:'AMC service visit', assigned:'Hardik', status:'Overdue', pct:80, due:'20 Jun 2026', value:'₹45,000' },
 ];
 
 const BILLS_DUE = [
@@ -816,10 +816,10 @@ function Dashboard({ setActive }) {
 // ─── Tasks Module ──────────────────────────────────────
 const TASKS_DATA = [
   { id:'TK-045', name:'Install membrane housing — Thane RO', client:'Thane Park Society', wo:'WO-2026-012', assigned:'Rahul', priority:'High', status:'In Progress', due:'01 Jul 2026' },
-  { id:'TK-044', name:'Site survey — Hiranandani booster pump', client:'Hiranandani Biz Park', wo:'WO-2026-013', assigned:'Manoj', priority:'Medium', status:'Scheduled', due:'02 Jul 2026' },
-  { id:'TK-043', name:'Water quality test — Green Valley WTP', client:'Green Valley CHS', wo:'WO-2026-014', assigned:'Priya', priority:'High', status:'In Progress', due:'30 Jun 2026' },
-  { id:'TK-042', name:'AMC service report — Cosmos', client:'Cosmos Industrial', wo:'WO-2026-009', assigned:'Priya', priority:'Critical', status:'Overdue', due:'20 Jun 2026' },
-  { id:'TK-041', name:'Valve replacement — Mulund society', client:'Mulund Heights CHS', wo:'WO-2026-011', assigned:'Amit', priority:'Medium', status:'Completed', due:'27 Jun 2026' },
+  { id:'TK-044', name:'Site survey — Hiranandani booster pump', client:'Hiranandani Biz Park', wo:'WO-2026-013', assigned:'Manav', priority:'Medium', status:'Scheduled', due:'02 Jul 2026' },
+  { id:'TK-043', name:'Water quality test — Green Valley WTP', client:'Green Valley CHS', wo:'WO-2026-014', assigned:'Hardik', priority:'High', status:'In Progress', due:'30 Jun 2026' },
+  { id:'TK-042', name:'AMC service report — Cosmos', client:'Cosmos Industrial', wo:'WO-2026-009', assigned:'Amardeep Singh', priority:'Critical', status:'Overdue', due:'20 Jun 2026' },
+  { id:'TK-041', name:'Valve replacement — Mulund society', client:'Mulund Heights CHS', wo:'WO-2026-011', assigned:'Kushan', priority:'Medium', status:'Completed', due:'27 Jun 2026' },
 ];
 
 const PRIO_COLOR = { Critical:'red', High:'amber', Medium:'blue', Low:'grey' };
@@ -895,10 +895,10 @@ function NewTaskModal({ onClose, existing }) {
   const isEdit = !!existing;
   const [form, setForm] = useState(existing ? {
     name: existing.name||'', client: existing.client||'', wo: existing.wo||'',
-    assigned: existing.assigned||'Rahul', priority: existing.priority||'Medium',
+    assigned: existing.assigned||'Neer', priority: existing.priority||'Medium',
     status: existing.status||'Pending', due: existing.due||''
   } : {
-    name: '', client: '', wo: '', assigned: 'Rahul', priority: 'Medium', status: 'Pending', due: ''
+    name: '', client: '', wo: '', assigned: 'Neer', priority: 'Medium', status: 'Pending', due: ''
   });
   const [saving, setSaving] = useState(false);
 
@@ -944,7 +944,7 @@ function NewTaskModal({ onClose, existing }) {
             <div className="form-group">
               <label className="form-label">Assigned Staff</label>
               <select className="form-input form-select" value={form.assigned} onChange={e=>set('assigned', e.target.value)}>
-                <option>Rahul</option><option>Priya</option><option>Manoj</option><option>Amit</option><option>Dakshata</option>
+                <option>Neer</option><option>Manav</option><option>Vikram Singh</option><option>Amardeep Singh</option><option>Pritesh</option><option>Hardik</option><option>Kushan</option>
               </select>
             </div>
             <div className="form-group">
@@ -3434,7 +3434,7 @@ function NewPettyModal({ onClose, currentUser, existing }) {
     date: new Date().toISOString().slice(0,10),
     amount: '',
     category: 'Auto / Fuel',
-    paidBy: currentUser ? currentUser.name : '',
+    paidBy: currentUser ? currentUser.name : 'Neer',
     description: '',
     project: '',
   });
@@ -3483,7 +3483,7 @@ function NewPettyModal({ onClose, currentUser, existing }) {
             <div className="form-group">
               <label className="form-label">Paid By</label>
               <select className="form-input form-select" value={form.paidBy} onChange={e=>set('paidBy',e.target.value)}>
-                {['Neer','Dakshata','Rahul','Priya','Manoj','Amit'].map(n=><option key={n}>{n}</option>)}
+                {['Neer','Manav','Vikram Singh','Amardeep Singh','Pritesh','Hardik','Kushan'].map(n=><option key={n}>{n}</option>)}
               </select>
             </div>
           </div>
@@ -4115,8 +4115,8 @@ const CHANNELS = [
 ];
 
 const DMS = [
-  { id:'rahul', label:'Rahul', unread:0 },
-  { id:'priya', label:'Priya', unread:0 },
+  { id:'manav', label:'Manav', unread:0 },
+  { id:'vikram', label:'Vikram Singh', unread:0 },
   { id:'dakshata', label:'Dakshata', unread:0 },
 ];
 
@@ -5350,12 +5350,13 @@ function ClearDataCard({ item }) {
 // ════════════════════════════════════════════════════
 
 const STAFF = [
-  { uid:'vatsal',    name:'Vatsal',    initials:'V', role:'owner',       email:'vatsal@nirmanwatertech.com' },
-  { uid:'dakshata',  name:'Dakshata',  initials:'D', role:'accounts',    email:'dakshata@nirmanwatertech.com' },
-  { uid:'rahul',     name:'Rahul',     initials:'R', role:'field_staff', email:'rahul@nirmanwatertech.com' },
-  { uid:'priya',     name:'Priya',     initials:'P', role:'field_staff', email:'priya@nirmanwatertech.com' },
-  { uid:'manoj',     name:'Manoj',     initials:'M', role:'field_staff', email:'manoj@nirmanwatertech.com' },
-  { uid:'amit',      name:'Amit',      initials:'A', role:'field_staff', email:'amit@nirmanwatertech.com' },
+  { uid:'neer',      name:'Neer',          initials:'N', role:'owner',       email:'neer@nirmaanwatertech.com' },
+  { uid:'manav',     name:'Manav',         initials:'MN', role:'field_staff', email:'manav@nirmaanwatertech.com' },
+  { uid:'vikram',    name:'Vikram Singh',  initials:'VS', role:'field_staff', email:'vikram@nirmaanwatertech.com' },
+  { uid:'amardeep',  name:'Amardeep Singh',initials:'AS', role:'field_staff', email:'amardeep@nirmaanwatertech.com' },
+  { uid:'pritesh',   name:'Pritesh',       initials:'PR', role:'field_staff', email:'pritesh@nirmaanwatertech.com' },
+  { uid:'hardik',    name:'Hardik',        initials:'H', role:'field_staff', email:'hardik@nirmaanwatertech.com' },
+  { uid:'kushan',    name:'Kushan',        initials:'K', role:'field_staff', email:'kushan@nirmaanwatertech.com' },
 ];
 
 // Default permissions per role — Vatsal can override in Settings
