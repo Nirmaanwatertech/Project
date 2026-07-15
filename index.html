@@ -273,6 +273,25 @@ const { useState, useEffect, useRef } = React;
 // ─── Formatters ───────────────────────────────────────
 const inr = (n) => '₹' + Number(n).toLocaleString('en-IN');
 
+// ─── Projects ─────────────────────────────────────────
+const PROJECTS = ['Pontoon', 'WTP', 'Both'];
+const PROJECT_COLOR = { 'Pontoon': 'blue', 'WTP': 'teal', 'Both': 'grey' };
+
+// Reusable project selector — drop-in for any form
+function ProjectSelect({ value, onChange, required }) {
+  return (
+    <div className="form-group">
+      <label className="form-label">
+        Project {required ? <span style={{color:'var(--red)'}}>*</span> : <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional)</span>}
+      </label>
+      <select className="form-input form-select" value={value||''} onChange={e=>onChange(e.target.value)}>
+        <option value="">Select project…</option>
+        {PROJECTS.map(p=><option key={p}>{p}</option>)}
+      </select>
+    </div>
+  );
+}
+
 // ─── Known Names Hook ─────────────────────────────────
 // Aggregates all vendor/payee names from every collection for autocomplete
 function useKnownNames() {
@@ -1277,11 +1296,11 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
     linkedQuotation: existing.linkedQuotation||'', stage: existing.stage||'Draft',
     due: existing.due||'', notes: existing.notes||'',
-    penaltyClause: existing.penaltyClause||'', disputeClause: existing.disputeClause||''
+    penaltyClause: existing.penaltyClause||'', disputeClause: existing.disputeClause||'', project: existing.project||''
   } : {
     wo: nextNumber, vendorName: '', description: '', value: '',
     linkedQuotation: '', stage: 'Draft', due: '', notes: '',
-    penaltyClause: '', disputeClause: ''
+    penaltyClause: '', disputeClause: '', project: ''
   });
   const [schedule, setSchedule] = useState(isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) : []);
   const [saving, setSaving] = useState(false);
@@ -1589,12 +1608,12 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
     po: existing.po||nextNumber, vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
     linkedQuotation: existing.linkedQuotation||'', stage: existing.stage||'Draft',
-    penaltyClause: existing.penaltyClause||'', disputeClause: existing.disputeClause||''
+    penaltyClause: existing.penaltyClause||'', disputeClause: existing.disputeClause||'', project: existing.project||''
   } : {
     po: nextNumber, vendorName: prefill?.party || '', description: prefill?.description || '',
     value: prefill?.value ? String(prefill.value) : '',
     linkedQuotation: prefill?.fromQuotation || '',
-    stage: 'Draft', penaltyClause: prefill?.penaltyClause || '', disputeClause: prefill?.disputeClause || ''
+    stage: 'Draft', penaltyClause: prefill?.penaltyClause || '', disputeClause: prefill?.disputeClause || '', project: ''
   });
   const [schedule, setSchedule] = useState(
     isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) :
@@ -1693,6 +1712,7 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
             <label className="form-label">Dispute Resolution Clause</label>
             <input className="form-input" value={form.disputeClause} onChange={e=>set('disputeClause', e.target.value)} placeholder="Optional" />
           </div>
+          <ProjectSelect value={form.project||''} onChange={v=>set('project',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -2113,9 +2133,9 @@ function NewBillModal({ onClose, existing }) {
   const [form, setForm] = useState(isEdit ? {
     payee: existing.payee||'', category: existing.category||'Vendor',
     invoiceNo: existing.invoiceNo||'', invoiceDate: existing.invoiceDate||'',
-    due: existing.due||'', amount: existing.amount ? String(existing.amount) : '', notes: existing.notes||''
+    due: existing.due||'', amount: existing.amount ? String(existing.amount) : '', notes: existing.notes||'', project: existing.project||''
   } : {
-    payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '', notes: ''
+    payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '', notes: '', project: ''
   });
   const [saving, setSaving] = useState(false);
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
@@ -2176,6 +2196,7 @@ function NewBillModal({ onClose, existing }) {
             <label className="form-label">Notes</label>
             <input className="form-input" value={form.notes} onChange={e=>set('notes', e.target.value)} placeholder="Optional notes" />
           </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -2195,7 +2216,7 @@ function NewAdvanceModal({ onClose, pos, bills }) {
   const [form, setForm] = useState({
     vendor: '', amount: '', datePaid: new Date().toISOString().slice(0,10),
     paymentMode: 'NEFT', refNumber: '', narration: '',
-    linkedPO: '', linkedBill: ''
+    linkedPO: '', linkedBill: '', project: ''
   });
   const [saving, setSaving] = useState(false);
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
@@ -2274,6 +2295,7 @@ function NewAdvanceModal({ onClose, pos, bills }) {
               </div>
             </div>
           </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -2691,7 +2713,7 @@ function nextRABillNumber(existing) {
 // MODAL 1 — New Billing Schedule
 // ════════════════════════════════════════════════════
 function NewBillingScheduleModal({ onClose }) {
-  const [form, setForm] = useState({ client:'', projectRef:'', contractValue:'' });
+  const [form, setForm] = useState({ client:'', projectRef:'', contractValue:'', project:'' });
   const [milestones, setMilestones] = useState([
     { id:genRowId(), name:'Advance',    pct:'', amount:'', expectedDate:'' },
     { id:genRowId(), name:'RA Bill 1',  pct:'', amount:'', expectedDate:'' },
@@ -2803,6 +2825,7 @@ function NewBillingScheduleModal({ onClose }) {
               </span>
             </div>
           </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} required />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -3468,10 +3491,7 @@ function NewPettyModal({ onClose, currentUser, existing }) {
             <label className="form-label">Description</label>
             <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. Petrol for site visit — Thane" />
           </div>
-          <div className="form-group">
-            <label className="form-label">Project / Site <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional)</span></label>
-            <AutocompleteInput value={form.project} onChange={v=>set('project',v)} suggestions={useKnownNames().clients} placeholder="e.g. Green Valley CHS, Thane" />
-          </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -3711,11 +3731,11 @@ function NewCapitalModal({ onClose, existing }) {
     refNumber: existing.refNumber||'', notes: existing.notes||'',
     isLoan: existing.isLoan||false, emiAmount: existing.emiAmount ? String(existing.emiAmount) : '',
     tenureMonths: existing.tenureMonths ? String(existing.tenureMonths) : '',
-    emiStartDate: existing.emiStartDate||'', interestRate: existing.interestRate ? String(existing.interestRate) : ''
+    emiStartDate: existing.emiStartDate||'', interestRate: existing.interestRate ? String(existing.interestRate) : '', project: existing.project||''
   } : {
     type: 'Bank Loan', source: '', amount: '', dateReceived: new Date().toISOString().slice(0,10),
     paymentMode: 'NEFT', refNumber: '', notes: '',
-    isLoan: true, emiAmount: '', tenureMonths: '', emiStartDate: '', interestRate: ''
+    isLoan: true, emiAmount: '', tenureMonths: '', emiStartDate: '', interestRate: '', project: ''
   });
   const [saving, setSaving] = useState(false);
   function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
@@ -3823,11 +3843,12 @@ function NewCapitalModal({ onClose, existing }) {
               )}
             </div>
           )}
+          <ProjectSelect value={form.project||''} onChange={v=>set('project',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving||!form.source.trim()||!form.amount||!form.dateReceived} className="btn btn-primary"
-            style={{background:'#1B5E20',opacity:saving||!form.source.trim()||!form.amount||!form.dateReceived?0.6:1}}>
+style={{background:'#1B5E20',opacity:saving||!form.source.trim()||!form.amount||!form.dateReceived?0.6:1}}>
             {saving?'Saving…': isEdit ? 'Save Changes' : 'Save Entry'}
           </button>
         </div>
@@ -3907,6 +3928,181 @@ function CapitalLoans() {
       </div>
       {showNew && <NewCapitalModal onClose={()=>setShowNew(false)} />}
       {editCapital && <NewCapitalModal onClose={()=>setEditCapital(null)} existing={editCapital} />}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// PROJECT P&L — Pontoon vs WTP side by side
+// ════════════════════════════════════════════════════
+function ProjectPnL() {
+  const { items: bills }     = useBills();
+  const { items: advances }  = useAdvances();
+  const { items: pos }       = usePurchaseOrders();
+  const { items: wos }       = useWorkOrders();
+  const { items: milestones }= useMilestones();
+  const { items: receipts }  = useReceipts();
+  const { items: petty }     = usePettyCash();
+  const { items: capital }   = useCapitalLoans();
+
+  function calcProject(proj) {
+    // proj = 'Pontoon' | 'WTP'
+    const match = (item) => item.project === proj || item.project === 'Both';
+
+    // ── INCOME ──────────────────────────────────────
+    // Client receipts
+    const receiptIncome = receipts.filter(r => {
+      const sched = r.project || r.scheduleProject;
+      return sched === proj || sched === 'Both';
+    }).reduce((s,r) => s + Number(r.amountReceived||0), 0);
+
+    // Payment milestones received
+    const milestoneIncome = milestones.filter(m => m.paid && match(m)).reduce((s,m) => s + Number(m.amount||0), 0);
+
+    // Capital inflows tagged to this project
+    const capitalIncome = capital.filter(c => match(c)).reduce((s,c) => s + Number(c.amount||0), 0);
+
+    const totalIncome = receiptIncome + milestoneIncome + capitalIncome;
+
+    // ── EXPENSES ─────────────────────────────────────
+    const billExp    = bills.filter(b => match(b) && !b.paid === false || (match(b))).reduce((s,b) => s + Number(b.amount||0), 0);
+    const advanceExp = advances.filter(a => match(a)).reduce((s,a) => s + Number(a.amount||0), 0);
+    const poExp      = pos.filter(p => match(p)).reduce((s,p) => s + Number(p.value||0), 0);
+    const woExp      = wos.filter(w => match(w)).reduce((s,w) => s + Number(w.value||0), 0);
+    const pettyExp   = petty.filter(p => match(p)).reduce((s,p) => s + Number(p.amount||0), 0);
+
+    const totalExpenses = billExp + advanceExp + pettyExp;
+    const totalCommitted = poExp + woExp; // POs/WOs are commitments, not yet paid
+
+    const margin = totalIncome - totalExpenses;
+    const marginPct = totalIncome > 0 ? Math.round((margin / totalIncome) * 100) : 0;
+
+    return {
+      receiptIncome, milestoneIncome, capitalIncome, totalIncome,
+      billExp, advanceExp, poExp, woExp, pettyExp,
+      totalExpenses, totalCommitted, margin, marginPct,
+      billCount:    bills.filter(b=>match(b)).length,
+      poCount:      pos.filter(p=>match(p)).length,
+      woCount:      wos.filter(w=>match(w)).length,
+      pettyCount:   petty.filter(p=>match(p)).length,
+    };
+  }
+
+  const pontoon = calcProject('Pontoon');
+  const wtp     = calcProject('WTP');
+  const combined = {
+    totalIncome:    pontoon.totalIncome + wtp.totalIncome,
+    totalExpenses:  pontoon.totalExpenses + wtp.totalExpenses,
+    totalCommitted: pontoon.totalCommitted + wtp.totalCommitted,
+    margin:         pontoon.margin + wtp.margin,
+  };
+
+  function PnLCard({ label, pData, color }) {
+    const isPositive = pData.margin >= 0;
+    return (
+      <div style={{flex:1,border:`2px solid ${color}`,borderRadius:10,overflow:'hidden'}}>
+        {/* Header */}
+        <div style={{background:color,padding:'12px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <span style={{fontWeight:800,fontSize:15,color:'#fff'}}>{label}</span>
+          <span style={{fontSize:11,color:'rgba(255,255,255,.75)',fontWeight:500}}>Project P&L</span>
+        </div>
+
+        {/* Margin highlight */}
+        <div style={{background: isPositive ? 'var(--green-50)' : 'var(--red-50)', padding:'12px 16px',borderBottom:`1px solid ${color}20`}}>
+          <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.5,marginBottom:2}}>Net Margin</div>
+          <div style={{fontFamily:'var(--font-mono)',fontSize:24,fontWeight:800,color:isPositive?'var(--green)':'var(--red)'}}>
+            {inr(pData.margin)}
+          </div>
+          <div style={{fontSize:11.5,color:'var(--text-muted)',marginTop:2}}>{pData.marginPct}% of income</div>
+        </div>
+
+        {/* Income breakdown */}
+        <div style={{padding:'12px 16px',borderBottom:'1px solid var(--border)'}}>
+          <div style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:.5,color:'var(--green)',marginBottom:8}}>Income</div>
+          <div className="flex justify-between" style={{marginBottom:4}}>
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Client Receipts</span>
+            <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--green)'}}>{inr(pData.receiptIncome)}</span>
+          </div>
+          <div className="flex justify-between" style={{marginBottom:4}}>
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Payment Milestones</span>
+            <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--green)'}}>{inr(pData.milestoneIncome)}</span>
+          </div>
+          <div className="flex justify-between" style={{paddingTop:6,borderTop:'1px solid var(--grey-50)'}}>
+            <span style={{fontSize:12.5,fontWeight:700}}>Total Income</span>
+            <span className="amount" style={{fontSize:12.5,fontWeight:700,color:'var(--green)'}}>{inr(pData.totalIncome)}</span>
+          </div>
+        </div>
+
+        {/* Expenses breakdown */}
+        <div style={{padding:'12px 16px',borderBottom:'1px solid var(--border)'}}>
+          <div style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:.5,color:'var(--red)',marginBottom:8}}>Expenses (Paid)</div>
+          <div className="flex justify-between" style={{marginBottom:4}}>
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Bills ({pData.billCount})</span>
+            <span className="amount" style={{fontSize:12,color:'var(--red)'}}>{inr(pData.billExp)}</span>
+          </div>
+          <div className="flex justify-between" style={{marginBottom:4}}>
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Advance Payments</span>
+            <span className="amount" style={{fontSize:12,color:'var(--red)'}}>{inr(pData.advanceExp)}</span>
+          </div>
+          <div className="flex justify-between" style={{marginBottom:4}}>
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Petty Cash ({pData.pettyCount})</span>
+            <span className="amount" style={{fontSize:12,color:'var(--red)'}}>{inr(pData.pettyExp)}</span>
+          </div>
+          <div className="flex justify-between" style={{paddingTop:6,borderTop:'1px solid var(--grey-50)'}}>
+            <span style={{fontSize:12.5,fontWeight:700}}>Total Expenses</span>
+            <span className="amount" style={{fontSize:12.5,fontWeight:700,color:'var(--red)'}}>{inr(pData.totalExpenses)}</span>
+          </div>
+        </div>
+
+        {/* Commitments */}
+        <div style={{padding:'12px 16px',background:'var(--grey-50)'}}>
+          <div style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:.5,color:'var(--amber)',marginBottom:8}}>Committed (Not Yet Paid)</div>
+          <div className="flex justify-between" style={{marginBottom:4}}>
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Purchase Orders ({pData.poCount})</span>
+            <span className="amount" style={{fontSize:12,color:'var(--amber)'}}>{inr(pData.poExp)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Work Orders ({pData.woCount})</span>
+            <span className="amount" style={{fontSize:12,color:'var(--amber)'}}>{inr(pData.woExp)}</span>
+          </div>
+          <div className="flex justify-between" style={{paddingTop:6,borderTop:'1px solid var(--border)',marginTop:6}}>
+            <span style={{fontSize:12.5,fontWeight:700}}>Total Committed</span>
+            <span className="amount" style={{fontSize:12.5,fontWeight:700,color:'var(--amber)'}}>{inr(pData.totalCommitted)}</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Project P&L</div>
+          <div className="section-sub">Pontoon vs WTP — income, expenses, commitments</div>
+        </div>
+      </div>
+
+      {/* Combined summary */}
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginBottom:20}}>
+        <div className="stat-card"><div className="stat-label">Combined Income</div><div className="stat-value green">{inr(combined.totalIncome)}</div></div>
+        <div className="stat-card"><div className="stat-label">Combined Expenses</div><div className="stat-value red">{inr(combined.totalExpenses)}</div></div>
+        <div className="stat-card"><div className="stat-label">Combined Committed</div><div className="stat-value amber">{inr(combined.totalCommitted)}</div></div>
+        <div className="stat-card">
+          <div className="stat-label">Combined Net Margin</div>
+          <div className={`stat-value ${combined.margin>=0?'green':'red'}`}>{inr(combined.margin)}</div>
+        </div>
+      </div>
+
+      {/* Side-by-side P&L cards */}
+      <div style={{display:'flex',gap:16,alignItems:'flex-start'}}>
+        <PnLCard label="Pontoon" pData={pontoon} color="var(--primary)" />
+        <PnLCard label="WTP" pData={wtp} color="var(--secondary)" />
+      </div>
+
+      <div style={{marginTop:14,padding:'10px 14px',background:'var(--grey-50)',borderRadius:8,fontSize:11.5,color:'var(--text-muted)'}}>
+        💡 Data reflects all entries tagged Pontoon, WTP, or Both. Entries tagged Both are counted in full for each project — they are not split. To see only this project's portion of shared expenses, adjust manually.
+      </div>
     </div>
   );
 }
@@ -4487,6 +4683,7 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
             <label className="form-label">Dispute Resolution Clause</label>
             <input className="form-input" value={form.disputeClause} onChange={e=>set('disputeClause', e.target.value)} placeholder="Optional" />
           </div>
+          <ProjectSelect value={form.project||''} onChange={v=>set('project',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -4674,8 +4871,8 @@ function NewMilestoneModal({ onClose, pos, existing }) {
   const [form, setForm] = useState(isEdit ? {
     name: existing.name||'', pct: existing.pct||'',
     amount: existing.amount ? String(existing.amount) : '',
-    due: existing.due||'', po: existing.po||'', wo: existing.wo||''
-  } : { name: '', pct: '', amount: '', due: '', po: '', wo: '' });
+    due: existing.due||'', po: existing.po||'', wo: existing.wo||'', project: existing.project||''
+  } : { name: '', pct: '', amount: '', due: '', po: '', wo: '', project: '' });
   const [saving, setSaving] = useState(false);
   function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
 
@@ -4736,6 +4933,7 @@ function NewMilestoneModal({ onClose, pos, existing }) {
               <input className="form-input font-mono" value={form.wo} onChange={e=>set('wo', e.target.value)} placeholder="WO-2026-0XX" />
             </div>
           </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -5405,11 +5603,11 @@ function NewRequisitionModal({ onClose, nextNumber, currentUser, existing }) {
     req: existing.req||nextNumber, date: existing.date||'',
     raisedBy: existing.raisedBy||currentUser.name, raisedByUid: existing.raisedByUid||currentUser.uid,
     category: existing.category||'Materials', priority: existing.priority||'Normal',
-    project: existing.project||'', description: existing.description||'', status: existing.status||'Open'
+    projectRef: existing.projectRef||'', description: existing.description||'', status: existing.status||'Open', project: existing.project||''
   } : {
     req: nextNumber, date: new Date().toISOString().slice(0,10),
     raisedBy: currentUser.name, raisedByUid: currentUser.uid,
-    category: 'Materials', priority: 'Normal', project: '', description: '', status: 'Open'
+    category: 'Materials', priority: 'Normal', projectRef: '', description: '', status: 'Open', project: ''
   });
   const [lineItems, setLineItems] = useState(isEdit && existing.lineItems ? existing.lineItems : []);
   const [saving, setSaving] = useState(false);
@@ -5476,6 +5674,7 @@ function NewRequisitionModal({ onClose, nextNumber, currentUser, existing }) {
             <textarea className="form-input" rows="2" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="What is needed and why" style={{resize:'vertical'}} />
           </div>
           <LineItemEditor items={lineItems} setItems={setLineItems} />
+          <ProjectSelect value={form.project} onChange={v=>setForm(s=>({...s,project:v}))} required />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -5965,6 +6164,7 @@ const NAV = [
   { id:'purchaseorders', label:'Purchase Orders',  icon:'📦' },
   { id:'crossref',       label:'Cross-Reference',  icon:'🔗' },
   { section: 'Finance' },
+  { id:'projectpnl',     label:'Project P&L',      icon:'📊' },
   { id:'receipts',       label:'Receipts',         icon:'📥' },
   { id:'capital',        label:'Capital & Loans',  icon:'🏦' },
   { id:'paymenttracker', label:'Payment Tracker',  icon:'💳' },
@@ -5991,6 +6191,7 @@ function Module({ id, setActive, currentUser }) {
     case 'workorders':     return <WorkOrders />;
     case 'purchaseorders': return <PurchaseOrders />;
     case 'crossref':       return <CrossReference />;
+    case 'projectpnl':     return <ProjectPnL />;
     case 'receipts':       return <Receipts />;
     case 'capital':        return <CapitalLoans />;
     case 'cashflow':       return <CashFlow />;
@@ -6165,11 +6366,11 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
     quotNo: existing.quotNo||'', vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
     receivedDate: existing.receivedDate||'', linkedReq: existing.linkedReq||'',
-    stage: existing.stage||'Receipt of Quotation', notes: existing.notes||''
+    stage: existing.stage||'Receipt of Quotation', notes: existing.notes||'', project: existing.project||''
   } : {
     quotNo:'', vendorName:'', description:'', value:'',
     receivedDate: new Date().toISOString().slice(0,10),
-    linkedReq:'', stage:'Receipt of Quotation', notes:''
+    linkedReq:'', stage:'Receipt of Quotation', notes:'', project:''
   });
   const [schedule, setSchedule] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -6251,6 +6452,7 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
             <label className="form-label">Notes / Negotiation Points</label>
             <textarea className="form-input" rows="2" value={form.notes} onChange={e=>set('notes',e.target.value)} style={{resize:'vertical'}} />
           </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -6283,7 +6485,7 @@ function SettingsWithUser({ currentUser }) {
 const TITLES = {
   dashboard:'Dashboard', tasks:'Tasks', requisitions:'Requisitions',
   quotations:'Quotations', workorders:'Work Orders', purchaseorders:'Purchase Orders',
-  crossref:'Cross-Reference', receipts:'Receipts', capital:'Capital & Loans',
+  crossref:'Cross-Reference', projectpnl:'Project P&L', receipts:'Receipts', capital:'Capital & Loans',
   paymenttracker:'Payment Tracker', billpayments:'Bill Payments',
   cashflow:'Cash Flow', pettycash:'Petty Cash', projects:'Projects',
   vendors:'Vendor Master', documents:'Document Vault', chat:'Team Chat',
