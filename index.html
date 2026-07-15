@@ -944,7 +944,7 @@ function NewTaskModal({ onClose, existing }) {
             <div className="form-group">
               <label className="form-label">Assigned Staff</label>
               <select className="form-input form-select" value={form.assigned} onChange={e=>set('assigned', e.target.value)}>
-                <option>Neer</option><option>Manav</option><option>Vikram Singh</option><option>Amardeep Singh</option><option>Pritesh</option><option>Hardik</option><option>Kushan</option>
+                {(window.appLists?.employees||DEFAULT_LISTS.employees).map(n=><option key={n}>{n}</option>)}
               </select>
             </div>
             <div className="form-group">
@@ -2170,7 +2170,7 @@ function NewBillModal({ onClose, existing }) {
             <div className="form-group">
               <label className="form-label">Category</label>
               <select className="form-input form-select" value={form.category} onChange={e=>set('category', e.target.value)}>
-                <option>Vendor</option><option>Fixed</option><option>Professional</option><option>Utilities</option><option>Logistics</option><option>GST/Govt</option>
+                {(window.appLists?.billCategories||DEFAULT_LISTS.billCategories).map(c=><option key={c}>{c}</option>)}
               </select>
             </div>
             <div className="form-group">
@@ -2264,7 +2264,7 @@ function NewAdvanceModal({ onClose, pos, bills }) {
             <div className="form-group">
               <label className="form-label">Payment Mode</label>
               <select className="form-input form-select" value={form.paymentMode} onChange={e=>set('paymentMode',e.target.value)}>
-                {PAYMENT_MODES.map(m=><option key={m}>{m}</option>)}
+                {(window.appLists?.paymentModes||DEFAULT_LISTS.paymentModes).map(m=><option key={m}>{m}</option>)}
               </select>
             </div>
             <div className="form-group">
@@ -2478,7 +2478,7 @@ function BillPayments() {
               <div className="flex gap-2">
                 <select className="form-input form-select" style={{width:150}} onChange={e=>setCatFilter(e.target.value)}>
                   <option value="all">All Categories</option>
-                  <option>Vendor</option><option>Fixed</option><option>Professional</option><option>Utilities</option><option>Logistics</option><option>GST/Govt</option>
+                  {(window.appLists?.billCategories||DEFAULT_LISTS.billCategories).map(c=><option key={c}>{c}</option>)}
                 </select>
                 <select className="form-input form-select" style={{width:140}} onChange={e=>setStatusFilter(e.target.value)}>
                   <option value="all">All Status</option>
@@ -3054,7 +3054,7 @@ function RecordReceiptModal({ raBill, onClose, allReceipts }) {
             <div className="form-group">
               <label className="form-label">Payment Mode</label>
               <select className="form-input form-select" value={form.paymentMode} onChange={e=>set('paymentMode',e.target.value)}>
-                {PAYMENT_MODES.map(m=><option key={m}>{m}</option>)}
+                {(window.appLists?.paymentModes||DEFAULT_LISTS.paymentModes).map(m=><option key={m}>{m}</option>)}
               </select>
             </div>
           </div>
@@ -3477,13 +3477,13 @@ function NewPettyModal({ onClose, currentUser, existing }) {
             <div className="form-group">
               <label className="form-label">Category</label>
               <select className="form-input form-select" value={form.category} onChange={e=>set('category',e.target.value)}>
-                {PETTY_CATEGORIES.map(c=><option key={c}>{c}</option>)}
+                {(window.appLists?.pettyCategories||DEFAULT_LISTS.pettyCategories).map(c=><option key={c}>{c}</option>)}
               </select>
             </div>
             <div className="form-group">
               <label className="form-label">Paid By</label>
               <select className="form-input form-select" value={form.paidBy} onChange={e=>set('paidBy',e.target.value)}>
-                {['Neer','Manav','Vikram Singh','Amardeep Singh','Pritesh','Hardik','Kushan'].map(n=><option key={n}>{n}</option>)}
+                {(window.appLists?.employees||DEFAULT_LISTS.employees).map(n=><option key={n}>{n}</option>)}
               </select>
             </div>
           </div>
@@ -3527,7 +3527,7 @@ function PettyCash({ currentUser }) {
   const totalAll = items.reduce((s,i)=>s+Number(i.amount||0),0);
 
   // Category breakdown for filtered period
-  const byCategory = PETTY_CATEGORIES.map(cat=>({
+  const byCategory = (window.appLists?.pettyCategories||DEFAULT_LISTS.pettyCategories).map(cat=>({
     cat,
     amt: filtered.filter(i=>i.category===cat).reduce((s,i)=>s+Number(i.amount||0),0)
   })).filter(c=>c.amt>0).sort((a,b)=>b.amt-a.amt);
@@ -3620,7 +3620,7 @@ function PettyCash({ currentUser }) {
           <div className="flex gap-2">
             <select className="form-input form-select" style={{width:160}} onChange={e=>setCatFilter(e.target.value)}>
               <option value="all">All Categories</option>
-              {PETTY_CATEGORIES.map(c=><option key={c}>{c}</option>)}
+              {(window.appLists?.pettyCategories||DEFAULT_LISTS.pettyCategories).map(c=><option key={c}>{c}</option>)}
             </select>
             <select className="form-input form-select" style={{width:140}} onChange={e=>setPaidByFilter(e.target.value)}>
               <option value="all">All Staff</option>
@@ -3776,7 +3776,7 @@ function NewCapitalModal({ onClose, existing }) {
             <div className="form-group">
               <label className="form-label">Type</label>
               <select className="form-input form-select" value={form.type} onChange={e=>set('type',e.target.value)}>
-                {CAPITAL_TYPES.map(t=><option key={t}>{t}</option>)}
+                {(window.appLists?.capitalTypes||DEFAULT_LISTS.capitalTypes).map(t=><option key={t}>{t}</option>)}
               </select>
             </div>
             <div className="form-group">
@@ -5359,7 +5359,154 @@ const STAFF = [
   { uid:'kushan',    name:'Kushan',        initials:'K', role:'field_staff', email:'kushan@nirmaanwatertech.com' },
 ];
 
-// Default permissions per role — Vatsal can override in Settings
+// ─── Configurable Lists ───────────────────────────────
+// Stored in Firestore settings/lists — editable from Settings
+const DEFAULT_LISTS = {
+  employees:      ['Neer','Manav','Vikram Singh','Amardeep Singh','Pritesh','Hardik','Kushan'],
+  pettyCategories:['Auto / Fuel','Tea & Snacks','Courier','Stationery','Site Travel','Minor Hardware','Telephone / Recharge','Printing','Bank Charges','Miscellaneous'],
+  billCategories: ['Vendor','Fixed','Professional','Utilities','Logistics','GST/Govt'],
+  paymentModes:   ['NEFT','RTGS','Cheque','Cash','UPI','Other'],
+  capitalTypes:   ['Investor Fund','Bank Loan','Overdraft','Owner Capital Injection','Grant','Other'],
+  reqCategories:  ['Materials','Services','Both'],
+  reqPriorities:  ['Urgent','Normal','Low'],
+};
+
+// Global lists — updated by useLists hook on mount
+window.appLists = { ...DEFAULT_LISTS };
+
+function useLists() {
+  const [lists, setLists] = useState(window.appLists);
+  useEffect(() => {
+    function start() {
+      const { db, doc, onSnapshot } = window.fb;
+      const unsub = onSnapshot(doc(db, 'settings', 'lists'), snap => {
+        if (snap.exists()) {
+          const data = snap.data();
+          // Merge with defaults so any missing key falls back
+          const merged = { ...DEFAULT_LISTS, ...data };
+          window.appLists = merged;
+          setLists(merged);
+        }
+      }, err => console.error('Lists listener', err));
+      return unsub;
+    }
+    if (window.fb) { const u = start(); return () => u && u(); }
+    let u; const h = () => { u = start(); };
+    window.addEventListener('firebase-ready', h, { once: true });
+    return () => { window.removeEventListener('firebase-ready', h); if (u) u(); };
+  }, []);
+  return lists;
+}
+
+async function saveLists(lists) {
+  const { db, doc, setDoc } = window.fb;
+  await setDoc(doc(db, 'settings', 'lists'), lists, { merge: true });
+  window.appLists = { ...window.appLists, ...lists };
+}
+
+// ─── Lists Manager Component ──────────────────────────
+function ListsManager() {
+  const lists = useLists();
+  const [localLists, setLocalLists] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [newItems, setNewItems] = useState({});
+
+  // Init local copy when lists load
+  useEffect(() => { setLocalLists({ ...lists }); }, [JSON.stringify(lists)]);
+
+  if (!localLists) return <div style={{padding:16,color:'var(--text-muted)',fontSize:12}}>Loading lists…</div>;
+
+  function removeItem(listKey, idx) {
+    setLocalLists(l => ({ ...l, [listKey]: l[listKey].filter((_,i) => i !== idx) }));
+  }
+
+  function addItem(listKey) {
+    const val = (newItems[listKey] || '').trim();
+    if (!val) return;
+    if (localLists[listKey].includes(val)) return;
+    setLocalLists(l => ({ ...l, [listKey]: [...l[listKey], val] }));
+    setNewItems(n => ({ ...n, [listKey]: '' }));
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await saveLists(localLists);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch(e) { console.error(e); alert('Could not save.'); }
+    finally { setSaving(false); }
+  }
+
+  const SECTIONS = [
+    { key: 'employees',       label: '👷 Employees', desc: 'Used in: Task assigned-to, Petty Cash paid-by' },
+    { key: 'pettyCategories', label: '💰 Petty Cash Categories', desc: 'Used in: Petty Cash entry category' },
+    { key: 'billCategories',  label: '📑 Bill Categories', desc: 'Used in: Bill Payments category' },
+    { key: 'paymentModes',    label: '💳 Payment Modes', desc: 'Used in: Advance Payments, Receipts, Capital & Loans' },
+    { key: 'capitalTypes',    label: '🏦 Capital / Loan Types', desc: 'Used in: Capital & Loans type selector' },
+    { key: 'reqCategories',   label: '📝 Requisition Categories', desc: 'Used in: Requisitions category' },
+    { key: 'reqPriorities',   label: '🔺 Requisition Priorities', desc: 'Used in: Requisitions priority' },
+  ];
+
+  return (
+    <div className="card">
+      <div className="card-header" style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <span className="card-title">Lists Manager</span>
+        <button className="btn btn-sm btn-primary" onClick={handleSave} disabled={saving}>
+          {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save All Changes'}
+        </button>
+      </div>
+      <div className="card-body">
+        <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:16}}>
+          Changes apply immediately across all modules after saving.
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+          {SECTIONS.map(sec => (
+            <div key={sec.key} style={{border:'1px solid var(--border)',borderRadius:8,overflow:'hidden'}}>
+              <div style={{background:'var(--grey-50)',padding:'8px 12px',borderBottom:'1px solid var(--border)'}}>
+                <div style={{fontWeight:700,fontSize:12.5}}>{sec.label}</div>
+                <div style={{fontSize:10.5,color:'var(--text-muted)',marginTop:1}}>{sec.desc}</div>
+              </div>
+              <div style={{padding:'8px 12px'}}>
+                {/* Existing items */}
+                <div style={{marginBottom:8}}>
+                  {localLists[sec.key].map((item, idx) => (
+                    <div key={idx} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'4px 0',borderBottom:'1px solid var(--grey-50)'}}>
+                      <span style={{fontSize:12.5}}>{item}</span>
+                      <span onClick={() => removeItem(sec.key, idx)}
+                        style={{cursor:'pointer',color:'var(--red)',fontSize:16,lineHeight:1,padding:'0 4px',flexShrink:0}}
+                        title="Remove">×</span>
+                    </div>
+                  ))}
+                  {localLists[sec.key].length === 0 && (
+                    <div style={{fontSize:11.5,color:'var(--text-muted)',padding:'4px 0'}}>No items — add one below.</div>
+                  )}
+                </div>
+                {/* Add new */}
+                <div style={{display:'flex',gap:6}}>
+                  <input
+                    className="form-input"
+                    style={{fontSize:12,padding:'5px 8px',flex:1}}
+                    value={newItems[sec.key] || ''}
+                    onChange={e => setNewItems(n => ({ ...n, [sec.key]: e.target.value }))}
+                    onKeyDown={e => e.key === 'Enter' && addItem(sec.key)}
+                    placeholder="Add new…"
+                  />
+                  <button
+                    onClick={() => addItem(sec.key)}
+                    style={{background:'var(--primary)',color:'#fff',border:'none',borderRadius:4,padding:'5px 10px',fontSize:12,cursor:'pointer',flexShrink:0}}>
+                    + Add
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 const DEFAULT_PERMISSIONS = {
   owner:       { raise_requisition:true,  enter_quotation:true,  approve_quotation:true,  issue_po:true,  issue_wo:true,  mark_payment:true,  view_cashflow:true,  edit_settings:true  },
   manager:     { raise_requisition:true,  enter_quotation:true,  approve_quotation:true,  issue_po:true,  issue_wo:true,  mark_payment:true,  view_cashflow:true,  edit_settings:false },
@@ -5654,7 +5801,7 @@ function NewRequisitionModal({ onClose, nextNumber, currentUser, existing }) {
             <div className="form-group">
               <label className="form-label">Priority</label>
               <select className="form-input form-select" value={form.priority} onChange={e=>set('priority',e.target.value)}>
-                {REQ_PRIORITIES.map(p=><option key={p}>{p}</option>)}
+                {(window.appLists?.reqPriorities||DEFAULT_LISTS.reqPriorities).map(p=><option key={p}>{p}</option>)}
               </select>
             </div>
           </div>
@@ -5662,7 +5809,7 @@ function NewRequisitionModal({ onClose, nextNumber, currentUser, existing }) {
             <div className="form-group">
               <label className="form-label">Category</label>
               <select className="form-input form-select" value={form.category} onChange={e=>set('category',e.target.value)}>
-                {REQ_CATEGORIES.map(c=><option key={c}>{c}</option>)}
+                {(window.appLists?.reqCategories||DEFAULT_LISTS.reqCategories).map(c=><option key={c}>{c}</option>)}
               </select>
             </div>
             <div className="form-group">
@@ -6476,6 +6623,9 @@ function SettingsWithUser({ currentUser }) {
       </div>
       <div style={{marginBottom:20}}>
         <PermissionMatrix currentUser={currentUser} />
+      </div>
+      <div style={{marginBottom:20}}>
+        <ListsManager />
       </div>
       <Settings currentUser={currentUser} />
     </div>
