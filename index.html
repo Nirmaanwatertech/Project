@@ -279,30 +279,24 @@ const inr = (n) => '₹' + Number(n).toLocaleString('en-IN');
 // These helpers resolve the correct path for every read/write operation.
 
 function getUserUID() {
+  // Read from Firebase Auth directly — always in sync, no timing issues
+  if (window.fb?.auth?.currentUser?.uid) return window.fb.auth.currentUser.uid;
+  // Fallback to window.currentUser set by onAuthStateChanged
   return window.currentUser?.uid || null;
 }
 
 function userCol(colName) {
-  // Returns a Firestore collection reference under the current user
   const { db, collection } = window.fb;
   const uid = getUserUID();
-  if (!uid) throw new Error('Not authenticated — cannot access collection: ' + colName);
+  if (!uid) throw new Error('Not authenticated — cannot access: ' + colName);
   return collection(db, 'users', uid, colName);
 }
 
 function userDoc(colName, docId) {
-  // Returns a Firestore doc reference under the current user
   const { db, doc } = window.fb;
   const uid = getUserUID();
-  if (!uid) throw new Error('Not authenticated — cannot access document: ' + colName + '/' + docId);
+  if (!uid) throw new Error('Not authenticated — cannot access: ' + colName + '/' + docId);
   return doc(db, 'users', uid, colName, docId);
-}
-
-function userDocRef(colName) {
-  // Returns a new auto-ID doc reference (for addDoc pattern with manual ID)
-  const { db, doc, collection } = window.fb;
-  const uid = getUserUID();
-  return collection(db, 'users', uid, colName);
 }
 
 // ─── Projects ─────────────────────────────────────────
@@ -1237,11 +1231,17 @@ function useWorkOrders() {
       }, (err) => { console.error('WO listener error', err); setLoading(false); });
       return unsub;
     }
-    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    if (window.fb && getUserUID()) { const unsub = start(); return () => unsub && unsub(); }
     let unsub;
-    const handler = () => { unsub = start(); };
+    const handler = () => { if(getUserUID()) { unsub = start(); } };
+    const userHandler = () => { if(unsub) unsub(); if(window.fb) unsub = start(); };
     window.addEventListener('firebase-ready', handler, { once: true });
-    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+    window.addEventListener('user-ready', userHandler, { once: true });
+    return () => {
+      window.removeEventListener('firebase-ready', handler);
+      window.removeEventListener('user-ready', userHandler);
+      if (unsub) unsub();
+    };
   }, []);
   return { items, loading };
 }
@@ -1562,11 +1562,17 @@ function usePurchaseOrders() {
       }, (err) => { console.error('PO listener error', err); setLoading(false); });
       return unsub;
     }
-    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    if (window.fb && getUserUID()) { const unsub = start(); return () => unsub && unsub(); }
     let unsub;
-    const handler = () => { unsub = start(); };
+    const handler = () => { if(getUserUID()) { unsub = start(); } };
+    const userHandler = () => { if(unsub) unsub(); if(window.fb) unsub = start(); };
     window.addEventListener('firebase-ready', handler, { once: true });
-    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+    window.addEventListener('user-ready', userHandler, { once: true });
+    return () => {
+      window.removeEventListener('firebase-ready', handler);
+      window.removeEventListener('user-ready', userHandler);
+      if (unsub) unsub();
+    };
   }, []);
   return { items, loading };
 }
@@ -2079,11 +2085,17 @@ function useBills() {
       }, (err) => { console.error('Bills listener error', err); setLoading(false); });
       return unsub;
     }
-    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    if (window.fb && getUserUID()) { const unsub = start(); return () => unsub && unsub(); }
     let unsub;
-    const handler = () => { unsub = start(); };
+    const handler = () => { if(getUserUID()) { unsub = start(); } };
+    const userHandler = () => { if(unsub) unsub(); if(window.fb) unsub = start(); };
     window.addEventListener('firebase-ready', handler, { once: true });
-    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+    window.addEventListener('user-ready', userHandler, { once: true });
+    return () => {
+      window.removeEventListener('firebase-ready', handler);
+      window.removeEventListener('user-ready', userHandler);
+      if (unsub) unsub();
+    };
   }, []);
   return { items, loading };
 }
@@ -2121,11 +2133,17 @@ function useAdvances() {
       }, (err) => { console.error('Advances listener error', err); setLoading(false); });
       return unsub;
     }
-    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    if (window.fb && getUserUID()) { const unsub = start(); return () => unsub && unsub(); }
     let unsub;
-    const handler = () => { unsub = start(); };
+    const handler = () => { if(getUserUID()) { unsub = start(); } };
+    const userHandler = () => { if(unsub) unsub(); if(window.fb) unsub = start(); };
     window.addEventListener('firebase-ready', handler, { once: true });
-    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+    window.addEventListener('user-ready', userHandler, { once: true });
+    return () => {
+      window.removeEventListener('firebase-ready', handler);
+      window.removeEventListener('user-ready', userHandler);
+      if (unsub) unsub();
+    };
   }, []);
   return { items, loading };
 }
@@ -2637,10 +2655,13 @@ function useBillingSchedules() {
       );
       return unsub;
     }
-    if (window.fb) { const u=start(); return ()=>u&&u(); }
-    let u; const h=()=>{u=start();};
+    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+    let u;
+    const h=()=>{ if(getUserUID()) u=start(); };
+    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
     window.addEventListener('firebase-ready',h,{once:true});
-    return ()=>{ window.removeEventListener('firebase-ready',h); if(u) u(); };
+    window.addEventListener('user-ready',hu,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u) u(); };
   },[]);
   return {items,loading};
 }
@@ -2658,10 +2679,13 @@ function useRABills() {
       );
       return unsub;
     }
-    if (window.fb) { const u=start(); return ()=>u&&u(); }
-    let u; const h=()=>{u=start();};
+    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+    let u;
+    const h=()=>{ if(getUserUID()) u=start(); };
+    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
     window.addEventListener('firebase-ready',h,{once:true});
-    return ()=>{ window.removeEventListener('firebase-ready',h); if(u) u(); };
+    window.addEventListener('user-ready',hu,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u) u(); };
   },[]);
   return {items,loading};
 }
@@ -2679,10 +2703,13 @@ function useReceipts() {
       );
       return unsub;
     }
-    if (window.fb) { const u=start(); return ()=>u&&u(); }
-    let u; const h=()=>{u=start();};
+    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+    let u;
+    const h=()=>{ if(getUserUID()) u=start(); };
+    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
     window.addEventListener('firebase-ready',h,{once:true});
-    return ()=>{ window.removeEventListener('firebase-ready',h); if(u) u(); };
+    window.addEventListener('user-ready',hu,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u) u(); };
   },[]);
   return {items,loading};
 }
@@ -3424,10 +3451,13 @@ function usePettyCash() {
       );
       return unsub;
     }
-    if (window.fb) { const u=start(); return ()=>u&&u(); }
-    let u; const h=()=>{u=start();};
+    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+    let u;
+    const h=()=>{ if(getUserUID()) u=start(); };
+    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
     window.addEventListener('firebase-ready',h,{once:true});
-    return ()=>{ window.removeEventListener('firebase-ready',h); if(u) u(); };
+    window.addEventListener('user-ready',hu,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u) u(); };
   },[]);
   return {items,loading};
 }
@@ -3734,10 +3764,13 @@ function useCapitalLoans() {
       }, err => { console.error('Capital listener', err); setLoading(false); });
       return unsub;
     }
-    if (window.fb) { const u = start(); return () => u && u(); }
-    let u; const h = () => { u = start(); };
+    if (window.fb && getUserUID()) { const u = start(); return () => u && u(); }
+    let u;
+    const h = () => { if(getUserUID()) u = start(); };
+    const hu = () => { if(u) u(); if(window.fb) u = start(); };
     window.addEventListener('firebase-ready', h, { once: true });
-    return () => { window.removeEventListener('firebase-ready', h); if (u) u(); };
+    window.addEventListener('user-ready', hu, { once: true });
+    return () => { window.removeEventListener('firebase-ready', h); window.removeEventListener('user-ready', hu); if (u) u(); };
   }, []);
   return { items, loading };
 }
@@ -4167,10 +4200,17 @@ function useReminders() {
       );
       return unsub;
     }
-    if (window.fb) { const u=start(); return ()=>u&&u(); }
-    let u; const h=()=>{u=start();};
-    window.addEventListener('firebase-ready',h,{once:true});
-    return ()=>{ window.removeEventListener('firebase-ready',h); if(u)u(); };
+    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+    let u;
+    const hFb=()=>{ if(getUserUID()) u=start(); };
+    const hUser=()=>{ if(u) u(); u=start(); };
+    window.addEventListener('firebase-ready',hFb,{once:true});
+    window.addEventListener('user-ready',hUser,{once:true});
+    return ()=>{
+      window.removeEventListener('firebase-ready',hFb);
+      window.removeEventListener('user-ready',hUser);
+      if(u) u();
+    };
   },[]);
   return {items,loading};
 }
@@ -4729,11 +4769,17 @@ function useVendors() {
       }, (err) => { console.error('Vendors listener error', err); setLoading(false); });
       return unsub;
     }
-    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    if (window.fb && getUserUID()) { const unsub = start(); return () => unsub && unsub(); }
     let unsub;
-    const handler = () => { unsub = start(); };
+    const handler = () => { if(getUserUID()) { unsub = start(); } };
+    const userHandler = () => { if(unsub) unsub(); if(window.fb) unsub = start(); };
     window.addEventListener('firebase-ready', handler, { once: true });
-    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+    window.addEventListener('user-ready', userHandler, { once: true });
+    return () => {
+      window.removeEventListener('firebase-ready', handler);
+      window.removeEventListener('user-ready', userHandler);
+      if (unsub) unsub();
+    };
   }, []);
   return { items, loading };
 }
@@ -5039,11 +5085,17 @@ function useQuotations() {
       }, (err) => { console.error('Quotations listener error', err); setLoading(false); });
       return unsub;
     }
-    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    if (window.fb && getUserUID()) { const unsub = start(); return () => unsub && unsub(); }
     let unsub;
-    const handler = () => { unsub = start(); };
+    const handler = () => { if(getUserUID()) { unsub = start(); } };
+    const userHandler = () => { if(unsub) unsub(); if(window.fb) unsub = start(); };
     window.addEventListener('firebase-ready', handler, { once: true });
-    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+    window.addEventListener('user-ready', userHandler, { once: true });
+    return () => {
+      window.removeEventListener('firebase-ready', handler);
+      window.removeEventListener('user-ready', userHandler);
+      if (unsub) unsub();
+    };
   }, []);
   return { items, loading };
 }
@@ -5355,11 +5407,17 @@ function useMilestones() {
       }, (err) => { console.error('Milestones listener error', err); setLoading(false); });
       return unsub;
     }
-    if (window.fb) { const unsub = start(); return () => unsub && unsub(); }
+    if (window.fb && getUserUID()) { const unsub = start(); return () => unsub && unsub(); }
     let unsub;
-    const handler = () => { unsub = start(); };
+    const handler = () => { if(getUserUID()) { unsub = start(); } };
+    const userHandler = () => { if(unsub) unsub(); if(window.fb) unsub = start(); };
     window.addEventListener('firebase-ready', handler, { once: true });
-    return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+    window.addEventListener('user-ready', userHandler, { once: true });
+    return () => {
+      window.removeEventListener('firebase-ready', handler);
+      window.removeEventListener('user-ready', userHandler);
+      if (unsub) unsub();
+    };
   }, []);
   return { items, loading };
 }
@@ -5907,10 +5965,13 @@ function useLists() {
       }, err => console.error('Lists listener', err));
       return unsub;
     }
-    if (window.fb) { const u = start(); return () => u && u(); }
-    let u; const h = () => { u = start(); };
+    if (window.fb && getUserUID()) { const u = start(); return () => u && u(); }
+    let u;
+    const h = () => { if(getUserUID()) u = start(); };
+    const hu = () => { if(u) u(); if(window.fb) u = start(); };
     window.addEventListener('firebase-ready', h, { once: true });
-    return () => { window.removeEventListener('firebase-ready', h); if (u) u(); };
+    window.addEventListener('user-ready', hu, { once: true });
+    return () => { window.removeEventListener('firebase-ready', h); window.removeEventListener('user-ready', hu); if (u) u(); };
   }, []);
   return lists;
 }
@@ -6235,10 +6296,13 @@ function useRequisitions() {
       }, err => { console.error('REQ listener', err); setLoading(false); });
       return unsub;
     }
-    if (window.fb) { const u = start(); return () => u && u(); }
-    let u; const h = () => { u = start(); };
+    if (window.fb && getUserUID()) { const u = start(); return () => u && u(); }
+    let u;
+    const h = () => { if(getUserUID()) u = start(); };
+    const hu = () => { if(u) u(); if(window.fb) u = start(); };
     window.addEventListener('firebase-ready', h, { once: true });
-    return () => { window.removeEventListener('firebase-ready', h); if (u) u(); };
+    window.addEventListener('user-ready', hu, { once: true });
+    return () => { window.removeEventListener('firebase-ready', h); window.removeEventListener('user-ready', hu); if (u) u(); };
   }, []);
   return { items, loading };
 }
@@ -6719,10 +6783,13 @@ function usePermSettings() {
       }, () => setLoading(false));
       return unsub;
     }
-    if (window.fb) { const u = start(); return () => u && u(); }
-    let u; const h = () => { u = start(); };
+    if (window.fb && getUserUID()) { const u = start(); return () => u && u(); }
+    let u;
+    const h = () => { if(getUserUID()) u = start(); };
+    const hu = () => { if(u) u(); if(window.fb) u = start(); };
     window.addEventListener('firebase-ready', h, { once: true });
-    return () => { window.removeEventListener('firebase-ready', h); if (u) u(); };
+    window.addEventListener('user-ready', hu, { once: true });
+    return () => { window.removeEventListener('firebase-ready', h); window.removeEventListener('user-ready', hu); if (u) u(); };
   }, []);
 
   async function savePerms(newPerms) {
@@ -7246,6 +7313,8 @@ function App() {
               setCurrentUser(profile);
             }
             setAuthLoading(false);
+            // Tell all hooks the user is now authenticated
+            window.dispatchEvent(new CustomEvent('user-ready', { detail: { uid: firebaseUser.uid } }));
           });
           return profileUnsub;
         } else {
