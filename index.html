@@ -3517,7 +3517,16 @@ function PettyCash({ currentUser }) {
   // Month options from entries
   const months = [...new Set(items.map(i=>i.date?.slice(0,7)).filter(Boolean))].sort().reverse();
 
-  const filtered = items.filter(i=>
+  // Sort by actual expense date descending (YYYY-MM-DD string comparison works correctly)
+  const itemsSortedByDate = [...items].sort((a,b) => {
+    const da = a.date || '';
+    const db = b.date || '';
+    if (db > da) return 1;
+    if (db < da) return -1;
+    return 0;
+  });
+
+  const filtered = itemsSortedByDate.filter(i=>
     (catFilter==='all' || i.category===catFilter) &&
     (paidByFilter==='all' || i.paidBy===paidByFilter) &&
     (monthFilter==='all' || (i.date||'').startsWith(monthFilter))
@@ -5412,8 +5421,8 @@ function ListsManager() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [newItems, setNewItems] = useState({});
-  const dragItem = useRef(null);
-  const dragOver = useRef(null);
+  const [dragging, setDragging] = useState(null);   // { listKey, idx }
+  const [dragTarget, setDragTarget] = useState(null); // { listKey, idx }
 
   useEffect(() => { setLocalLists({ ...lists }); }, [JSON.stringify(lists)]);
 
@@ -5431,25 +5440,25 @@ function ListsManager() {
     setNewItems(n => ({ ...n, [listKey]: '' }));
   }
 
-  // Drag handlers — keyed per list so drags don't bleed across sections
   function onDragStart(listKey, idx) {
-    dragItem.current = { listKey, idx };
+    setDragging({ listKey, idx });
   }
   function onDragEnter(listKey, idx) {
-    dragOver.current = { listKey, idx };
+    setDragTarget({ listKey, idx });
   }
   function onDragEnd(listKey) {
-    if (!dragItem.current || !dragOver.current) return;
-    if (dragItem.current.listKey !== listKey) return;
-    if (dragItem.current.idx === dragOver.current.idx) return;
+    if (!dragging || !dragTarget) { setDragging(null); setDragTarget(null); return; }
+    if (dragging.listKey !== listKey || dragging.idx === dragTarget.idx) {
+      setDragging(null); setDragTarget(null); return;
+    }
     setLocalLists(l => {
       const arr = [...l[listKey]];
-      const [moved] = arr.splice(dragItem.current.idx, 1);
-      arr.splice(dragOver.current.idx, 0, moved);
+      const [moved] = arr.splice(dragging.idx, 1);
+      arr.splice(dragTarget.idx, 0, moved);
       return { ...l, [listKey]: arr };
     });
-    dragItem.current = null;
-    dragOver.current = null;
+    setDragging(null);
+    setDragTarget(null);
   }
 
   async function handleSave() {
@@ -5510,8 +5519,10 @@ function ListsManager() {
                         display:'flex', alignItems:'center', justifyContent:'space-between',
                         padding:'5px 4px', borderBottom:'1px solid var(--grey-50)',
                         cursor:'grab', userSelect:'none',
-                        background: dragItem.current?.listKey===sec.key && dragItem.current?.idx===idx ? 'var(--primary-50)' : '',
+                        background: dragging?.listKey===sec.key && dragging?.idx===idx ? 'var(--primary-50)' :
+                                    dragTarget?.listKey===sec.key && dragTarget?.idx===idx ? 'var(--grey-50)' : '',
                         borderRadius:4,
+                        opacity: dragging?.listKey===sec.key && dragging?.idx===idx ? 0.5 : 1,
                       }}>
                       <div style={{display:'flex',alignItems:'center',gap:8}}>
                         <span style={{color:'var(--text-muted)',fontSize:13,cursor:'grab'}}>☰</span>
