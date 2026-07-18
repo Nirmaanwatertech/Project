@@ -3527,7 +3527,8 @@ function PettyCash({ currentUser }) {
   const totalAll = items.reduce((s,i)=>s+Number(i.amount||0),0);
 
   // Category breakdown for filtered period
-  const byCategory = (window.appLists?.pettyCategories||DEFAULT_LISTS.pettyCategories).map(cat=>({
+  const activePettyCategories = window.appLists?.pettyCategories || DEFAULT_LISTS.pettyCategories;
+  const byCategory = activePettyCategories.map(cat=>({
     cat,
     amt: filtered.filter(i=>i.category===cat).reduce((s,i)=>s+Number(i.amount||0),0)
   })).filter(c=>c.amt>0).sort((a,b)=>b.amt-a.amt);
@@ -3620,7 +3621,7 @@ function PettyCash({ currentUser }) {
           <div className="flex gap-2">
             <select className="form-input form-select" style={{width:160}} onChange={e=>setCatFilter(e.target.value)}>
               <option value="all">All Categories</option>
-              {(window.appLists?.pettyCategories||DEFAULT_LISTS.pettyCategories).map(c=><option key={c}>{c}</option>)}
+              {activePettyCategories.map(c=><option key={c}>{c}</option>)}
             </select>
             <select className="form-input form-select" style={{width:140}} onChange={e=>setPaidByFilter(e.target.value)}>
               <option value="all">All Staff</option>
@@ -5411,8 +5412,9 @@ function ListsManager() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [newItems, setNewItems] = useState({});
+  const dragItem = useRef(null);
+  const dragOver = useRef(null);
 
-  // Init local copy when lists load
   useEffect(() => { setLocalLists({ ...lists }); }, [JSON.stringify(lists)]);
 
   if (!localLists) return <div style={{padding:16,color:'var(--text-muted)',fontSize:12}}>Loading lists…</div>;
@@ -5424,9 +5426,30 @@ function ListsManager() {
   function addItem(listKey) {
     const val = (newItems[listKey] || '').trim();
     if (!val) return;
-    if (localLists[listKey].includes(val)) return;
+    if (localLists[listKey].map(s=>s.toLowerCase()).includes(val.toLowerCase())) return;
     setLocalLists(l => ({ ...l, [listKey]: [...l[listKey], val] }));
     setNewItems(n => ({ ...n, [listKey]: '' }));
+  }
+
+  // Drag handlers — keyed per list so drags don't bleed across sections
+  function onDragStart(listKey, idx) {
+    dragItem.current = { listKey, idx };
+  }
+  function onDragEnter(listKey, idx) {
+    dragOver.current = { listKey, idx };
+  }
+  function onDragEnd(listKey) {
+    if (!dragItem.current || !dragOver.current) return;
+    if (dragItem.current.listKey !== listKey) return;
+    if (dragItem.current.idx === dragOver.current.idx) return;
+    setLocalLists(l => {
+      const arr = [...l[listKey]];
+      const [moved] = arr.splice(dragItem.current.idx, 1);
+      arr.splice(dragOver.current.idx, 0, moved);
+      return { ...l, [listKey]: arr };
+    });
+    dragItem.current = null;
+    dragOver.current = null;
   }
 
   async function handleSave() {
@@ -5440,13 +5463,13 @@ function ListsManager() {
   }
 
   const SECTIONS = [
-    { key: 'employees',       label: '👷 Employees', desc: 'Used in: Task assigned-to, Petty Cash paid-by' },
-    { key: 'pettyCategories', label: '💰 Petty Cash Categories', desc: 'Used in: Petty Cash entry category' },
-    { key: 'billCategories',  label: '📑 Bill Categories', desc: 'Used in: Bill Payments category' },
-    { key: 'paymentModes',    label: '💳 Payment Modes', desc: 'Used in: Advance Payments, Receipts, Capital & Loans' },
-    { key: 'capitalTypes',    label: '🏦 Capital / Loan Types', desc: 'Used in: Capital & Loans type selector' },
-    { key: 'reqCategories',   label: '📝 Requisition Categories', desc: 'Used in: Requisitions category' },
-    { key: 'reqPriorities',   label: '🔺 Requisition Priorities', desc: 'Used in: Requisitions priority' },
+    { key: 'employees',       label: '👷 Employees',              desc: 'Task assigned-to · Petty Cash paid-by' },
+    { key: 'pettyCategories', label: '💰 Petty Cash Categories',  desc: 'Petty Cash entry category' },
+    { key: 'billCategories',  label: '📑 Bill Categories',        desc: 'Bill Payments category' },
+    { key: 'paymentModes',    label: '💳 Payment Modes',          desc: 'Advances · Receipts · Capital & Loans' },
+    { key: 'capitalTypes',    label: '🏦 Capital / Loan Types',   desc: 'Capital & Loans type selector' },
+    { key: 'reqCategories',   label: '📝 Requisition Categories', desc: 'Requisitions category' },
+    { key: 'reqPriorities',   label: '🔺 Requisition Priorities', desc: 'Requisitions priority' },
   ];
 
   return (
@@ -5459,29 +5482,47 @@ function ListsManager() {
       </div>
       <div className="card-body">
         <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:16}}>
-          Changes apply immediately across all modules after saving.
+          Drag ☰ to reorder · × to remove · type and press Enter to add. Changes apply everywhere after saving.
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
           {SECTIONS.map(sec => (
             <div key={sec.key} style={{border:'1px solid var(--border)',borderRadius:8,overflow:'hidden'}}>
+              {/* Header */}
               <div style={{background:'var(--grey-50)',padding:'8px 12px',borderBottom:'1px solid var(--border)'}}>
                 <div style={{fontWeight:700,fontSize:12.5}}>{sec.label}</div>
                 <div style={{fontSize:10.5,color:'var(--text-muted)',marginTop:1}}>{sec.desc}</div>
               </div>
               <div style={{padding:'8px 12px'}}>
-                {/* Existing items */}
+                {/* Draggable items */}
                 <div style={{marginBottom:8}}>
+                  {localLists[sec.key].length === 0 && (
+                    <div style={{fontSize:11.5,color:'var(--text-muted)',padding:'6px 0'}}>No items — add one below.</div>
+                  )}
                   {localLists[sec.key].map((item, idx) => (
-                    <div key={idx} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'4px 0',borderBottom:'1px solid var(--grey-50)'}}>
-                      <span style={{fontSize:12.5}}>{item}</span>
-                      <span onClick={() => removeItem(sec.key, idx)}
-                        style={{cursor:'pointer',color:'var(--red)',fontSize:16,lineHeight:1,padding:'0 4px',flexShrink:0}}
+                    <div
+                      key={idx}
+                      draggable
+                      onDragStart={() => onDragStart(sec.key, idx)}
+                      onDragEnter={() => onDragEnter(sec.key, idx)}
+                      onDragEnd={() => onDragEnd(sec.key)}
+                      onDragOver={e => e.preventDefault()}
+                      style={{
+                        display:'flex', alignItems:'center', justifyContent:'space-between',
+                        padding:'5px 4px', borderBottom:'1px solid var(--grey-50)',
+                        cursor:'grab', userSelect:'none',
+                        background: dragItem.current?.listKey===sec.key && dragItem.current?.idx===idx ? 'var(--primary-50)' : '',
+                        borderRadius:4,
+                      }}>
+                      <div style={{display:'flex',alignItems:'center',gap:8}}>
+                        <span style={{color:'var(--text-muted)',fontSize:13,cursor:'grab'}}>☰</span>
+                        <span style={{fontSize:12.5}}>{item}</span>
+                      </div>
+                      <span
+                        onClick={() => removeItem(sec.key, idx)}
+                        style={{cursor:'pointer',color:'var(--red)',fontSize:17,lineHeight:1,padding:'0 4px',flexShrink:0}}
                         title="Remove">×</span>
                     </div>
                   ))}
-                  {localLists[sec.key].length === 0 && (
-                    <div style={{fontSize:11.5,color:'var(--text-muted)',padding:'4px 0'}}>No items — add one below.</div>
-                  )}
                 </div>
                 {/* Add new */}
                 <div style={{display:'flex',gap:6}}>
@@ -5491,7 +5532,7 @@ function ListsManager() {
                     value={newItems[sec.key] || ''}
                     onChange={e => setNewItems(n => ({ ...n, [sec.key]: e.target.value }))}
                     onKeyDown={e => e.key === 'Enter' && addItem(sec.key)}
-                    placeholder="Add new…"
+                    placeholder="Type and press Enter…"
                   />
                   <button
                     onClick={() => addItem(sec.key)}
