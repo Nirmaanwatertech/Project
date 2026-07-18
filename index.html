@@ -273,6 +273,38 @@ const { useState, useEffect, useRef } = React;
 // ─── Formatters ───────────────────────────────────────
 const inr = (n) => '₹' + Number(n).toLocaleString('en-IN');
 
+// ─── Firestore path helpers ────────────────────────────
+// All data lives under users/{uid}/{collection} — matches where
+// Firestore Console placed it when collections were created inside the user doc.
+// These helpers resolve the correct path for every read/write operation.
+
+function getUserUID() {
+  return window.currentUser?.uid || null;
+}
+
+function userCol(colName) {
+  // Returns a Firestore collection reference under the current user
+  const { db, collection } = window.fb;
+  const uid = getUserUID();
+  if (!uid) throw new Error('Not authenticated — cannot access collection: ' + colName);
+  return collection(db, 'users', uid, colName);
+}
+
+function userDoc(colName, docId) {
+  // Returns a Firestore doc reference under the current user
+  const { db, doc } = window.fb;
+  const uid = getUserUID();
+  if (!uid) throw new Error('Not authenticated — cannot access document: ' + colName + '/' + docId);
+  return doc(db, 'users', uid, colName, docId);
+}
+
+function userDocRef(colName) {
+  // Returns a new auto-ID doc reference (for addDoc pattern with manual ID)
+  const { db, doc, collection } = window.fb;
+  const uid = getUserUID();
+  return collection(db, 'users', uid, colName);
+}
+
 // ─── Projects ─────────────────────────────────────────
 const PROJECTS = ['Pontoon', 'WTP', 'Both'];
 const PROJECT_COLOR = { 'Pontoon': 'blue', 'WTP': 'teal', 'Both': 'grey' };
@@ -303,15 +335,15 @@ function useKnownNames() {
       async function load() {
         try {
           const [vendors, bills, advances, pos, wos, quotes, reqs, petty, capital] = await Promise.all([
-            getDocs(collection(db, 'vendors')),
-            getDocs(collection(db, 'bills')),
-            getDocs(collection(db, 'advances')),
-            getDocs(collection(db, 'purchaseorders')),
-            getDocs(collection(db, 'workorders')),
-            getDocs(collection(db, 'quotations')),
-            getDocs(collection(db, 'requisitions')),
-            getDocs(collection(db, 'petty_cash')),
-            getDocs(collection(db, 'capital_loans')),
+            getDocs(userCol('vendors')),
+            getDocs(userCol('bills')),
+            getDocs(userCol('advances')),
+            getDocs(userCol('purchaseorders')),
+            getDocs(userCol('workorders')),
+            getDocs(userCol('quotations')),
+            getDocs(userCol('requisitions')),
+            getDocs(userCol('petty_cash')),
+            getDocs(userCol('capital_loans')),
           ]);
 
           const vendorNames = [
@@ -790,7 +822,7 @@ function useTasks() {
   useEffect(() => {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(collection(db, TASKS_COLLECTION), orderBy('createdAt', 'desc'));
+      const q = query(userCol(TASKS_COLLECTION), orderBy('createdAt', 'desc'));
       const unsub = onSnapshot(q, (snap) => {
         const rows = snap.docs.map(d => ({ docId: d.id, ...d.data() }));
         setTasks(rows);
@@ -822,7 +854,7 @@ function useTasks() {
 
 async function addTask(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, TASKS_COLLECTION), {
+  await addDoc(userCol(TASKS_COLLECTION), {
     ...data,
     createdAt: Date.now(),
   });
@@ -830,17 +862,17 @@ async function addTask(data) {
 
 async function updateTask(docId, data) {
   const { db, doc, updateDoc } = window.fb;
-  await updateDoc(doc(db, TASKS_COLLECTION, docId), data);
+  await updateDoc(userDoc(TASKS_COLLECTION, docId), data);
 }
 
 async function deleteTask(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, TASKS_COLLECTION, docId));
+  await deleteDoc(userDoc(TASKS_COLLECTION, docId));
 }
 
 async function clearAllTasks() {
   const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(collection(db, TASKS_COLLECTION));
+  const snap = await getDocs(userCol(TASKS_COLLECTION));
   const batch = writeBatch(db);
   snap.docs.forEach(d => batch.delete(d.ref));
   await batch.commit();
@@ -1198,7 +1230,7 @@ function useWorkOrders() {
   useEffect(() => {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(collection(db, WO_COLLECTION), orderBy('createdAt', 'desc'));
+      const q = query(userCol(WO_COLLECTION), orderBy('createdAt', 'desc'));
       const unsub = onSnapshot(q, (snap) => {
         setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
         setLoading(false);
@@ -1215,19 +1247,19 @@ function useWorkOrders() {
 }
 async function addWorkOrder(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, WO_COLLECTION), { ...data, createdAt: Date.now() });
+  await addDoc(userCol(WO_COLLECTION), { ...data, createdAt: Date.now() });
 }
 async function updateWorkOrder(docId, data) {
   const { db, doc, updateDoc } = window.fb;
-  await updateDoc(doc(db, WO_COLLECTION, docId), data);
+  await updateDoc(userDoc(WO_COLLECTION, docId), data);
 }
 async function deleteWorkOrder(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, WO_COLLECTION, docId));
+  await deleteDoc(userDoc(WO_COLLECTION, docId));
 }
 async function clearAllWorkOrders() {
   const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(collection(db, WO_COLLECTION));
+  const snap = await getDocs(userCol(WO_COLLECTION));
   const batch = writeBatch(db);
   snap.docs.forEach(d => batch.delete(d.ref));
   await batch.commit();
@@ -1523,7 +1555,7 @@ function usePurchaseOrders() {
   useEffect(() => {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(collection(db, PO_COLLECTION), orderBy('createdAt', 'desc'));
+      const q = query(userCol(PO_COLLECTION), orderBy('createdAt', 'desc'));
       const unsub = onSnapshot(q, (snap) => {
         setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
         setLoading(false);
@@ -1540,19 +1572,19 @@ function usePurchaseOrders() {
 }
 async function addPO(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, PO_COLLECTION), { ...data, createdAt: Date.now() });
+  await addDoc(userCol(PO_COLLECTION), { ...data, createdAt: Date.now() });
 }
 async function updatePO(docId, data) {
   const { db, doc, updateDoc } = window.fb;
-  await updateDoc(doc(db, PO_COLLECTION, docId), data);
+  await updateDoc(userDoc(PO_COLLECTION, docId), data);
 }
 async function deletePO(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, PO_COLLECTION, docId));
+  await deleteDoc(userDoc(PO_COLLECTION, docId));
 }
 async function clearAllPOs() {
   const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(collection(db, PO_COLLECTION));
+  const snap = await getDocs(userCol(PO_COLLECTION));
   const batch = writeBatch(db);
   snap.docs.forEach(d => batch.delete(d.ref));
   await batch.commit();
@@ -2040,7 +2072,7 @@ function useBills() {
   useEffect(() => {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(collection(db, BILLS_COLLECTION), orderBy('createdAt', 'desc'));
+      const q = query(userCol(BILLS_COLLECTION), orderBy('createdAt', 'desc'));
       const unsub = onSnapshot(q, (snap) => {
         setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
         setLoading(false);
@@ -2057,19 +2089,19 @@ function useBills() {
 }
 async function addBill(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, BILLS_COLLECTION), { ...data, createdAt: Date.now(), paid: false });
+  await addDoc(userCol(BILLS_COLLECTION), { ...data, createdAt: Date.now(), paid: false });
 }
 async function markBillPaid(docId) {
   const { db, doc, updateDoc } = window.fb;
-  await updateDoc(doc(db, BILLS_COLLECTION, docId), { paid: true, paidAt: Date.now() });
+  await updateDoc(userDoc(BILLS_COLLECTION, docId), { paid: true, paidAt: Date.now() });
 }
 async function deleteBill(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, BILLS_COLLECTION, docId));
+  await deleteDoc(userDoc(BILLS_COLLECTION, docId));
 }
 async function clearAllBills() {
   const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(collection(db, BILLS_COLLECTION));
+  const snap = await getDocs(userCol(BILLS_COLLECTION));
   const batch = writeBatch(db);
   snap.docs.forEach(d => batch.delete(d.ref));
   await batch.commit();
@@ -2082,7 +2114,7 @@ function useAdvances() {
   useEffect(() => {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(collection(db, ADVANCES_COLLECTION), orderBy('createdAt', 'desc'));
+      const q = query(userCol(ADVANCES_COLLECTION), orderBy('createdAt', 'desc'));
       const unsub = onSnapshot(q, (snap) => {
         setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
         setLoading(false);
@@ -2099,19 +2131,19 @@ function useAdvances() {
 }
 async function addAdvance(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, ADVANCES_COLLECTION), { ...data, createdAt: Date.now(), adjustedAmount: 0, status: 'Unadjusted' });
+  await addDoc(userCol(ADVANCES_COLLECTION), { ...data, createdAt: Date.now(), adjustedAmount: 0, status: 'Unadjusted' });
 }
 async function updateAdvance(docId, data) {
   const { db, doc, updateDoc } = window.fb;
-  await updateDoc(doc(db, ADVANCES_COLLECTION, docId), data);
+  await updateDoc(userDoc(ADVANCES_COLLECTION, docId), data);
 }
 async function deleteAdvance(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, ADVANCES_COLLECTION, docId));
+  await deleteDoc(userDoc(ADVANCES_COLLECTION, docId));
 }
 async function clearAllAdvances() {
   const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(collection(db, ADVANCES_COLLECTION));
+  const snap = await getDocs(userCol(ADVANCES_COLLECTION));
   const batch = writeBatch(db);
   snap.docs.forEach(d => batch.delete(d.ref));
   await batch.commit();
@@ -2137,7 +2169,7 @@ function NewBillModal({ onClose, existing }) {
     try {
       if (isEdit) {
         const { db, doc, updateDoc } = window.fb;
-        await updateDoc(doc(db, BILLS_COLLECTION, existing.docId), { ...form, amount: Number(form.amount) });
+        await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...form, amount: Number(form.amount) });
       } else {
         await addBill({ ...form, amount: Number(form.amount), entryType: 'invoice' });
       }
@@ -2599,7 +2631,7 @@ function useBillingSchedules() {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
       const unsub = onSnapshot(
-        query(collection(db, BILLING_COLLECTION), orderBy('createdAt','desc')),
+        query(userCol(BILLING_COLLECTION), orderBy('createdAt','desc')),
         snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
         err  => { console.error('Billing listener',err); setLoading(false); }
       );
@@ -2620,7 +2652,7 @@ function useRABills() {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
       const unsub = onSnapshot(
-        query(collection(db, RABILLS_COLLECTION), orderBy('createdAt','desc')),
+        query(userCol(RABILLS_COLLECTION), orderBy('createdAt','desc')),
         snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
         err  => { console.error('RA Bills listener',err); setLoading(false); }
       );
@@ -2641,7 +2673,7 @@ function useReceipts() {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
       const unsub = onSnapshot(
-        query(collection(db, RECEIPTS_COLLECTION), orderBy('createdAt','desc')),
+        query(userCol(RECEIPTS_COLLECTION), orderBy('createdAt','desc')),
         snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
         err  => { console.error('Receipts listener',err); setLoading(false); }
       );
@@ -2658,38 +2690,38 @@ function useReceipts() {
 // ─── CRUD helpers ──────────────────────────────────
 async function addBillingSchedule(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, BILLING_COLLECTION), {...data, createdAt:Date.now()});
+  await addDoc(userCol(BILLING_COLLECTION), {...data, createdAt:Date.now()});
 }
 async function deleteBillingSchedule(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, BILLING_COLLECTION, docId));
+  await deleteDoc(userDoc(BILLING_COLLECTION, docId));
 }
 async function addRABill(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, RABILLS_COLLECTION), {...data, createdAt:Date.now()});
+  await addDoc(userCol(RABILLS_COLLECTION), {...data, createdAt:Date.now()});
 }
 async function updateRABill(docId, data) {
   const { db, doc, updateDoc } = window.fb;
-  await updateDoc(doc(db, RABILLS_COLLECTION, docId), data);
+  await updateDoc(userDoc(RABILLS_COLLECTION, docId), data);
 }
 async function deleteRABill(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, RABILLS_COLLECTION, docId));
+  await deleteDoc(userDoc(RABILLS_COLLECTION, docId));
 }
 async function addReceipt(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, RECEIPTS_COLLECTION), {...data, createdAt:Date.now()});
+  await addDoc(userCol(RECEIPTS_COLLECTION), {...data, createdAt:Date.now()});
 }
 async function deleteReceipt(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, RECEIPTS_COLLECTION, docId));
+  await deleteDoc(userDoc(RECEIPTS_COLLECTION, docId));
 }
 async function clearAllReceipts() {
   const { db, collection, getDocs, writeBatch } = window.fb;
   const [s1,s2,s3] = await Promise.all([
-    getDocs(collection(db, BILLING_COLLECTION)),
-    getDocs(collection(db, RABILLS_COLLECTION)),
-    getDocs(collection(db, RECEIPTS_COLLECTION)),
+    getDocs(userCol(BILLING_COLLECTION)),
+    getDocs(userCol(RABILLS_COLLECTION)),
+    getDocs(userCol(RECEIPTS_COLLECTION)),
   ]);
   const batch = writeBatch(db);
   [...s1.docs,...s2.docs,...s3.docs].forEach(d=>batch.delete(d.ref));
@@ -3386,7 +3418,7 @@ function usePettyCash() {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
       const unsub = onSnapshot(
-        query(collection(db, PETTY_COLLECTION), orderBy('createdAt','desc')),
+        query(userCol(PETTY_COLLECTION), orderBy('createdAt','desc')),
         snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
         err  => { console.error('Petty cash listener',err); setLoading(false); }
       );
@@ -3402,15 +3434,15 @@ function usePettyCash() {
 
 async function addPettyEntry(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, PETTY_COLLECTION), {...data, createdAt:Date.now()});
+  await addDoc(userCol(PETTY_COLLECTION), {...data, createdAt:Date.now()});
 }
 async function deletePettyEntry(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, PETTY_COLLECTION, docId));
+  await deleteDoc(userDoc(PETTY_COLLECTION, docId));
 }
 async function clearAllPettyCash() {
   const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(collection(db, PETTY_COLLECTION));
+  const snap = await getDocs(userCol(PETTY_COLLECTION));
   const batch = writeBatch(db);
   snap.docs.forEach(d=>batch.delete(d.ref));
   await batch.commit();
@@ -3440,7 +3472,7 @@ function NewPettyModal({ onClose, currentUser, existing }) {
     try {
       if (isEdit) {
         const { db, doc, updateDoc } = window.fb;
-        await updateDoc(doc(db, PETTY_COLLECTION, existing.docId), {...form, amount: Number(form.amount)});
+        await updateDoc(userDoc(PETTY_COLLECTION, existing.docId), {...form, amount: Number(form.amount)});
       } else {
         await addPettyEntry({...form, amount: Number(form.amount)});
       }
@@ -3695,7 +3727,7 @@ function useCapitalLoans() {
   useEffect(() => {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(collection(db, CAPITAL_COLLECTION), orderBy('createdAt', 'desc'));
+      const q = query(userCol(CAPITAL_COLLECTION), orderBy('createdAt', 'desc'));
       const unsub = onSnapshot(q, snap => {
         setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
         setLoading(false);
@@ -3711,15 +3743,15 @@ function useCapitalLoans() {
 }
 async function addCapitalEntry(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, CAPITAL_COLLECTION), { ...data, createdAt: Date.now() });
+  await addDoc(userCol(CAPITAL_COLLECTION), { ...data, createdAt: Date.now() });
 }
 async function deleteCapitalEntry(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, CAPITAL_COLLECTION, docId));
+  await deleteDoc(userDoc(CAPITAL_COLLECTION, docId));
 }
 async function clearAllCapital() {
   const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(collection(db, CAPITAL_COLLECTION));
+  const snap = await getDocs(userCol(CAPITAL_COLLECTION));
   const batch = writeBatch(db);
   snap.docs.forEach(d => batch.delete(d.ref));
   await batch.commit();
@@ -3759,7 +3791,7 @@ function NewCapitalModal({ onClose, existing }) {
       };
       if (isEdit) {
         const { db, doc, updateDoc } = window.fb;
-        await updateDoc(doc(db, CAPITAL_COLLECTION, existing.docId), saveData);
+        await updateDoc(userDoc(CAPITAL_COLLECTION, existing.docId), saveData);
       } else {
         await addCapitalEntry(saveData);
       }
@@ -4129,7 +4161,7 @@ function useReminders() {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
       const unsub = onSnapshot(
-        query(collection(db, REMINDERS_COLLECTION), orderBy('createdAt','desc')),
+        query(userCol(REMINDERS_COLLECTION), orderBy('createdAt','desc')),
         snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
         err  => { console.error('Reminders listener',err); setLoading(false); }
       );
@@ -4144,15 +4176,15 @@ function useReminders() {
 }
 async function addReminder(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, REMINDERS_COLLECTION), {...data, createdAt:Date.now(), done:false});
+  await addDoc(userCol(REMINDERS_COLLECTION), {...data, createdAt:Date.now(), done:false});
 }
 async function toggleReminderDone(docId, done) {
   const { db, doc, updateDoc } = window.fb;
-  await updateDoc(doc(db, REMINDERS_COLLECTION, docId), {done:!done, doneAt:!done?Date.now():null});
+  await updateDoc(userDoc(REMINDERS_COLLECTION, docId), {done:!done, doneAt:!done?Date.now():null});
 }
 async function deleteReminder(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, REMINDERS_COLLECTION, docId));
+  await deleteDoc(userDoc(REMINDERS_COLLECTION, docId));
 }
 
 function NewReminderModal({ onClose }) {
@@ -4690,7 +4722,7 @@ function useVendors() {
   useEffect(() => {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(collection(db, VENDORS_COLLECTION), orderBy('createdAt', 'desc'));
+      const q = query(userCol(VENDORS_COLLECTION), orderBy('createdAt', 'desc'));
       const unsub = onSnapshot(q, (snap) => {
         setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
         setLoading(false);
@@ -4707,19 +4739,19 @@ function useVendors() {
 }
 async function addVendor(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, VENDORS_COLLECTION), { ...data, createdAt: Date.now() });
+  await addDoc(userCol(VENDORS_COLLECTION), { ...data, createdAt: Date.now() });
 }
 async function updateVendor(docId, data) {
   const { db, doc, updateDoc } = window.fb;
-  await updateDoc(doc(db, VENDORS_COLLECTION, docId), data);
+  await updateDoc(userDoc(VENDORS_COLLECTION, docId), data);
 }
 async function deleteVendor(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, VENDORS_COLLECTION, docId));
+  await deleteDoc(userDoc(VENDORS_COLLECTION, docId));
 }
 async function clearAllVendors() {
   const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(collection(db, VENDORS_COLLECTION));
+  const snap = await getDocs(userCol(VENDORS_COLLECTION));
   const batch = writeBatch(db);
   snap.docs.forEach(d => batch.delete(d.ref));
   await batch.commit();
@@ -5000,7 +5032,7 @@ function useQuotations() {
   useEffect(() => {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(collection(db, QUOTATIONS_COLLECTION), orderBy('createdAt', 'desc'));
+      const q = query(userCol(QUOTATIONS_COLLECTION), orderBy('createdAt', 'desc'));
       const unsub = onSnapshot(q, (snap) => {
         setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
         setLoading(false);
@@ -5017,20 +5049,20 @@ function useQuotations() {
 }
 async function addQuotation(data) {
   const { db, collection, addDoc } = window.fb;
-  const ref = await addDoc(collection(db, QUOTATIONS_COLLECTION), { ...data, createdAt: Date.now() });
+  const ref = await addDoc(userCol(QUOTATIONS_COLLECTION), { ...data, createdAt: Date.now() });
   return ref.id;
 }
 async function updateQuotation(docId, data) {
   const { db, doc, updateDoc } = window.fb;
-  await updateDoc(doc(db, QUOTATIONS_COLLECTION, docId), data);
+  await updateDoc(userDoc(QUOTATIONS_COLLECTION, docId), data);
 }
 async function deleteQuotation(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, QUOTATIONS_COLLECTION, docId));
+  await deleteDoc(userDoc(QUOTATIONS_COLLECTION, docId));
 }
 async function clearAllQuotations() {
   const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(collection(db, QUOTATIONS_COLLECTION));
+  const snap = await getDocs(userCol(QUOTATIONS_COLLECTION));
   const batch = writeBatch(db);
   snap.docs.forEach(d => batch.delete(d.ref));
   await batch.commit();
@@ -5316,7 +5348,7 @@ function useMilestones() {
   useEffect(() => {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(collection(db, MILESTONES_COLLECTION), orderBy('createdAt', 'desc'));
+      const q = query(userCol(MILESTONES_COLLECTION), orderBy('createdAt', 'desc'));
       const unsub = onSnapshot(q, (snap) => {
         setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
         setLoading(false);
@@ -5333,19 +5365,19 @@ function useMilestones() {
 }
 async function addMilestone(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, MILESTONES_COLLECTION), { ...data, createdAt: Date.now(), paid: false });
+  await addDoc(userCol(MILESTONES_COLLECTION), { ...data, createdAt: Date.now(), paid: false });
 }
 async function markMilestonePaid(docId) {
   const { db, doc, updateDoc } = window.fb;
-  await updateDoc(doc(db, MILESTONES_COLLECTION, docId), { paid: true, paidAt: Date.now() });
+  await updateDoc(userDoc(MILESTONES_COLLECTION, docId), { paid: true, paidAt: Date.now() });
 }
 async function deleteMilestone(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, MILESTONES_COLLECTION, docId));
+  await deleteDoc(userDoc(MILESTONES_COLLECTION, docId));
 }
 async function clearAllMilestones() {
   const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(collection(db, MILESTONES_COLLECTION));
+  const snap = await getDocs(userCol(MILESTONES_COLLECTION));
   const batch = writeBatch(db);
   snap.docs.forEach(d => batch.delete(d.ref));
   await batch.commit();
@@ -5367,7 +5399,7 @@ function NewMilestoneModal({ onClose, pos, existing }) {
     try {
       if (isEdit) {
         const { db, doc, updateDoc } = window.fb;
-        await updateDoc(doc(db, MILESTONES_COLLECTION, existing.docId), { ...form, amount: Number(form.amount) });
+        await updateDoc(userDoc(MILESTONES_COLLECTION, existing.docId), { ...form, amount: Number(form.amount) });
       } else {
         await addMilestone({ ...form, amount: Number(form.amount) });
       }
@@ -6196,7 +6228,7 @@ function useRequisitions() {
   useEffect(() => {
     function start() {
       const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(collection(db, REQ_COLLECTION), orderBy('createdAt', 'desc'));
+      const q = query(userCol(REQ_COLLECTION), orderBy('createdAt', 'desc'));
       const unsub = onSnapshot(q, snap => {
         setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
         setLoading(false);
@@ -6212,19 +6244,19 @@ function useRequisitions() {
 }
 async function addRequisition(data) {
   const { db, collection, addDoc } = window.fb;
-  await addDoc(collection(db, REQ_COLLECTION), { ...data, createdAt: Date.now() });
+  await addDoc(userCol(REQ_COLLECTION), { ...data, createdAt: Date.now() });
 }
 async function updateRequisition(docId, data) {
   const { db, doc, updateDoc } = window.fb;
-  await updateDoc(doc(db, REQ_COLLECTION, docId), data);
+  await updateDoc(userDoc(REQ_COLLECTION, docId), data);
 }
 async function deleteRequisition(docId) {
   const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(doc(db, REQ_COLLECTION, docId));
+  await deleteDoc(userDoc(REQ_COLLECTION, docId));
 }
 async function clearAllRequisitions() {
   const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(collection(db, REQ_COLLECTION));
+  const snap = await getDocs(userCol(REQ_COLLECTION));
   const batch = writeBatch(db);
   snap.docs.forEach(d => batch.delete(d.ref));
   await batch.commit();
@@ -6294,7 +6326,7 @@ function NewRequisitionModal({ onClose, nextNumber, currentUser, existing }) {
     try {
       if (isEdit) {
         const { db, doc, updateDoc } = window.fb;
-        await updateDoc(doc(db, REQ_COLLECTION, existing.docId), { ...form, lineItems, totalEstimated: lineItems.reduce((s,r)=>s+Number(r.estimatedValue||0),0) });
+        await updateDoc(userDoc(REQ_COLLECTION, existing.docId), { ...form, lineItems, totalEstimated: lineItems.reduce((s,r)=>s+Number(r.estimatedValue||0),0) });
       } else {
         await addRequisition({ ...form, lineItems, totalEstimated: lineItems.reduce((s,r)=>s+Number(r.estimatedValue||0),0) });
       }
