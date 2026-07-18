@@ -1941,122 +1941,157 @@ async function clearCashFlowData() {
 
 function CashFlow() {
   const [horizon, setHorizon] = useState('30');
-  const { items: bills, loading: billsLoading } = useBills();
+  const { items: bills,    loading: billsLoading    } = useBills();
+  const { items: receipts, loading: receiptsLoading } = useReceipts();
+  const { items: capital,  loading: capitalLoading  } = useCapitalLoans();
   const { settings, loading: settingsLoading } = useCashSettings();
   const [editingBalance, setEditingBalance] = useState(false);
   const [balanceInput, setBalanceInput] = useState('');
 
-  const loading = billsLoading || settingsLoading;
+  const loading = billsLoading || settingsLoading || receiptsLoading || capitalLoading;
   const todayStr = new Date().toISOString().slice(0,10);
   const horizonDate = new Date(Date.now() + Number(horizon)*86400000).toISOString().slice(0,10);
 
-  // Build forecast rows from unpaid bills within horizon, sorted by due date
+  // ── OUTFLOWS: unpaid bills within horizon ──
   const unpaidInRange = bills
-    .filter(b => !b.paid && b.due && b.due <= horizonDate)
-    .sort((a,b) => (a.due || '').localeCompare(b.due || ''));
+    .filter(b => !b.paid && b.due && b.due >= todayStr && b.due <= horizonDate)
+    .sort((a,b) => (a.due||'').localeCompare(b.due||''));
 
+  // ── INFLOWS: receipts within horizon ──
+  const receiptsInRange = receipts
+    .filter(r => r.dateReceived && r.dateReceived >= todayStr && r.dateReceived <= horizonDate)
+    .sort((a,b) => (a.dateReceived||'').localeCompare(b.dateReceived||''));
+
+  // ── INFLOWS: capital received within horizon ──
+  const capitalInRange = capital
+    .filter(c => c.dateReceived && c.dateReceived >= todayStr && c.dateReceived <= horizonDate)
+    .sort((a,b) => (a.dateReceived||'').localeCompare(b.dateReceived||''));
+
+  // Merge and sort all rows by date
+  const allRows = [
+    ...unpaidInRange.map(b => ({
+      date: b.due, label: b.payee, cat: b.category||'Bill',
+      type: 'out', amt: Number(b.amount||0), project: b.project||''
+    })),
+    ...receiptsInRange.map(r => ({
+      date: r.dateReceived, label: `Receipt — ${r.client} (${r.raBillNo||r.milestoneName||'General'})`,
+      cat: 'Client Receipt', type: 'in', amt: Number(r.amountReceived||0), project: r.project||''
+    })),
+    ...capitalInRange.map(c => ({
+      date: c.dateReceived, label: `${c.type} — ${c.source}`,
+      cat: 'Capital Inflow', type: 'in', amt: Number(c.amount||0), project: c.project||''
+    })),
+  ].sort((a,b) => (a.date||'').localeCompare(b.date||''));
+
+  // Build running balance
   let running = Number(settings.startingBalance) || 0;
-  const rows = unpaidInRange.map(b => {
-    running -= Number(b.amount || 0);
-    return { date: b.due, label: b.payee, cat: b.category, type: 'out', amt: Number(b.amount||0), balance: running };
+  const rows = allRows.map(r => {
+    if (r.type === 'out') running -= r.amt;
+    else running += r.amt;
+    return { ...r, balance: running };
   });
 
-  const forecastLow = rows.length ? Math.min(...rows.map(r => r.balance), running) : running;
-  const lowRow = rows.find(r => r.balance === forecastLow);
-  const outflowsTotal = unpaidInRange.reduce((s,b) => s + Number(b.amount||0), 0);
-
-  const criticalBreached = forecastLow < Number(settings.criticalThreshold || 0);
-  const warningBreached = !criticalBreached && forecastLow < Number(settings.warningThreshold || 0);
+  const outflowsTotal  = allRows.filter(r=>r.type==='out').reduce((s,r)=>s+r.amt,0);
+  const inflowsTotal   = allRows.filter(r=>r.type==='in').reduce((s,r)=>s+r.amt,0);
+  const forecastLow    = rows.length ? Math.min(...rows.map(r=>r.balance)) : Number(settings.startingBalance)||0;
+  const forecastEnd    = rows.length ? rows[rows.length-1].balance : Number(settings.startingBalance)||0;
+  const lowRow         = rows.find(r => r.balance === forecastLow);
+  const criticalBreached = forecastLow < Number(settings.criticalThreshold||0);
+  const warningBreached  = !criticalBreached && forecastLow < Number(settings.warningThreshold||0);
 
   async function saveBalance() {
     const { db, doc, setDoc } = window.fb;
     try {
-      await setDoc(doc(db, SETTINGS_COLLECTION, SETTINGS_DOC), { ...settings, startingBalance: Number(balanceInput) || 0 }, { merge: true });
+      await setDoc(doc(db, SETTINGS_COLLECTION, SETTINGS_DOC), { ...settings, startingBalance: Number(balanceInput)||0 }, { merge:true });
       setEditingBalance(false);
-    } catch (e) { console.error(e); alert('Could not save balance.'); }
+    } catch(e) { console.error(e); alert('Could not save balance.'); }
   }
 
   return (
     <div>
       <div className="section-header">
         <div>
-          <div className="section-title">Cash Flow Management</div>
-          <div className="section-sub">{loading ? 'Loading from Firestore…' : 'Live balance and forecast · derived from unpaid bills'}</div>
+          <div className="section-title">Cash Flow</div>
+          <div className="section-sub">{loading ? 'Loading…' : 'Bills (outflows) · Receipts + Capital (inflows) · live Firestore'}</div>
         </div>
-        <div className="flex gap-2">
-          <select className="form-input form-select" style={{width:130}} value={horizon} onChange={e=>setHorizon(e.target.value)}>
-            <option value="30">30-day view</option>
-            <option value="45">45-day view</option>
-            <option value="60">60-day view</option>
-            <option value="90">90-day view</option>
-          </select>
-          <ClearCollectionButton label="Clear Forecast Data" count={unpaidInRange.length} onClear={clearCashFlowData} />
-        </div>
+        <select className="form-input form-select" style={{width:130}} value={horizon} onChange={e=>setHorizon(e.target.value)}>
+          <option value="30">30-day view</option>
+          <option value="45">45-day view</option>
+          <option value="60">60-day view</option>
+          <option value="90">90-day view</option>
+        </select>
       </div>
 
       {!loading && criticalBreached && (
         <div className="alert-bar critical" style={{marginBottom:14}}>
           <span className="alert-icon">🚨</span>
-          <strong>Critical Threshold Breached:</strong>&nbsp;Forecast balance drops to {inr(forecastLow)} {lowRow ? `on ${lowRow.date}` : ''} — below your ₹{Number(settings.criticalThreshold).toLocaleString('en-IN')} critical threshold.
+          <strong>Critical:</strong>&nbsp;Balance drops to {inr(forecastLow)} {lowRow?`on ${lowRow.date}`:''} — below ₹{Number(settings.criticalThreshold||0).toLocaleString('en-IN')} threshold.
         </div>
       )}
       {!loading && warningBreached && (
         <div className="alert-bar warning" style={{marginBottom:14}}>
           <span className="alert-icon">⚠️</span>
-          <strong>Warning Threshold Approaching:</strong>&nbsp;Forecast balance drops to {inr(forecastLow)} {lowRow ? `on ${lowRow.date}` : ''} — below your ₹{Number(settings.warningThreshold).toLocaleString('en-IN')} warning threshold.
+          <strong>Warning:</strong>&nbsp;Balance drops to {inr(forecastLow)} {lowRow?`on ${lowRow.date}`:''} — below ₹{Number(settings.warningThreshold||0).toLocaleString('en-IN')} threshold.
         </div>
       )}
 
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginBottom:14}}>
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(5,1fr)',marginBottom:14}}>
         <div className="stat-card">
-          <div className="stat-label">Starting / Live Balance</div>
+          <div className="stat-label">Starting Balance</div>
           {editingBalance ? (
             <div className="flex gap-2 items-center mt-1">
-              <input className="form-input font-mono" style={{width:120}} value={balanceInput} onChange={e=>setBalanceInput(e.target.value)} autoFocus />
+              <input className="form-input font-mono" style={{width:110}} value={balanceInput} onChange={e=>setBalanceInput(e.target.value)} autoFocus onKeyDown={e=>e.key==='Enter'&&saveBalance()} />
               <button className="btn btn-sm btn-primary" onClick={saveBalance}>Save</button>
-              <button className="btn btn-sm btn-ghost" onClick={() => setEditingBalance(false)}>✕</button>
+              <button className="btn btn-sm btn-ghost" onClick={()=>setEditingBalance(false)}>✕</button>
             </div>
           ) : (
             <>
-              <div className="stat-value green">{inr(settings.startingBalance)}</div>
-              <div className="stat-sub" style={{cursor:'pointer',color:'var(--primary)'}} onClick={() => { setBalanceInput(String(settings.startingBalance)); setEditingBalance(true); }}>Edit balance</div>
+              <div className="stat-value green">{inr(settings.startingBalance||0)}</div>
+              <div className="stat-sub" style={{cursor:'pointer',color:'var(--primary)'}} onClick={()=>{setBalanceInput(String(settings.startingBalance||0));setEditingBalance(true);}}>Edit</div>
             </>
           )}
         </div>
-        <div className="stat-card"><div className="stat-label">Outflows ({horizon}d)</div><div className="stat-value red">{inr(outflowsTotal)}</div><div className="stat-sub">{unpaidInRange.length} unpaid bill{unpaidInRange.length===1?'':'s'}</div></div>
-        <div className="stat-card"><div className="stat-label">Forecast Low</div><div className={`stat-value ${criticalBreached?'red':warningBreached?'amber':'blue'}`}>{inr(forecastLow)}</div>{lowRow && <div className="stat-sub">{lowRow.date}</div>}</div>
-        <div className="stat-card"><div className="stat-label">Critical / Warning</div><div className="stat-value" style={{fontSize:14}}>{inr(settings.criticalThreshold)} / {inr(settings.warningThreshold)}</div><div className="stat-sub">Set in Settings</div></div>
+        <div className="stat-card"><div className="stat-label">Inflows ({horizon}d)</div><div className="stat-value green">{inr(inflowsTotal)}</div><div className="stat-sub">{allRows.filter(r=>r.type==='in').length} entries</div></div>
+        <div className="stat-card"><div className="stat-label">Outflows ({horizon}d)</div><div className="stat-value red">{inr(outflowsTotal)}</div><div className="stat-sub">{allRows.filter(r=>r.type==='out').length} bills</div></div>
+        <div className="stat-card"><div className="stat-label">Forecast Low</div><div className={`stat-value ${criticalBreached?'red':warningBreached?'amber':'blue'}`}>{inr(forecastLow)}</div>{lowRow&&<div className="stat-sub">{lowRow.date}</div>}</div>
+        <div className="stat-card"><div className="stat-label">Forecast End ({horizon}d)</div><div className={`stat-value ${forecastEnd>=0?'green':'red'}`}>{inr(forecastEnd)}</div></div>
       </div>
 
       <div className="card">
-        <div className="card-header"><span className="card-title">{horizon}-Day Rolling Forecast — Live Unpaid Bills</span></div>
+        <div className="card-header">
+          <span className="card-title">{horizon}-Day Cash Flow — Bills + Receipts + Capital</span>
+        </div>
         {loading ? (
-          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
         ) : rows.length === 0 ? (
           <div className="module-coming">
             <div className="big-icon">📈</div>
-            <h3>No upcoming outflows</h3>
-            <p className="text-muted">Forecast will populate from unpaid bills as you add them in Bill Payments.</p>
+            <h3>No entries in this horizon</h3>
+            <p className="text-muted">Add bills, record receipts, or log capital inflows to see the forecast.</p>
           </div>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr><th>Date</th><th>Description</th><th>Category</th><th>Outflow</th><th>Running Balance</th></tr>
-              </thead>
-              <tbody>
-                {rows.map((r,i) => (
-                  <tr key={i} className={r.balance < Number(settings.criticalThreshold) ? 'overdue' : ''}>
-                    <td className="mono">{r.date}</td>
-                    <td>{r.label}</td>
-                    <td><span className="badge grey">{r.cat}</span></td>
-                    <td className="amount" style={{color:'var(--red)'}}>{inr(r.amt)}</td>
-                    <td className="amount fw-600">{inr(r.balance)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <table>
+            <thead>
+              <tr><th>Date</th><th>Description</th><th>Category</th><th>Project</th><th>Inflow</th><th>Outflow</th><th>Balance</th></tr>
+            </thead>
+            <tbody>
+              <tr style={{background:'var(--primary-50)'}}>
+                <td colSpan={6} style={{fontSize:12,fontWeight:600,color:'var(--primary)',padding:'6px 12px'}}>Opening Balance</td>
+                <td className="amount fw-600" style={{color:'var(--primary)'}}>{inr(settings.startingBalance||0)}</td>
+              </tr>
+              {rows.map((r,i) => (
+                <tr key={i} style={{background:r.type==='in'?'#F0FFF4':r.balance<Number(settings.criticalThreshold||0)?'#FFF3F3':''}}>
+                  <td className="mono">{r.date}</td>
+                  <td>{r.label}</td>
+                  <td><span className={`badge ${r.type==='in'?'green':'grey'}`}>{r.cat}</span></td>
+                  <td>{r.project?<span className={`badge ${PROJECT_COLOR[r.project]||'grey'}`}>{r.project}</span>:<span className="text-muted">—</span>}</td>
+                  <td className="amount" style={{color:'var(--green)',fontWeight:600}}>{r.type==='in'?`+ ${inr(r.amt)}`:'—'}</td>
+                  <td className="amount" style={{color:'var(--red)',fontWeight:600}}>{r.type==='out'?`− ${inr(r.amt)}`:'—'}</td>
+                  <td className="amount fw-600" style={{color:r.balance<0?'var(--red)':r.balance<Number(settings.warningThreshold||0)?'var(--amber)':'var(--text)'}}>{inr(r.balance)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
     </div>
@@ -2908,6 +2943,7 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
         balancePending: Number(form.amountClaimed),
         status: 'Submitted',
         milestoneName: selectedMilestone?.name||'',
+        project: selectedSchedule?.project||'',
       });
       onClose();
     } catch(e){ console.error(e); alert('Could not submit RA Bill.'); }
@@ -3017,6 +3053,7 @@ function RecordReceiptModal({ raBill, onClose, allReceipts }) {
         scheduleId:      raBill.scheduleId,
         client:          raBill.client,
         projectRef:      raBill.projectRef,
+        project:         raBill.project || '',
         milestoneName:   raBill.milestoneName,
         amountClaimed:   raBill.amountClaimed,
         amountReceived:  amt,
@@ -3982,17 +4019,22 @@ function ProjectPnL() {
   const { items: capital }   = useCapitalLoans();
 
   function calcProject(proj) {
-    // proj = 'Pontoon' | 'WTP'
     const match = (item) => item.project === proj || item.project === 'Both';
 
     // ── INCOME ──────────────────────────────────────
-    // Client receipts
+    // Client receipts — match via scheduleId → billing schedule project
+    // Receipts store scheduleId; billing schedules store project
+    const scheduleIds = new Set(
+      useCapitalLoans ? [] : [] // placeholder — matched below via direct join
+    );
     const receiptIncome = receipts.filter(r => {
-      const sched = r.project || r.scheduleProject;
-      return sched === proj || sched === 'Both';
+      // receipts may have project directly (if billing schedule had project set)
+      // or we match via schedule's project field stored on the receipt
+      const rp = r.project || r.scheduleProject || '';
+      return rp === proj || rp === 'Both';
     }).reduce((s,r) => s + Number(r.amountReceived||0), 0);
 
-    // Payment milestones received
+    // Payment milestones received (vendor-side, not client)
     const milestoneIncome = milestones.filter(m => m.paid && match(m)).reduce((s,m) => s + Number(m.amount||0), 0);
 
     // Capital inflows tagged to this project
@@ -4000,27 +4042,29 @@ function ProjectPnL() {
 
     const totalIncome = receiptIncome + milestoneIncome + capitalIncome;
 
-    // ── EXPENSES ─────────────────────────────────────
-    const billExp    = bills.filter(b => match(b) && !b.paid === false || (match(b))).reduce((s,b) => s + Number(b.amount||0), 0);
+    // ── EXPENSES (Paid / Incurred) ────────────────────
+    const billExp    = bills.filter(b => match(b)).reduce((s,b) => s + Number(b.amount||0), 0);
     const advanceExp = advances.filter(a => match(a)).reduce((s,a) => s + Number(a.amount||0), 0);
-    const poExp      = pos.filter(p => match(p)).reduce((s,p) => s + Number(p.value||0), 0);
-    const woExp      = wos.filter(w => match(w)).reduce((s,w) => s + Number(w.value||0), 0);
     const pettyExp   = petty.filter(p => match(p)).reduce((s,p) => s + Number(p.amount||0), 0);
 
     const totalExpenses = billExp + advanceExp + pettyExp;
-    const totalCommitted = poExp + woExp; // POs/WOs are commitments, not yet paid
 
-    const margin = totalIncome - totalExpenses;
-    const marginPct = totalIncome > 0 ? Math.round((margin / totalIncome) * 100) : 0;
+    // ── COMMITMENTS (Not yet paid) ────────────────────
+    const poExp = pos.filter(p => match(p)).reduce((s,p) => s + Number(p.value||0), 0);
+    const woExp = wos.filter(w => match(w)).reduce((s,w) => s + Number(w.value||0), 0);
+    const totalCommitted = poExp + woExp;
+
+    const margin    = totalIncome - totalExpenses;
+    const marginPct = totalIncome > 0 ? Math.round((margin/totalIncome)*100) : 0;
 
     return {
       receiptIncome, milestoneIncome, capitalIncome, totalIncome,
       billExp, advanceExp, poExp, woExp, pettyExp,
       totalExpenses, totalCommitted, margin, marginPct,
-      billCount:    bills.filter(b=>match(b)).length,
-      poCount:      pos.filter(p=>match(p)).length,
-      woCount:      wos.filter(w=>match(w)).length,
-      pettyCount:   petty.filter(p=>match(p)).length,
+      billCount:  bills.filter(b=>match(b)).length,
+      poCount:    pos.filter(p=>match(p)).length,
+      woCount:    wos.filter(w=>match(w)).length,
+      pettyCount: petty.filter(p=>match(p)).length,
     };
   }
 
@@ -4139,6 +4183,481 @@ function ProjectPnL() {
       <div style={{marginTop:14,padding:'10px 14px',background:'var(--grey-50)',borderRadius:8,fontSize:11.5,color:'var(--text-muted)'}}>
         💡 Data reflects all entries tagged Pontoon, WTP, or Both. Entries tagged Both are counted in full for each project — they are not split. To see only this project's portion of shared expenses, adjust manually.
       </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// REMINDERS — auto-generated from live Firestore data
+// ════════════════════════════════════════════════════
+const REMINDERS_COLLECTION = 'reminders';
+
+function useReminders() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const unsub = onSnapshot(
+        query(collection(db, REMINDERS_COLLECTION), orderBy('createdAt','desc')),
+        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
+        err  => { console.error('Reminders listener',err); setLoading(false); }
+      );
+      return unsub;
+    }
+    if (window.fb) { const u=start(); return ()=>u&&u(); }
+    let u; const h=()=>{u=start();};
+    window.addEventListener('firebase-ready',h,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); if(u)u(); };
+  },[]);
+  return {items,loading};
+}
+async function addReminder(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(collection(db, REMINDERS_COLLECTION), {...data, createdAt:Date.now(), done:false});
+}
+async function toggleReminderDone(docId, done) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(doc(db, REMINDERS_COLLECTION, docId), {done:!done, doneAt:!done?Date.now():null});
+}
+async function deleteReminder(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(doc(db, REMINDERS_COLLECTION, docId));
+}
+
+function NewReminderModal({ onClose }) {
+  const [form, setForm] = useState({
+    title:'', dueDate:'', priority:'Normal', project:'', notes:''
+  });
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  async function handleSave() {
+    if (!form.title.trim()||!form.dueDate) return;
+    setSaving(true);
+    try { await addReminder(form); onClose(); }
+    catch(e){ console.error(e); alert('Could not save.'); }
+    finally{ setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:460,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--amber)',padding:'14px 18px'}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Reminder</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-group">
+            <label className="form-label">Reminder Title</label>
+            <input className="form-input" value={form.title} onChange={e=>set('title',e.target.value)} placeholder="e.g. Follow up with client on RA Bill payment" autoFocus />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Due Date</label>
+              <input className="form-input" type="date" value={form.dueDate} onChange={e=>set('dueDate',e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Priority</label>
+              <select className="form-input form-select" value={form.priority} onChange={e=>set('priority',e.target.value)}>
+                <option>Urgent</option><option>Normal</option><option>Low</option>
+              </select>
+            </div>
+          </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
+          <div className="form-group">
+            <label className="form-label">Notes</label>
+            <input className="form-input" value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Optional details" />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.title.trim()||!form.dueDate} className="btn btn-primary"
+            style={{background:'var(--amber)',opacity:saving||!form.title.trim()||!form.dueDate?0.6:1}}>
+            {saving?'Saving…':'Save Reminder'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Reminders() {
+  const { items: manualReminders, loading: remLoading } = useReminders();
+  const { items: bills }     = useBills();
+  const { tasks }            = useTasks();
+  const { items: wos }       = useWorkOrders();
+  const { items: raBills }   = useRABills();
+  const [showNew, setShowNew] = useState(false);
+  const [filter, setFilter] = useState('all'); // all | pending | done | overdue
+
+  const today = new Date().toISOString().slice(0,10);
+  const in7   = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
+
+  // Auto-generated reminders from live data
+  const autoReminders = [
+    // Overdue bills
+    ...bills.filter(b=>!b.paid&&b.due&&b.due<today).map(b=>({
+      docId: `auto-bill-${b.docId}`, auto:true,
+      title: `Overdue bill — ${b.payee}`,
+      notes: `${inr(b.amount||0)} · Due ${b.due}`,
+      dueDate: b.due, priority:'Urgent', project:b.project||'',
+      done:false, category:'Bill'
+    })),
+    // Bills due in 7 days
+    ...bills.filter(b=>!b.paid&&b.due&&b.due>=today&&b.due<=in7).map(b=>({
+      docId: `auto-billdue-${b.docId}`, auto:true,
+      title: `Bill due soon — ${b.payee}`,
+      notes: `${inr(b.amount||0)} · Due ${b.due}`,
+      dueDate: b.due, priority:'Normal', project:b.project||'',
+      done:false, category:'Bill'
+    })),
+    // Overdue tasks
+    ...tasks.filter(t=>t.status!=='Completed'&&t.due&&t.due<today).map(t=>({
+      docId: `auto-task-${t.docId}`, auto:true,
+      title: `Overdue task — ${t.name}`,
+      notes: `Assigned: ${t.assigned} · Due ${t.due}`,
+      dueDate: t.due, priority:'Urgent', project:t.project||'',
+      done:false, category:'Task'
+    })),
+    // Overdue WOs
+    ...wos.filter(w=>w.stage!=='Completed'&&w.stage!=='Cancelled'&&w.due&&w.due<today).map(w=>({
+      docId: `auto-wo-${w.docId}`, auto:true,
+      title: `Work order overdue — ${w.wo}`,
+      notes: `${w.vendorName} · ${w.stage}`,
+      dueDate: w.due, priority:'Urgent', project:w.project||'',
+      done:false, category:'Work Order'
+    })),
+    // RA Bills with pending balance
+    ...raBills.filter(b=>b.status!=='Fully Received'&&b.balancePending>0).map(b=>({
+      docId: `auto-ra-${b.docId}`, auto:true,
+      title: `RA Bill payment pending — ${b.raBillNo}`,
+      notes: `${b.client} · Balance: ${inr(b.balancePending||0)}`,
+      dueDate: today, priority:'Normal', project:b.project||'',
+      done:false, category:'Receipt'
+    })),
+  ];
+
+  const allItems = [
+    ...autoReminders,
+    ...manualReminders.map(r=>({...r, auto:false, category:'Manual'}))
+  ].sort((a,b)=>(a.dueDate||'').localeCompare(b.dueDate||''));
+
+  const filtered = allItems.filter(r=>{
+    if (filter==='pending') return !r.done;
+    if (filter==='done')    return r.done;
+    if (filter==='overdue') return !r.done && r.dueDate < today;
+    return true;
+  });
+
+  const overdueCount = allItems.filter(r=>!r.done&&r.dueDate<today).length;
+  const pendingCount = allItems.filter(r=>!r.done).length;
+
+  const PRIO_BADGE = {Urgent:'red',Normal:'amber',Low:'grey'};
+  const CAT_BADGE  = {Bill:'red',Task:'blue','Work Order':'teal',Receipt:'green',Manual:'grey'};
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Reminders</div>
+          <div className="section-sub">{pendingCount} pending · {overdueCount} overdue · auto-generated from live data</div>
+        </div>
+        <button className="btn btn-primary" style={{background:'var(--amber)'}} onClick={()=>setShowNew(true)}>+ Add Reminder</button>
+      </div>
+
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Total</div><div className="stat-value">{allItems.length}</div></div>
+        <div className="stat-card"><div className="stat-label">Overdue</div><div className="stat-value red">{overdueCount}</div></div>
+        <div className="stat-card"><div className="stat-label">Pending</div><div className="stat-value amber">{pendingCount}</div></div>
+        <div className="stat-card"><div className="stat-label">Done</div><div className="stat-value green">{allItems.filter(r=>r.done).length}</div></div>
+      </div>
+
+      <div className="tabs">
+        {[['all','All'],['pending','Pending'],['overdue','Overdue'],['done','Done']].map(([v,l])=>(
+          <div key={v} className={`tab ${filter===v?'active':''}`} onClick={()=>setFilter(v)}>{l}</div>
+        ))}
+      </div>
+
+      <div className="card">
+        {filtered.length === 0 ? (
+          <div className="module-coming">
+            <div className="big-icon">🔔</div>
+            <h3>No reminders</h3>
+            <p className="text-muted">All clear! Add a manual reminder or they'll auto-generate from overdue bills, tasks and work orders.</p>
+          </div>
+        ) : filtered.map(r=>(
+          <div key={r.docId} style={{
+            display:'flex',alignItems:'flex-start',gap:12,padding:'12px 16px',
+            borderBottom:'1px solid var(--border)',
+            background: r.done?'var(--grey-50)': r.dueDate<today?'#FFF3F3':'',
+            opacity: r.done?0.6:1
+          }}>
+            {/* Done toggle — only for manual reminders */}
+            <div style={{paddingTop:2,flexShrink:0}}>
+              {r.auto ? (
+                <div style={{width:18,height:18,borderRadius:'50%',background:PRIO_BADGE[r.priority]==='red'?'var(--red)':PRIO_BADGE[r.priority]==='amber'?'var(--amber)':'var(--grey)',opacity:.8}} />
+              ) : (
+                <div onClick={()=>toggleReminderDone(r.docId,r.done)}
+                  style={{width:18,height:18,borderRadius:4,border:`2px solid ${r.done?'var(--green)':'var(--border)'}`,
+                    background:r.done?'var(--green)':'transparent',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  {r.done&&<span style={{color:'#fff',fontSize:11,fontWeight:700}}>✓</span>}
+                </div>
+              )}
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:600,fontSize:13,textDecoration:r.done?'line-through':'none'}}>{r.title}</div>
+              {r.notes && <div style={{fontSize:12,color:'var(--text-muted)',marginTop:2}}>{r.notes}</div>}
+              <div style={{display:'flex',gap:6,marginTop:5,flexWrap:'wrap'}}>
+                <span className={`badge ${PRIO_BADGE[r.priority]||'grey'}`}>{r.priority}</span>
+                <span className={`badge ${CAT_BADGE[r.category]||'grey'}`}>{r.category}</span>
+                {r.project&&<span className={`badge ${PROJECT_COLOR[r.project]||'grey'}`}>{r.project}</span>}
+                {r.auto&&<span className="badge grey" style={{fontSize:9}}>AUTO</span>}
+              </div>
+            </div>
+            <div style={{textAlign:'right',flexShrink:0}}>
+              <div style={{fontSize:11.5,color:r.dueDate<today&&!r.done?'var(--red)':'var(--text-muted)',fontWeight:r.dueDate<today&&!r.done?600:400}}>
+                {r.dueDate<today&&!r.done?'⚠ ':''}{r.dueDate}
+              </div>
+              {!r.auto && (
+                <button className="btn btn-sm btn-ghost" style={{marginTop:4,fontSize:10}} onClick={()=>deleteReminder(r.docId)}>Delete</button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {showNew && <NewReminderModal onClose={()=>setShowNew(false)} />}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// REPORTS — summary reports from live Firestore data
+// ════════════════════════════════════════════════════
+function Reports() {
+  const { tasks }            = useTasks();
+  const { items: bills }     = useBills();
+  const { items: advances }  = useAdvances();
+  const { items: wos }       = useWorkOrders();
+  const { items: pos }       = usePurchaseOrders();
+  const { items: petty }     = usePettyCash();
+  const { items: receipts }  = useReceipts();
+  const { items: raBills }   = useRABills();
+  const { items: vendors }   = useVendors();
+  const [tab, setTab] = useState('finance');
+
+  const today = new Date().toISOString().slice(0,10);
+  const thisMonth = today.slice(0,7);
+  const thisYear  = today.slice(0,4);
+
+  // ── Finance Summary ──
+  const totalBillsAmt    = bills.reduce((s,b)=>s+Number(b.amount||0),0);
+  const paidBillsAmt     = bills.filter(b=>b.paid).reduce((s,b)=>s+Number(b.amount||0),0);
+  const unpaidBillsAmt   = totalBillsAmt - paidBillsAmt;
+  const overdueBillsAmt  = bills.filter(b=>!b.paid&&b.due&&b.due<today).reduce((s,b)=>s+Number(b.amount||0),0);
+  const totalAdvances    = advances.reduce((s,a)=>s+Number(a.amount||0),0);
+  const unadjAdvances    = advances.filter(a=>a.status!=='Fully Adjusted').reduce((s,a)=>s+Number(a.balanceAmount||0),0);
+  const totalReceipts    = receipts.reduce((s,r)=>s+Number(r.amountReceived||0),0);
+  const totalPetty       = petty.reduce((s,p)=>s+Number(p.amount||0),0);
+  const thisMonthPetty   = petty.filter(p=>(p.date||'').startsWith(thisMonth)).reduce((s,p)=>s+Number(p.amount||0),0);
+  const totalPOValue     = pos.reduce((s,p)=>s+Number(p.value||0),0);
+  const totalWOValue     = wos.reduce((s,w)=>s+Number(w.value||0),0);
+  const totalRABilled    = raBills.reduce((s,b)=>s+Number(b.amountClaimed||0),0);
+  const totalRAPending   = raBills.reduce((s,b)=>s+Number(b.balancePending||0),0);
+
+  // ── Bill breakdown by category ──
+  const billsByCat = {};
+  bills.forEach(b=>{ const c=b.category||'Other'; billsByCat[c]=(billsByCat[c]||0)+Number(b.amount||0); });
+
+  // ── Petty by category ──
+  const pettyByCat = {};
+  petty.forEach(p=>{ const c=p.category||'Other'; pettyByCat[c]=(pettyByCat[c]||0)+Number(p.amount||0); });
+
+  // ── Petty by person ──
+  const pettyByPerson = {};
+  petty.forEach(p=>{ const n=p.paidBy||'Unknown'; pettyByPerson[n]=(pettyByPerson[n]||0)+Number(p.amount||0); });
+
+  // ── Tasks summary ──
+  const tasksByStatus  = {Pending:0,'In Progress':0,Completed:0,Overdue:0};
+  tasks.forEach(t=>{ tasksByStatus[t.effectiveStatus||t.status]=(tasksByStatus[t.effectiveStatus||t.status]||0)+1; });
+  const tasksByAssigned = {};
+  tasks.forEach(t=>{ const n=t.assigned||'Unassigned'; tasksByAssigned[n]=(tasksByAssigned[n]||0)+1; });
+
+  // ── WO summary ──
+  const wosByStage = {};
+  wos.forEach(w=>{ wosByStage[w.stage]=(wosByStage[w.stage]||0)+1; });
+
+  // ── Vendor spend ──
+  const vendorSpend = {};
+  bills.forEach(b=>{ const v=b.payee||'Unknown'; vendorSpend[v]=(vendorSpend[v]||0)+Number(b.amount||0); });
+  const vendorSpendSorted = Object.entries(vendorSpend).sort((a,b)=>b[1]-a[1]).slice(0,8);
+
+  function SectionHeader({title}) {
+    return <div style={{fontWeight:700,fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.5,padding:'14px 0 6px',borderBottom:'2px solid var(--primary)',marginBottom:12}}>{title}</div>;
+  }
+  function StatRow({label,value,color}) {
+    return (
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'7px 0',borderBottom:'1px solid var(--grey-50)'}}>
+        <span style={{fontSize:12.5,color:'var(--text-secondary)'}}>{label}</span>
+        <span className="amount" style={{fontWeight:700,color:color||'var(--text)',fontSize:13}}>{value}</span>
+      </div>
+    );
+  }
+  function BarRow({label,value,total,color}) {
+    const pct = total>0 ? Math.round((value/total)*100) : 0;
+    return (
+      <div style={{marginBottom:8}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
+          <span style={{fontSize:12}}>{label}</span>
+          <span className="amount" style={{fontSize:12,fontWeight:600}}>{inr(value)} <span style={{color:'var(--text-muted)',fontWeight:400}}>({pct}%)</span></span>
+        </div>
+        <div className="progress-wrap" style={{height:6}}>
+          <div className="progress-fill" style={{width:`${pct}%`,background:color||'var(--primary)'}} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="section-header">
+        <div className="section-title">Reports</div>
+      </div>
+
+      <div className="tabs">
+        {[['finance','💰 Finance'],['operations','🔧 Operations'],['vendors','🏭 Vendors']].map(([v,l])=>(
+          <div key={v} className={`tab ${tab===v?'active':''}`} onClick={()=>setTab(v)}>{l}</div>
+        ))}
+      </div>
+
+      {/* ── FINANCE REPORT ── */}
+      {tab==='finance' && (
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+          {/* Bills */}
+          <div className="card">
+            <div className="card-header"><span className="card-title">Bills & Payments</span></div>
+            <div className="card-body">
+              <SectionHeader title="Summary" />
+              <StatRow label="Total Bills" value={inr(totalBillsAmt)} />
+              <StatRow label="Paid" value={inr(paidBillsAmt)} color="var(--green)" />
+              <StatRow label="Unpaid" value={inr(unpaidBillsAmt)} color="var(--amber)" />
+              <StatRow label="Overdue" value={inr(overdueBillsAmt)} color="var(--red)" />
+              <StatRow label="Total Advances Paid" value={inr(totalAdvances)} />
+              <StatRow label="Unadjusted Advances" value={inr(unadjAdvances)} color="var(--amber)" />
+              <SectionHeader title="By Category" />
+              {Object.entries(billsByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
+                <BarRow key={cat} label={cat} value={amt} total={totalBillsAmt} />
+              ))}
+            </div>
+          </div>
+
+          {/* Receipts & Petty Cash */}
+          <div className="card">
+            <div className="card-header"><span className="card-title">Income & Petty Cash</span></div>
+            <div className="card-body">
+              <SectionHeader title="Client Income" />
+              <StatRow label="Total RA Bills Submitted" value={inr(totalRABilled)} />
+              <StatRow label="Total Received" value={inr(totalReceipts)} color="var(--green)" />
+              <StatRow label="Pending Collection" value={inr(totalRAPending)} color="var(--red)" />
+              <StatRow label="Collection Rate" value={totalRABilled>0?`${Math.round((totalReceipts/totalRABilled)*100)}%`:'—'} />
+              <SectionHeader title="Petty Cash" />
+              <StatRow label="Total Petty Cash" value={inr(totalPetty)} />
+              <StatRow label="This Month" value={inr(thisMonthPetty)} color="var(--amber)" />
+              {Object.entries(pettyByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
+                <BarRow key={cat} label={cat} value={amt} total={totalPetty} color="var(--secondary)" />
+              ))}
+              <SectionHeader title="Petty Cash by Staff" />
+              {Object.entries(pettyByPerson).sort((a,b)=>b[1]-a[1]).map(([name,amt])=>(
+                <BarRow key={name} label={name} value={amt} total={totalPetty} color="var(--amber)" />
+              ))}
+            </div>
+          </div>
+
+          {/* PO / WO Commitments */}
+          <div className="card" style={{gridColumn:'span 2'}}>
+            <div className="card-header"><span className="card-title">Commitments</span></div>
+            <div className="card-body" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+              <div>
+                <SectionHeader title="Purchase Orders" />
+                <StatRow label="Total POs" value={pos.length} />
+                <StatRow label="Total PO Value" value={inr(totalPOValue)} />
+                <StatRow label="Open POs" value={pos.filter(p=>p.stage!=='Closed').length} />
+              </div>
+              <div>
+                <SectionHeader title="Work Orders" />
+                <StatRow label="Total WOs" value={wos.length} />
+                <StatRow label="Total WO Value" value={inr(totalWOValue)} />
+                <StatRow label="Active WOs" value={wos.filter(w=>w.stage!=='Completed'&&w.stage!=='Cancelled').length} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── OPERATIONS REPORT ── */}
+      {tab==='operations' && (
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+          <div className="card">
+            <div className="card-header"><span className="card-title">Tasks</span></div>
+            <div className="card-body">
+              <SectionHeader title="By Status" />
+              {Object.entries(tasksByStatus).map(([s,c])=>(
+                <BarRow key={s} label={s} value={c} total={tasks.length} color={s==='Completed'?'var(--green)':s==='Overdue'?'var(--red)':s==='In Progress'?'var(--primary)':'var(--grey)'} />
+              ))}
+              <SectionHeader title="By Assigned Staff" />
+              {Object.entries(tasksByAssigned).sort((a,b)=>b[1]-a[1]).map(([n,c])=>(
+                <BarRow key={n} label={n} value={c} total={tasks.length} color="var(--secondary)" />
+              ))}
+            </div>
+          </div>
+          <div className="card">
+            <div className="card-header"><span className="card-title">Work Orders</span></div>
+            <div className="card-body">
+              <SectionHeader title="By Stage" />
+              {Object.entries(wosByStage).sort((a,b)=>b[1]-a[1]).map(([s,c])=>(
+                <BarRow key={s} label={s} value={c} total={wos.length} color={s==='Completed'?'var(--green)':s==='In Progress'?'var(--primary)':'var(--grey)'} />
+              ))}
+              <SectionHeader title="By Project" />
+              {['Pontoon','WTP','Both'].map(proj=>{
+                const c = wos.filter(w=>w.project===proj).length;
+                return <BarRow key={proj} label={proj} value={c} total={wos.length} color={PROJECT_COLOR[proj]==='blue'?'var(--primary)':PROJECT_COLOR[proj]==='teal'?'var(--secondary)':'var(--grey)'} />;
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── VENDOR REPORT ── */}
+      {tab==='vendors' && (
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+          <div className="card">
+            <div className="card-header"><span className="card-title">Top Vendors by Spend</span></div>
+            <div className="card-body">
+              <SectionHeader title="Bills + Advances" />
+              {vendorSpendSorted.length===0
+                ? <div style={{fontSize:12.5,color:'var(--text-muted)'}}>No data yet</div>
+                : vendorSpendSorted.map(([name,amt])=>(
+                  <BarRow key={name} label={name} value={amt} total={totalBillsAmt} />
+                ))
+              }
+            </div>
+          </div>
+          <div className="card">
+            <div className="card-header"><span className="card-title">Vendor Master Summary</span></div>
+            <div className="card-body">
+              <StatRow label="Total Vendors" value={vendors.length} />
+              <StatRow label="Vendors with Bills" value={Object.keys(vendorSpend).length} />
+              <SectionHeader title="Vendor Categories" />
+              {(() => {
+                const cats = {};
+                vendors.forEach(v=>{ const c=v.category||'Other'; cats[c]=(cats[c]||0)+1; });
+                return Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>(
+                  <BarRow key={c} label={c} value={n} total={vendors.length} color="var(--secondary)" />
+                ));
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -6429,8 +6948,8 @@ function Module({ id, setActive, currentUser }) {
     case 'pettycash':      return <PettyCash currentUser={currentUser} />;
     case 'vendors':        return <VendorMaster />;
     case 'documents':      return <ComingSoon title="Document Vault" icon="🗄" desc="Centralised file storage with expiry alerts for licences and certificates." />;
-    case 'reminders':      return <ComingSoon title="Reminders" icon="🔔" desc="Auto-generated from milestones, tasks, bills, and document expiry." />;
-    case 'reports':        return <ComingSoon title="Reports" icon="📊" desc="Task performance, cash flow, project P&L, vendor spend, and more." />;
+    case 'reminders':      return <Reminders />;
+    case 'reports':        return <Reports />;
     default:               return <Dashboard setActive={setActive} />;
   }
 }
