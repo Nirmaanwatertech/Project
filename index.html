@@ -5782,7 +5782,9 @@ function LoginScreen({ onLogin }) {
       let profile;
       if (snap.exists()) {
         const d = snap.data();
-        profile = { uid, name: d.name||d.Name||cred.user.email, email: cred.user.email, initials: d.initials||(d.name||d.Name||'U')[0].toUpperCase(), role: d.role||'viewer' };
+        const name = d.name || d.Name || cred.user.email;
+        const role = d.role || d.Role || 'viewer';
+        profile = { uid, name, email: cred.user.email, initials: d.initials||(name[0]||'U').toUpperCase(), role };
       } else {
         profile = { uid, name: cred.user.email, email: cred.user.email, initials: cred.user.email[0].toUpperCase(), role: 'owner' };
       }
@@ -5851,23 +5853,25 @@ function App() {
           const profileUnsub = onSnapshot(userRef, (snap) => {
             if (snap.exists()) {
               const data = snap.data();
+              const name = data.name || data.Name || firebaseUser.email;
+              const role = data.role || data.Role || 'owner';
               const profile = {
                 uid: firebaseUser.uid,
-                name: data.name || firebaseUser.email,
+                name,
                 email: firebaseUser.email,
-                initials: data.initials || (data.name ? data.name[0].toUpperCase() : 'U'),
-                role: data.role || 'viewer'
+                initials: data.initials || (name[0]||'U').toUpperCase(),
+                role
               };
               window.currentUser = profile;
               setCurrentUser(profile);
             } else {
-              // Auth user exists but no Firestore profile — treat as viewer
+              // Auth user exists but no Firestore profile — default to owner
               const profile = {
                 uid: firebaseUser.uid,
                 name: firebaseUser.email,
                 email: firebaseUser.email,
                 initials: firebaseUser.email[0].toUpperCase(),
-                role: 'viewer'
+                role: 'owner'
               };
               window.currentUser = profile;
               setCurrentUser(profile);
