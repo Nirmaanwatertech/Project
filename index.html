@@ -713,6 +713,24 @@ function ClearCollectionButton({ label, count, onClear }) {
 // ─── Utility helpers ──────────────────────────────────
 function genRowId() { return Math.random().toString(36).slice(2,8); }
 
+// ─── Permissions ──────────────────────────────────────
+const DEFAULT_PERMISSIONS = {
+  owner:       { raise_requisition:true, enter_quotation:true, approve_quotation:true, issue_po:true, issue_wo:true, mark_payment:true, view_cashflow:true, edit_settings:true },
+  manager:     { raise_requisition:true, enter_quotation:true, approve_quotation:true, issue_po:true, issue_wo:true, mark_payment:true, view_cashflow:true, edit_settings:false },
+  accounts:    { raise_requisition:true, enter_quotation:true, approve_quotation:false, issue_po:false, issue_wo:false, mark_payment:true, view_cashflow:true, edit_settings:false },
+  field_staff: { raise_requisition:true, enter_quotation:false, approve_quotation:false, issue_po:false, issue_wo:false, mark_payment:false, view_cashflow:false, edit_settings:false },
+  viewer:      { raise_requisition:false, enter_quotation:false, approve_quotation:false, issue_po:false, issue_wo:false, mark_payment:false, view_cashflow:false, edit_settings:false },
+};
+function can(user, action, customPerms) {
+  const perms = (customPerms && customPerms[user?.role]) || DEFAULT_PERMISSIONS[user?.role] || {};
+  return !!perms[action];
+}
+
+// ─── Vendors stub (removed module, stub for Reports) ──
+const VENDORS_COLLECTION = 'vendors';
+function useVendors() { return { items: [], loading: false }; }
+
+// ─── ComingSoon ───────────────────────────────────────
 function ComingSoon({ title, icon, desc }) {
   return (
     <div>
@@ -728,11 +746,13 @@ function ComingSoon({ title, icon, desc }) {
   );
 }
 
+// ─── PermGate ─────────────────────────────────────────
 function PermGate({ user, action, customPerms, children, fallback }) {
   if (can(user, action, customPerms)) return children;
   return fallback || null;
 }
 
+// ─── ClearDataCard ────────────────────────────────────
 function ClearDataCard({ item }) {
   const isWired = ['tasks','workorders','bills','cashflow','milestones','quotations','purchaseorders','pettycash'].includes(item.scope);
   const [step, setStep] = useState(0);
@@ -743,20 +763,18 @@ function ClearDataCard({ item }) {
   async function handleClear() {
     setWorking(true);
     try {
-      if (item.scope==='tasks')          await clearAllTasks();
-      else if (item.scope==='workorders') await clearAllWorkOrders();
-      else if (item.scope==='bills')      await Promise.all([clearAllBills(), clearAllAdvances()]);
-      else if (item.scope==='cashflow')   await clearCashFlowData();
-      else if (item.scope==='milestones') await clearAllMilestones();
-      else if (item.scope==='quotations') await clearAllQuotations();
+      if (item.scope==='tasks')              await clearAllTasks();
+      else if (item.scope==='workorders')    await clearAllWorkOrders();
+      else if (item.scope==='bills')         await Promise.all([clearAllBills(), clearAllAdvances()]);
+      else if (item.scope==='cashflow')      await clearCashFlowData();
+      else if (item.scope==='milestones')    await clearAllMilestones();
+      else if (item.scope==='quotations')    await clearAllQuotations();
       else if (item.scope==='purchaseorders') await clearAllPOs();
-      else if (item.scope==='pettycash')  await clearAllPettyCash();
+      else if (item.scope==='pettycash')     await clearAllPettyCash();
       else if (item.scope==='all') {
-        await Promise.all([
-          clearAllTasks(), clearAllWorkOrders(), clearCashFlowData(),
+        await Promise.all([clearAllTasks(), clearAllWorkOrders(), clearCashFlowData(),
           clearAllMilestones(), clearAllQuotations(), clearAllPOs(),
-          clearAllBills(), clearAllAdvances(), clearAllPettyCash()
-        ]);
+          clearAllBills(), clearAllAdvances(), clearAllPettyCash()]);
       }
       setCleared(true); setStep(0); setTyped('');
     } catch(e) { console.error(e); alert('Could not clear data.'); }
@@ -772,11 +790,12 @@ function ClearDataCard({ item }) {
         <span style={{fontSize:11,color:'var(--text-muted)'}}>Coming soon</span>
       ) : step===0 ? (
         <button onClick={()=>setStep(1)} className="btn btn-sm" style={{background:'#FFEBEE',color:'var(--red)',border:'1px solid #FFCDD2'}}>Clear →</button>
-      ) : step===1 ? (
+      ) : (
         <div>
           <div style={{fontSize:11.5,color:'var(--red)',marginBottom:6}}>Type DELETE to confirm:</div>
           <div style={{display:'flex',gap:6}}>
-            <input className="form-input font-mono" style={{fontSize:12,width:100}} value={typed} onChange={e=>setTyped(e.target.value.toUpperCase())} placeholder="DELETE" />
+            <input className="form-input font-mono" style={{fontSize:12,width:100}} value={typed}
+              onChange={e=>setTyped(e.target.value.toUpperCase())} placeholder="DELETE" />
             <button onClick={handleClear} disabled={typed!=='DELETE'||working}
               style={{background:typed==='DELETE'?'var(--red)':'#BDBDBD',color:'#fff',border:'none',borderRadius:4,padding:'6px 12px',fontSize:12,cursor:'pointer'}}>
               {working?'…':'Confirm'}
@@ -784,12 +803,12 @@ function ClearDataCard({ item }) {
             <button onClick={()=>{setStep(0);setTyped('');}} className="btn btn-sm btn-ghost">Cancel</button>
           </div>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
 
-// PaymentScheduleEditor — used in WO, PO, Quotation modals
+// ─── PaymentScheduleEditor ────────────────────────────
 function PaymentScheduleEditor({ rows, setRows, totalValue }) {
   function addRow() { setRows(r=>[...r,{id:genRowId(),name:'',pct:'',amount:'',date:''}]); }
   function removeRow(id) { setRows(r=>r.filter(x=>x.id!==id)); }
@@ -824,7 +843,7 @@ function PaymentScheduleEditor({ rows, setRows, totalValue }) {
               ))}
             </tbody>
           </table>
-          {total>0 && <div style={{padding:'4px 8px',fontSize:11,color:Math.abs(total-100)<1?'var(--green)':'var(--amber)',background:'var(--grey-50)'}}>Total: {total}%{Math.abs(total-100)<1?' ✓':' (should total 100%)'}</div>}
+          {total>0&&<div style={{padding:'4px 8px',fontSize:11,color:Math.abs(total-100)<1?'var(--green)':'var(--amber)',background:'var(--grey-50)'}}>Total: {total}%{Math.abs(total-100)<1?' ✓':' (should total 100%)'}</div>}
         </div>
       )}
       <button type="button" onClick={addRow} className="btn btn-sm btn-outline">+ Add Stage</button>
@@ -832,14 +851,270 @@ function PaymentScheduleEditor({ rows, setRows, totalValue }) {
   );
 }
 
-// updateMilestone — used by NewMilestoneModal edit mode
+// ─── updateMilestone ──────────────────────────────────
 async function updateMilestone(docId, data) {
   const { updateDoc } = window.fb;
   await updateDoc(userDoc(MILESTONES_COLLECTION, docId), data);
 }
 
-// useRequisitions stub — referenced in CrossReference (removed) but may still be called
+// ─── useRequisitions stub ─────────────────────────────
 function useRequisitions() { return { items: [], loading: false }; }
+
+// ─── IssuePOModal — from approved quotation ───────────
+function IssuePOModal({ quotation, onClose, onIssued }) {
+  const [form, setForm] = useState({
+    po: '', vendorName: quotation?.vendorName||'',
+    description: quotation?.description||'',
+    value: quotation?.value ? String(quotation.value) : '',
+    linkedQuotation: quotation?.docId||'',
+    stage: 'Draft', penaltyClause:'', disputeClause:'',
+    project: quotation?.project||''
+  });
+  const [schedule, setSchedule] = useState(quotation?.paymentSchedule ? quotation.paymentSchedule.map(r=>({...r,id:genRowId()})) : []);
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  async function handleIssue() {
+    if (!form.vendorName.trim()||!form.value) return;
+    setSaving(true);
+    try {
+      const { addDoc, updateDoc } = window.fb;
+      // Create PO
+      await addDoc(userCol(PO_COLLECTION), {...form, value:Number(form.value), paymentSchedule:schedule, createdAt:Date.now()});
+      // Mark quotation as issued
+      await updateDoc(userDoc(QUOTATIONS_COLLECTION, quotation.docId), {stage:'Issuing of PO/WO', issued:true});
+      onIssued && onIssued();
+    } catch(e){ console.error(e); alert('Could not issue PO.'); }
+    finally{ setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:580,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--green)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Issue Purchase Order from Quotation</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div style={{background:'var(--green-50)',border:'1px solid #C8E6C9',borderRadius:6,padding:'8px 12px',fontSize:12,marginBottom:14}}>
+            Issuing PO against: <strong>{quotation?.vendorName}</strong> · {inr(quotation?.value||0)}
+          </div>
+          <div className="form-group">
+            <label className="form-label">PO Number</label>
+            <input className="form-input font-mono" value={form.po} onChange={e=>set('po',e.target.value)} placeholder="NWTS/PO/2026-27/001" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Vendor Name</label>
+            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={useKnownNames().vendors} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Description</label>
+            <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Value (₹)</label>
+            <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} />
+          </div>
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
+          <div className="form-group">
+            <label className="form-label">Penalty Clause</label>
+            <input className="form-input" value={form.penaltyClause} onChange={e=>set('penaltyClause',e.target.value)} placeholder="Optional" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Dispute Resolution Clause</label>
+            <input className="form-input" value={form.disputeClause} onChange={e=>set('disputeClause',e.target.value)} placeholder="Optional" />
+          </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleIssue} disabled={saving||!form.vendorName.trim()||!form.value} className="btn btn-primary"
+            style={{background:'var(--green)',opacity:saving||!form.vendorName.trim()||!form.value?.6:1}}>
+            {saving?'Issuing…':'✓ Issue PO'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── NewMilestoneModal ────────────────────────────────
+function NewMilestoneModal({ onClose, pos, existing }) {
+  const isEdit = !!existing;
+  const [form, setForm] = useState(isEdit ? {
+    name: existing.name||'', pct: existing.pct||'',
+    amount: existing.amount ? String(existing.amount) : '',
+    due: existing.due||'', po: existing.po||'', wo: existing.wo||'', project: existing.project||''
+  } : { name:'', pct:'', amount:'', due:'', po:'', wo:'', project:'' });
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  async function handleSave() {
+    if (!form.name.trim()||!form.amount||!form.due) return;
+    setSaving(true);
+    try {
+      if (isEdit) await updateMilestone(existing.docId, {...form, amount:Number(form.amount)});
+      else await addMilestone({...form, amount:Number(form.amount)});
+      onClose();
+    } catch(e){ console.error(e); alert('Could not save milestone.'); }
+    finally{ setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:460,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px'}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit?'✏ Edit Milestone':'+ New Payment Milestone'}</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-group">
+            <label className="form-label">Milestone Name</label>
+            <input className="form-input" value={form.name} onChange={e=>set('name',e.target.value)} placeholder="e.g. Advance Payment — 30%" autoFocus />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Amount (₹)</label>
+              <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount',e.target.value)} placeholder="0" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Due Date</label>
+              <input className="form-input" type="date" value={form.due} onChange={e=>set('due',e.target.value)} />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Linked PO Number</label>
+            <select className="form-input form-select" value={form.po} onChange={e=>set('po',e.target.value)}>
+              <option value="">None</option>
+              {(pos||[]).map(p=><option key={p.docId} value={p.po}>{p.po} — {p.vendorName}</option>)}
+            </select>
+          </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.name.trim()||!form.amount||!form.due} className="btn btn-primary"
+            style={{opacity:saving||!form.name.trim()||!form.amount||!form.due?0.6:1}}>
+            {saving?'Saving…':isEdit?'Save Changes':'Save Milestone'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── PaymentTracker ───────────────────────────────────
+function PaymentTracker() {
+  const { items, loading } = useMilestones();
+  const { items: pos } = usePurchaseOrders();
+  const [showNew, setShowNew] = useState(false);
+  const [editMilestone, setEditMilestone] = useState(null);
+  const [filter, setFilter] = useState('all');
+
+  const today = new Date().toISOString().slice(0,10);
+  const withStatus = items.map(m => {
+    let status;
+    if (m.paid) status = 'Paid';
+    else if (m.due < today) status = 'Overdue';
+    else if (m.due === today) status = 'Due Today';
+    else status = 'Upcoming';
+    return {...m, computedStatus: status};
+  });
+  const filtered = filter==='all' ? withStatus : withStatus.filter(m=>m.computedStatus===filter);
+  const totalDue = items.filter(m=>!m.paid).reduce((s,m)=>s+Number(m.amount||0),0);
+  const totalPaid = items.filter(m=>m.paid).reduce((s,m)=>s+Number(m.amount||0),0);
+  const overdueAmt = withStatus.filter(m=>m.computedStatus==='Overdue').reduce((s,m)=>s+Number(m.amount||0),0);
+
+  const MS_STATUS_COLOR = {Paid:'green',Overdue:'red','Due Today':'amber',Upcoming:'blue'};
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Payment Tracker</div>
+          <div className="section-sub">{loading?'Loading…':`${items.length} milestone${items.length===1?'':'s'}`}</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" onClick={()=>setShowNew(true)}>+ Add Milestone</button>
+          <ClearCollectionButton label="Clear All" count={items.length} onClear={clearAllMilestones} />
+        </div>
+      </div>
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Overdue</div><div className="stat-value red">{inr(overdueAmt)}</div><div className="stat-sub">{withStatus.filter(m=>m.computedStatus==='Overdue').length} milestones</div></div>
+        <div className="stat-card"><div className="stat-label">Total Due</div><div className="stat-value amber">{inr(totalDue)}</div></div>
+        <div className="stat-card"><div className="stat-label">Total Paid</div><div className="stat-value green">{inr(totalPaid)}</div></div>
+      </div>
+      <div className="tabs">
+        {[['all','All'],['Upcoming','Upcoming'],['Due Today','Due Today'],['Overdue','Overdue'],['Paid','Paid']].map(([v,l])=>(
+          <div key={v} className={`tab ${filter===v?'active':''}`} onClick={()=>setFilter(v)}>{l}</div>
+        ))}
+      </div>
+      <div className="card">
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+        ) : filtered.length===0 ? (
+          <div className="module-coming">
+            <div className="big-icon">💳</div>
+            <h3>No milestones yet</h3>
+            <p className="text-muted">Track vendor payment milestones — advances, interim payments, final payments.</p>
+          </div>
+        ) : (
+          <table>
+            <thead><tr><th>Milestone</th><th>PO Ref</th><th>Project</th><th>Amount</th><th>Due Date</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>
+              {filtered.map(m=>(
+                <tr key={m.docId} className={m.computedStatus==='Overdue'?'overdue':m.computedStatus==='Due Today'?'due-today':''}>
+                  <td className="fw-600">{m.name}</td>
+                  <td className="mono" style={{fontSize:11}}>{m.po||'—'}</td>
+                  <td>{m.project?<span className={`badge ${PROJECT_COLOR[m.project]||'grey'}`}>{m.project}</span>:<span className="text-muted">—</span>}</td>
+                  <td className="amount fw-600">{inr(m.amount||0)}</td>
+                  <td>{m.due}</td>
+                  <td><span className={`badge ${MS_STATUS_COLOR[m.computedStatus]||'grey'}`}>{m.computedStatus}</span></td>
+                  <td>
+                    <div className="flex gap-2">
+                      <button className="btn btn-sm btn-ghost" onClick={()=>setEditMilestone(m)}>Edit</button>
+                      {!m.paid && <button className="btn btn-sm btn-primary" onClick={()=>markMilestonePaid(m.docId)}>Mark Paid</button>}
+                      <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this milestone?'))deleteMilestone(m.docId);}}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {showNew && <NewMilestoneModal onClose={()=>setShowNew(false)} pos={pos} />}
+      {editMilestone && <NewMilestoneModal onClose={()=>setEditMilestone(null)} pos={pos} existing={editMilestone} />}
+    </div>
+  );
+}
+  const isWired = ['tasks','workorders','bills','cashflow','milestones','quotations','purchaseorders','pettycash'].includes(item.scope);
+  const [step, setStep] = useState(0);
+  const [typed, setTyped] = useState('');
+  const [working, setWorking] = useState(false);
+  const [cleared, setCleared] = useState(false);
+
+  async function handleClear() {
+    setWorking(true);
+    try {
+      if (item.scope==='tasks')          await clearAllTasks();
+      else if (item.scope==='workorders') await clearAllWorkOrders();
+      else if (item.scope==='bills')      await Promise.all([clearAllBills(), clearAllAdvances()]);
+      else if (item.scope==='cashflow')   await clearCashFlowData();
+      else if (item.scope==='milestones') await clearAllMilestones();
+      else if (item.scope==='quotations') await clearAllQuotations();
+      else if (item.scope==='purchaseorders') await clearAllPOs();
+      else if (item.scope==='pettycash')  await clearAllPettyCash();
+      else if (item.scope==='all') {
+        await Promise.all([
+          clearAllTasks(), clearAllWorkOrders(), clearCashFlowData(),
+          clearAllMilestones(), clearAllQuotations(), clearAllPOs(),
+          clearAllBills(), clearAllAdvances(), clearAllPettyCash()
+        ]);
+      }
+      setCleared(true); setStep(0); setTyped('');
+    } catch(e) { console.error(e); alert('Could not clear data.'); }
+    finally { setWorking(false); }
+  }
+
 
 // ─── Dashboard Module ─────────────────────────────────
 function Dashboard({ setActive }) {
