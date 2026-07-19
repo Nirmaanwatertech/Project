@@ -348,6 +348,8 @@ function ListsManager() {
   const [newItems, setNewItems] = useState({});
   const [dragging, setDragging] = useState(null);
   const [dragTarget, setDragTarget] = useState(null);
+  const [editingItem, setEditingItem] = useState(null); // { listKey, idx }
+  const [editValue, setEditValue] = useState('');
 
   useEffect(() => { setLocalLists({ ...lists }); }, [JSON.stringify(lists)]);
 
@@ -363,6 +365,26 @@ function ListsManager() {
     if (localLists[listKey].map(s=>s.toLowerCase()).includes(val.toLowerCase())) return;
     setLocalLists(l => ({ ...l, [listKey]: [...l[listKey], val] }));
     setNewItems(n => ({ ...n, [listKey]: '' }));
+  }
+
+  function startEdit(listKey, idx) {
+    setEditingItem({ listKey, idx });
+    setEditValue(localLists[listKey][idx]);
+  }
+
+  function commitEdit() {
+    if (!editingItem) return;
+    const val = editValue.trim();
+    if (val) {
+      setLocalLists(l => ({
+        ...l,
+        [editingItem.listKey]: l[editingItem.listKey].map((item, i) =>
+          i === editingItem.idx ? val : item
+        )
+      }));
+    }
+    setEditingItem(null);
+    setEditValue('');
   }
 
   function onDragStart(listKey, idx) { setDragging({ listKey, idx }); }
@@ -404,7 +426,7 @@ function ListsManager() {
       </div>
       <div className="card-body">
         <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:16}}>
-          Drag ☰ to reorder · × to remove · type and press Enter to add. Changes apply everywhere after saving.
+          ☰ drag to reorder · ✏ click name to rename · × to remove · Enter to add
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
           {SECTIONS.map(sec => (
@@ -418,25 +440,56 @@ function ListsManager() {
                   {localLists[sec.key].length === 0 && (
                     <div style={{fontSize:11.5,color:'var(--text-muted)',padding:'6px 0'}}>No items — add one below.</div>
                   )}
-                  {localLists[sec.key].map((item, idx) => (
-                    <div key={idx} draggable
-                      onDragStart={() => onDragStart(sec.key, idx)}
-                      onDragEnter={() => onDragEnter(sec.key, idx)}
-                      onDragEnd={() => onDragEnd(sec.key)}
-                      onDragOver={e => e.preventDefault()}
-                      style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'5px 4px',
-                        borderBottom:'1px solid var(--grey-50)',cursor:'grab',userSelect:'none',borderRadius:4,
-                        background: dragging?.listKey===sec.key&&dragging?.idx===idx?'var(--primary-50)':
-                                    dragTarget?.listKey===sec.key&&dragTarget?.idx===idx?'var(--grey-50)':'',
-                        opacity: dragging?.listKey===sec.key&&dragging?.idx===idx?0.5:1}}>
-                      <div style={{display:'flex',alignItems:'center',gap:8}}>
-                        <span style={{color:'var(--text-muted)',fontSize:13}}>☰</span>
-                        <span style={{fontSize:12.5}}>{item}</span>
+                  {localLists[sec.key].map((item, idx) => {
+                    const isEditing = editingItem?.listKey === sec.key && editingItem?.idx === idx;
+                    return (
+                      <div key={idx} draggable={!isEditing}
+                        onDragStart={() => !isEditing && onDragStart(sec.key, idx)}
+                        onDragEnter={() => !isEditing && onDragEnter(sec.key, idx)}
+                        onDragEnd={() => !isEditing && onDragEnd(sec.key)}
+                        onDragOver={e => e.preventDefault()}
+                        style={{display:'flex',alignItems:'center',gap:6,padding:'4px 2px',
+                          borderBottom:'1px solid var(--grey-50)',borderRadius:4,
+                          background: dragging?.listKey===sec.key&&dragging?.idx===idx?'var(--primary-50)':
+                                      dragTarget?.listKey===sec.key&&dragTarget?.idx===idx?'var(--grey-50)':'',
+                          opacity: dragging?.listKey===sec.key&&dragging?.idx===idx?0.5:1}}>
+                        {/* Drag handle */}
+                        <span style={{color:'var(--text-muted)',fontSize:12,cursor:'grab',flexShrink:0}}>☰</span>
+                        {/* Name — click to edit */}
+                        {isEditing ? (
+                          <input
+                            className="form-input"
+                            style={{fontSize:12,padding:'3px 6px',flex:1}}
+                            value={editValue}
+                            autoFocus
+                            onChange={e => setEditValue(e.target.value)}
+                            onBlur={commitEdit}
+                            onKeyDown={e => { if(e.key==='Enter') commitEdit(); if(e.key==='Escape'){setEditingItem(null);setEditValue('');} }}
+                          />
+                        ) : (
+                          <span
+                            onClick={() => startEdit(sec.key, idx)}
+                            title="Click to rename"
+                            style={{fontSize:12.5,flex:1,cursor:'text',padding:'3px 4px',borderRadius:3,
+                              border:'1px solid transparent',transition:'border .1s'}}
+                            onMouseEnter={e=>e.currentTarget.style.borderColor='var(--border)'}
+                            onMouseLeave={e=>e.currentTarget.style.borderColor='transparent'}>
+                            {item}
+                          </span>
+                        )}
+                        {/* Rename icon */}
+                        {!isEditing && (
+                          <span onClick={() => startEdit(sec.key, idx)}
+                            style={{cursor:'pointer',color:'var(--text-muted)',fontSize:12,flexShrink:0}}
+                            title="Rename">✏</span>
+                        )}
+                        {/* Remove */}
+                        <span onClick={() => removeItem(sec.key, idx)}
+                          style={{cursor:'pointer',color:'var(--red)',fontSize:17,lineHeight:1,flexShrink:0}}
+                          title="Remove">×</span>
                       </div>
-                      <span onClick={() => removeItem(sec.key, idx)}
-                        style={{cursor:'pointer',color:'var(--red)',fontSize:17,lineHeight:1,padding:'0 4px'}}>×</span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 <div style={{display:'flex',gap:6}}>
                   <input className="form-input" style={{fontSize:12,padding:'5px 8px',flex:1}}
