@@ -882,7 +882,7 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
       // Create PO
       await addDoc(userCol(PO_COLLECTION), {...form, value:Number(form.value), paymentSchedule:schedule, createdAt:Date.now()});
       // Mark quotation as issued
-      await updateDoc(userDoc(QUOTATIONS_COLLECTION, quotation.docId), {stage:'Issuing of PO/WO', issued:true});
+      await updateDoc(userDoc(QUOTATIONS_COLLECTION, quotation.docId), {stage:'Finalized', issued:true});
       onIssued && onIssued();
     } catch(e){ console.error(e); alert('Could not issue PO.'); }
     finally{ setSaving(false); }
@@ -1788,9 +1788,9 @@ function nextPONumber(count) {
   return `NWTS/PO/${FY}/${String(count + 1).padStart(3, '0')}`;
 }
 
-// Returns quotations eligible for linking (Finalization of T&C or Issuing of PO/WO)
+// Returns quotations eligible for linking (Finalized stage)
 function finalizedQuotations(quotations) {
-  return quotations.filter(q => q.stage === 'Finalization of T&C' || q.stage === 'Issuing of PO/WO');
+  return quotations.filter(q => q.stage === 'Finalized');
 }
 
 function NewWOModal({ onClose, nextNumber, quotations, existing }) {
@@ -2568,8 +2568,8 @@ function CashFlow() {
 
 // ─── Quotations hook (used by PO, WO, ProjectPnL, Reports) ───
 const QUOTATIONS_COLLECTION = 'quotations';
-const QUOTE_STAGES = ['Receipt of Quotation','Negotiation','Finalization of T&C','Issuing of PO/WO'];
-const STAGE_COLOR = { 'Receipt of Quotation':'grey','Negotiation':'amber','Finalization of T&C':'blue','Issuing of PO/WO':'green' };
+const QUOTE_STAGES = ['Receipt of Quotation','Finalized'];
+const STAGE_COLOR = { 'Receipt of Quotation':'grey', 'Finalized':'green' };
 
 function useQuotations() {
   const [items, setItems] = useState([]);
@@ -5273,7 +5273,7 @@ function QuotationApprovalAction({ quotation, currentUser, onApproved, onRejecte
         approvedBy: currentUser.name,
         approvedByUid: currentUser.uid,
         approvedAt: Date.now(),
-        stage: 'Finalization of T&C'
+        stage: 'Finalized'
       });
       onApproved && onApproved();
     } catch(e) { console.error(e); alert('Could not approve.'); }
@@ -5371,11 +5371,10 @@ function QuotationsWithUser({ currentUser }) {
   const pipelineValue = items.filter(q=>!q.approved).reduce((s,q)=>s+Number(q.value||0),0);
 
   async function advanceStage(q) {
-    const idx = QUOTE_STAGES.indexOf(q.stage);
-    if (idx < QUOTE_STAGES.length - 2) {
-      try { await updateQuotation(q.docId, { stage: QUOTE_STAGES[idx+1] }); }
+    if (q.stage === 'Receipt of Quotation') {
+      try { await updateQuotation(q.docId, { stage: 'Finalized' }); }
       catch(e) { console.error(e); alert('Could not update stage.'); }
-    } else if (idx === QUOTE_STAGES.length - 2) {
+    } else if (q.stage === 'Finalized') {
       setIssuingFor(q);
     }
   }
@@ -5449,14 +5448,14 @@ function QuotationsWithUser({ currentUser }) {
                   </td>
                   <td>
                     <div className="flex gap-2">
-                      {q.approved && q.stage==='Finalization of T&C' && (
+                      {q.approved && q.stage==='Finalized' && (
                         <PermGate user={currentUser} action="issue_po">
                           <button className="btn btn-sm btn-primary" style={{background:'var(--green)'}} onClick={()=>setIssuingFor(q)}>Issue PO →</button>
                         </PermGate>
                       )}
                       <button className="btn btn-sm btn-ghost" onClick={()=>setEditQuote(q)}>Edit</button>
-                      {!q.approved && q.stage!=='Issuing of PO/WO' && q.stage!=='Finalization of T&C' && (
-                        <button className="btn btn-sm btn-ghost" onClick={()=>advanceStage(q)}>Advance →</button>
+                      {q.stage==='Receipt of Quotation' && (
+                        <button className="btn btn-sm btn-ghost" onClick={()=>advanceStage(q)}>→ Finalize</button>
                       )}
                       <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteQuotation(q.docId);}}>Delete</button>
                     </div>
@@ -5506,33 +5505,19 @@ function QuotationsWithUser({ currentUser }) {
 // ─── New Quotation with REQ dropdown and Quot Number ─
 function NewQuotationWithREQ({ onClose, reqs, existing }) {
   const isEdit = !!existing;
-  const { items: allQuotes } = useQuotations();
   const [form, setForm] = useState(isEdit ? {
     quotNo: existing.quotNo||'', vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
-    receivedDate: existing.receivedDate||'', linkedReq: existing.linkedReq||'',
+    receivedDate: existing.receivedDate||'',
     stage: existing.stage||'Receipt of Quotation', notes: existing.notes||'', project: existing.project||''
   } : {
     quotNo:'', vendorName:'', description:'', value:'',
     receivedDate: new Date().toISOString().slice(0,10),
-    linkedReq:'', stage:'Receipt of Quotation', notes:'', project:''
+    stage:'Receipt of Quotation', notes:'', project:''
   });
-  const [schedule, setSchedule] = useState([]);
+  const [schedule, setSchedule] = useState(isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) : []);
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
-
-  // Auto-generate quotNo based on linked REQ + suffix letter
-  useEffect(()=>{
-    if(form.linkedReq){
-      const req = reqs.find(r=>r.docId===form.linkedReq);
-      if(req){
-        const existing = allQuotes.filter(q=>q.linkedReq===form.linkedReq);
-        const suffix = String.fromCharCode(65+existing.length); // A, B, C...
-        const base = req.req.replace('REQ/','QUOT/');
-        set('quotNo', `${base}/${suffix}`);
-      }
-    }
-  },[form.linkedReq]);
 
   async function handleSave(){
     if(!form.vendorName.trim()||!form.value) return;
@@ -5550,22 +5535,19 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:620,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:580,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
           <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Quotation' : '+ New Quotation'}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-grid">
             <div className="form-group">
-              <label className="form-label">Reference Requisition</label>
-              <select className="form-input form-select" value={form.linkedReq} onChange={e=>set('linkedReq',e.target.value)}>
-                <option value="">Select requisition (optional)…</option>
-                {reqs.map(r=><option key={r.docId} value={r.docId}>{r.req} — {r.description.slice(0,40)}</option>)}
-              </select>
+              <label className="form-label">Quotation Number</label>
+              <input className="form-input font-mono" value={form.quotNo} onChange={e=>set('quotNo',e.target.value)} placeholder="e.g. QUOT/2026-27/001" autoFocus />
             </div>
             <div className="form-group">
-              <label className="form-label">Quotation Number</label>
-              <input className="form-input font-mono" value={form.quotNo} onChange={e=>set('quotNo',e.target.value)} placeholder="Auto-filled from REQ link" />
+              <label className="form-label">Received Date</label>
+              <input className="form-input" type="date" value={form.receivedDate} onChange={e=>set('receivedDate',e.target.value)} />
             </div>
           </div>
           <div className="form-group">
@@ -5576,25 +5558,19 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
             <label className="form-label">Description</label>
             <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. RO membranes — 5 units, 4040 size" />
           </div>
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">Total Value (₹)</label>
-              <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} placeholder="0" />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Received Date</label>
-              <input className="form-input" type="date" value={form.receivedDate} onChange={e=>set('receivedDate',e.target.value)} />
-            </div>
+          <div className="form-group">
+            <label className="form-label">Total Value (₹)</label>
+            <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} placeholder="0" />
           </div>
-          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
           <div className="form-group">
             <label className="form-label">Stage</label>
             <select className="form-input form-select" value={form.stage} onChange={e=>set('stage',e.target.value)}>
               {QUOTE_STAGES.map(s=><option key={s}>{s}</option>)}
             </select>
           </div>
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
           <div className="form-group">
-            <label className="form-label">Notes / Negotiation Points</label>
+            <label className="form-label">Notes</label>
             <textarea className="form-input" rows="2" value={form.notes} onChange={e=>set('notes',e.target.value)} style={{resize:'vertical'}} />
           </div>
           <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
