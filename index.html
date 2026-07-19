@@ -843,7 +843,7 @@ function PermGate({ user, action, customPerms, children, fallback }) {
 
 // ─── ClearDataCard ────────────────────────────────────
 function ClearDataCard({ item }) {
-  const isWired = ['tasks','workorders','bills','cashflow','milestones','quotations','purchaseorders','pettycash'].includes(item.scope);
+  const isWired = ['tasks','workorders','bills','cashflow','milestones','quotations','purchaseorders','pettycash','expenses'].includes(item.scope);
   const [step, setStep] = useState(0);
   const [typed, setTyped] = useState('');
   const [working, setWorking] = useState(false);
@@ -860,10 +860,11 @@ function ClearDataCard({ item }) {
       else if (item.scope==='quotations')    await clearAllQuotations();
       else if (item.scope==='purchaseorders') await clearAllPOs();
       else if (item.scope==='pettycash')     await clearAllPettyCash();
+      else if (item.scope==='expenses')      await clearAllExpenses();
       else if (item.scope==='all') {
         await Promise.all([clearAllTasks(), clearAllWorkOrders(), clearCashFlowData(),
           clearAllMilestones(), clearAllQuotations(), clearAllPOs(),
-          clearAllBills(), clearAllAdvances(), clearAllPettyCash()]);
+          clearAllBills(), clearAllAdvances(), clearAllPettyCash(), clearAllExpenses()]);
       }
       setCleared(true); setStep(0); setTyped('');
     } catch(e) { console.error(e); alert('Could not clear data.'); }
@@ -4434,6 +4435,281 @@ function PettyCash({ currentUser }) {
     </div>
   );
 }
+// ════════════════════════════════════════════════════
+// EXPENSES — bank-paid direct expenses (not petty cash)
+// ════════════════════════════════════════════════════
+const EXPENSE_COLLECTION = 'expenses';
+
+function useExpenses() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { query, orderBy, onSnapshot } = window.fb;
+      const unsub = onSnapshot(
+        query(userCol(EXPENSE_COLLECTION), orderBy('createdAt','desc')),
+        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
+        err  => { console.error('Expenses listener',err); setLoading(false); }
+      );
+      return unsub;
+    }
+    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+    let u;
+    const h=()=>{ if(getUserUID()) u=start(); };
+    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
+    window.addEventListener('firebase-ready',h,{once:true});
+    window.addEventListener('user-ready',hu,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u) u(); };
+  },[]);
+  return {items,loading};
+}
+async function addExpenseEntry(data) {
+  const { addDoc } = window.fb;
+  await addDoc(userCol(EXPENSE_COLLECTION), {...data, createdAt:Date.now()});
+}
+async function deleteExpenseEntry(docId) {
+  const { deleteDoc } = window.fb;
+  await deleteDoc(userDoc(EXPENSE_COLLECTION, docId));
+}
+async function updateExpenseEntry(docId, data) {
+  const { updateDoc } = window.fb;
+  await updateDoc(userDoc(EXPENSE_COLLECTION, docId), data);
+}
+async function clearAllExpenses() {
+  const { getDocs, writeBatch, db } = window.fb;
+  const snap = await getDocs(userCol(EXPENSE_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d=>batch.delete(d.ref));
+  await batch.commit();
+}
+
+function NewExpenseModal({ onClose, currentUser, existing }) {
+  const isEdit = !!existing;
+  const [form, setForm] = useState(isEdit ? {
+    date: existing.date||'',
+    amount: existing.amount ? String(existing.amount) : '',
+    category: existing.category||'',
+    paidBy: existing.paidBy||'',
+    paymentMode: existing.paymentMode||'NEFT',
+    refNumber: existing.refNumber||'',
+    description: existing.description||'',
+    project: existing.project||'',
+    split: existing.split||{pontoon:50,wtp:50},
+  } : {
+    date: new Date().toISOString().slice(0,10),
+    amount: '',
+    category: '',
+    paidBy: currentUser?.name||'',
+    paymentMode: 'NEFT',
+    refNumber: '',
+    description: '',
+    project: '',
+    split: {pontoon:50,wtp:50},
+  });
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  async function handleSave() {
+    if (!form.amount||!form.description.trim()||!form.date) return;
+    setSaving(true);
+    try {
+      const data = {...form, amount: Number(form.amount)};
+      if (isEdit) await updateExpenseEntry(existing.docId, data);
+      else await addExpenseEntry(data);
+      onClose();
+    } catch(e){ console.error(e); alert('Could not save.'); }
+    finally{ setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:500,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--red)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit?'✏ Edit Expense':'+ New Bank Expense'}</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Date</label>
+              <input className="form-input" type="date" value={form.date} onChange={e=>set('date',e.target.value)} autoFocus />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Amount (₹)</label>
+              <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount',e.target.value)} placeholder="0" />
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Category</label>
+              <select className="form-input form-select" value={form.category} onChange={e=>set('category',e.target.value)}>
+                <option value="">Select category…</option>
+                {(window.appLists?.billCategories||DEFAULT_LISTS.billCategories).map(c=><option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Paid By</label>
+              <select className="form-input form-select" value={form.paidBy} onChange={e=>set('paidBy',e.target.value)}>
+                <option value="">Select…</option>
+                {(window.appLists?.employees||DEFAULT_LISTS.employees).map(n=><option key={n}>{n}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Payment Mode</label>
+              <select className="form-input form-select" value={form.paymentMode} onChange={e=>set('paymentMode',e.target.value)}>
+                {(window.appLists?.paymentModes||DEFAULT_LISTS.paymentModes).map(m=><option key={m}>{m}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Ref / UTR Number</label>
+              <input className="form-input font-mono" value={form.refNumber} onChange={e=>set('refNumber',e.target.value)} placeholder="Optional" />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Description</label>
+            <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. Office rent — July 2026" />
+          </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.amount||!form.description.trim()}
+            className="btn btn-primary" style={{background:'var(--red)',opacity:saving||!form.amount||!form.description.trim()?0.6:1}}>
+            {saving?'Saving…':isEdit?'Save Changes':'Save Expense'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Expenses({ currentUser }) {
+  const { items, loading } = useExpenses();
+  const [showNew, setShowNew] = useState(false);
+  const [editEntry, setEditEntry] = useState(null);
+  const [catFilter, setCatFilter] = useState('all');
+  const [modeFilter, setModeFilter] = useState('all');
+  const [monthFilter, setMonthFilter] = useState('all');
+
+  const months = [...new Set(items.map(i=>i.date?.slice(0,7)).filter(Boolean))].sort().reverse();
+  const sorted = [...items].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const filtered = sorted.filter(i=>
+    (catFilter==='all'||i.category===catFilter) &&
+    (modeFilter==='all'||i.paymentMode===modeFilter) &&
+    (monthFilter==='all'||(i.date||'').startsWith(monthFilter))
+  );
+
+  const total    = filtered.reduce((s,i)=>s+Number(i.amount||0),0);
+  const thisMonth = new Date().toISOString().slice(0,7);
+  const thisMonthTotal = items.filter(i=>(i.date||'').startsWith(thisMonth)).reduce((s,i)=>s+Number(i.amount||0),0);
+
+  const byCategory = Object.entries(
+    filtered.reduce((acc,i)=>{ const c=i.category||'Other'; acc[c]=(acc[c]||0)+Number(i.amount||0); return acc; },{})
+  ).sort((a,b)=>b[1]-a[1]);
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Bank Expenses</div>
+          <div className="section-sub">{loading?'Loading…':`${items.length} entries · Direct bank payments (not petty cash)`}</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" style={{background:'var(--red)'}} onClick={()=>setShowNew(true)}>+ Add Expense</button>
+          <ClearCollectionButton label="Clear All" count={items.length} onClear={clearAllExpenses} />
+        </div>
+      </div>
+
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Total (filtered)</div><div className="stat-value red">{inr(total)}</div></div>
+        <div className="stat-card"><div className="stat-label">This Month</div><div className="stat-value amber">{inr(thisMonthTotal)}</div></div>
+        <div className="stat-card"><div className="stat-label">Total Entries</div><div className="stat-value">{items.length}</div></div>
+        <div className="stat-card"><div className="stat-label">Categories Used</div><div className="stat-value">{new Set(items.map(i=>i.category).filter(Boolean)).size}</div></div>
+      </div>
+
+      {byCategory.length > 0 && (
+        <div className="card" style={{marginBottom:14}}>
+          <div className="card-header"><span className="card-title">By Category</span></div>
+          <div className="card-body">
+            {byCategory.map(([cat,amt])=>(
+              <div key={cat} style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                <span style={{fontSize:12,color:'var(--text-secondary)',width:160,flexShrink:0}}>{cat}</span>
+                <div className="progress-wrap" style={{flex:1}}>
+                  <div className="progress-fill" style={{width:`${total>0?Math.round((amt/total)*100):0}%`,background:'var(--red)'}} />
+                </div>
+                <span className="amount text-sm" style={{width:80,textAlign:'right'}}>{inr(amt)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <div className="flex gap-2">
+            <select className="form-input form-select" style={{width:160}} value={catFilter} onChange={e=>setCatFilter(e.target.value)}>
+              <option value="all">All Categories</option>
+              {[...new Set(items.map(i=>i.category).filter(Boolean))].map(c=><option key={c}>{c}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:140}} value={modeFilter} onChange={e=>setModeFilter(e.target.value)}>
+              <option value="all">All Payment Modes</option>
+              {[...new Set(items.map(i=>i.paymentMode).filter(Boolean))].map(m=><option key={m}>{m}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:150}} value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}>
+              <option value="all">All Months</option>
+              {months.map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}</option>)}
+            </select>
+          </div>
+        </div>
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting…</p></div>
+        ) : filtered.length===0 ? (
+          <div className="module-coming">
+            <div className="big-icon">🏦</div>
+            <h3>No bank expenses yet</h3>
+            <p className="text-muted">Record direct bank payments — rent, salaries, vendor payments, professional fees, etc.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>Date</th><th>Description</th><th>Category</th><th>Mode</th><th>Ref #</th><th>Paid By</th><th>Project</th><th>Amount</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(i=>(
+                <tr key={i.docId}>
+                  <td>{i.date}</td>
+                  <td className="fw-600">{i.description}</td>
+                  <td><span className="badge grey">{i.category||'—'}</span></td>
+                  <td><span className="badge blue">{i.paymentMode||'—'}</span></td>
+                  <td className="mono" style={{fontSize:11}}>{i.refNumber||'—'}</td>
+                  <td>{i.paidBy||'—'}</td>
+                  <td>{i.project?<span className={`badge ${PROJECT_COLOR[i.project]||'grey'}`}>{i.project}</span>:<span className="text-muted">—</span>}</td>
+                  <td className="amount fw-600" style={{color:'var(--red)'}}>{inr(i.amount||0)}</td>
+                  <td>
+                    <div className="flex gap-2">
+                      <button className="btn btn-sm btn-ghost" onClick={()=>setEditEntry(i)}>Edit</button>
+                      <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this expense?'))deleteExpenseEntry(i.docId);}}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              <tr style={{background:'var(--grey-50)',fontWeight:700}}>
+                <td colSpan={7} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Total ({filtered.length} entries)</td>
+                <td className="amount" style={{color:'var(--red)',fontWeight:700}}>{inr(total)}</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {showNew && <NewExpenseModal onClose={()=>setShowNew(false)} currentUser={currentUser} />}
+      {editEntry && <NewExpenseModal onClose={()=>setEditEntry(null)} currentUser={currentUser} existing={editEntry} />}
+    </div>
+  );
+}
+
 const CAPITAL_COLLECTION = 'capital_loans';
 const CAPITAL_TYPES = ['Investor Fund','Bank Loan','Overdraft','Owner Capital Injection','Grant','Other'];
 
@@ -4698,6 +4974,7 @@ function ProjectPnL() {
   const { items: milestones }= useMilestones();
   const { items: receipts }  = useReceipts();
   const { items: petty }     = usePettyCash();
+  const { items: expenseItems } = useExpenses();
   const { items: capital }   = useCapitalLoans();
 
   function calcProject(proj) {
@@ -4725,7 +5002,8 @@ function ProjectPnL() {
     const billExp    = bills.filter(b => b.project===proj || b.project==='Both').reduce((s,b) => s + matchAmt(b,'amount'), 0);
     const advanceExp = advances.filter(a => a.project===proj || a.project==='Both').reduce((s,a) => s + matchAmt(a,'amount'), 0);
     const pettyExp   = petty.filter(p => p.project===proj || p.project==='Both').reduce((s,p) => s + matchAmt(p,'amount'), 0);
-    const totalExpenses = billExp + advanceExp + pettyExp;
+    const bankExp    = expenseItems.filter(e => e.project===proj || e.project==='Both').reduce((s,e) => s + matchAmt(e,'amount'), 0);
+    const totalExpenses = billExp + advanceExp + pettyExp + bankExp;
 
     // ── COMMITMENTS (Not yet paid) ────────────────────
     const poExp = pos.filter(p => p.project===proj || p.project==='Both').reduce((s,p) => s + matchAmt(p,'value'), 0);
@@ -4743,6 +5021,7 @@ function ProjectPnL() {
       poCount:    pos.filter(p=>p.project===proj||p.project==='Both').length,
       woCount:    wos.filter(w=>w.project===proj||w.project==='Both').length,
       pettyCount: petty.filter(p=>p.project===proj||p.project==='Both').length,
+      bankExp, bankCount: expenseItems.filter(e=>e.project===proj||e.project==='Both').length,
     };
   }
 
@@ -5412,6 +5691,7 @@ const NAV = [
   { id:'billpayments',   label:'Bill Payments',    icon:'📑' },
   { id:'cashflow',       label:'Cash Flow',        icon:'📈' },
   { id:'pettycash',      label:'Petty Cash',       icon:'💰' },
+  { id:'expenses',       label:'Bank Expenses',     icon:'🏦' },
   { section: 'Team' },
   { id:'reminders',      label:'Reminders',        icon:'🔔' },
   { id:'reports',        label:'Reports',          icon:'📊' },
@@ -5433,6 +5713,7 @@ function Module({ id, setActive, currentUser }) {
     case 'billpayments':   return <BillPayments />;
     case 'settings':       return <SettingsWithUser currentUser={currentUser} />;
     case 'pettycash':      return <PettyCash currentUser={currentUser} />;
+    case 'expenses':       return <Expenses currentUser={currentUser} />;
     case 'reminders':      return <Reminders />;
     case 'reports':        return <Reports />;
     default:               return <Dashboard setActive={setActive} />;
@@ -5785,6 +6066,7 @@ function Settings() {
               { label:'Clear Quotations', desc:'Removes all quotations.', scope:'quotations' },
               { label:'Clear Purchase Orders', desc:'Removes all POs.', scope:'purchaseorders' },
               { label:'Clear Petty Cash', desc:'Removes all petty cash entries.', scope:'pettycash' },
+              { label:'Clear Bank Expenses', desc:'Removes all bank expense entries.', scope:'expenses' },
               { label:'Reset All Data', desc:'Wipes everything. Cannot be undone.', scope:'all' },
             ].map(item => <ClearDataCard key={item.scope} item={item} />)}
           </div>
