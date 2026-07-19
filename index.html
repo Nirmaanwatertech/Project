@@ -229,18 +229,6 @@
 </head>
 <body>
 <div id="root"></div>
-<div id="error-display" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#fff;z-index:99999;padding:40px;font-family:monospace;font-size:13px;color:red;overflow:auto;white-space:pre-wrap;"></div>
-<script>
-window.onerror = function(msg, src, line, col, err) {
-  var d = document.getElementById('error-display');
-  if(d) { d.style.display='block'; d.textContent = 'RUNTIME ERROR:\n' + msg + '\n\nSource: ' + src + ':' + line + ':' + col + '\n\n' + (err&&err.stack||''); }
-  return false;
-};
-window.onunhandledrejection = function(e) {
-  var d = document.getElementById('error-display');
-  if(d) { d.style.display='block'; d.textContent = 'UNHANDLED PROMISE REJECTION:\n' + (e.reason&&e.reason.stack||e.reason||'unknown'); }
-};
-</script>
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
@@ -1098,36 +1086,6 @@ function PaymentTracker() {
     </div>
   );
 }
-  const isWired = ['tasks','workorders','bills','cashflow','milestones','quotations','purchaseorders','pettycash'].includes(item.scope);
-  const [step, setStep] = useState(0);
-  const [typed, setTyped] = useState('');
-  const [working, setWorking] = useState(false);
-  const [cleared, setCleared] = useState(false);
-
-  async function handleClear() {
-    setWorking(true);
-    try {
-      if (item.scope==='tasks')          await clearAllTasks();
-      else if (item.scope==='workorders') await clearAllWorkOrders();
-      else if (item.scope==='bills')      await Promise.all([clearAllBills(), clearAllAdvances()]);
-      else if (item.scope==='cashflow')   await clearCashFlowData();
-      else if (item.scope==='milestones') await clearAllMilestones();
-      else if (item.scope==='quotations') await clearAllQuotations();
-      else if (item.scope==='purchaseorders') await clearAllPOs();
-      else if (item.scope==='pettycash')  await clearAllPettyCash();
-      else if (item.scope==='all') {
-        await Promise.all([
-          clearAllTasks(), clearAllWorkOrders(), clearCashFlowData(),
-          clearAllMilestones(), clearAllQuotations(), clearAllPOs(),
-          clearAllBills(), clearAllAdvances(), clearAllPettyCash()
-        ]);
-      }
-      setCleared(true); setStep(0); setTyped('');
-    } catch(e) { console.error(e); alert('Could not clear data.'); }
-    finally { setWorking(false); }
-  }
-
-
 // ─── Dashboard Module ─────────────────────────────────
 function Dashboard({ setActive }) {
   const { tasks }            = useTasks();
@@ -5678,6 +5636,126 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
 }
 
 // ─── Settings wrapper with currentUser ─────────────
+// ─── Permission Matrix ────────────────────────────────
+const ACTIONS_LIST = [
+  { key:'enter_quotation',    label:'Enter Quotation' },
+  { key:'approve_quotation',  label:'Approve Quotation' },
+  { key:'issue_po',           label:'Issue Purchase Order' },
+  { key:'issue_wo',           label:'Issue Work Order' },
+  { key:'mark_payment',       label:'Mark Payment Received' },
+  { key:'view_cashflow',      label:'View Cash Flow' },
+  { key:'edit_settings',      label:'Edit Settings' },
+];
+const ROLES_LIST = [
+  { key:'owner', label:'Owner' }, { key:'manager', label:'Manager' },
+  { key:'accounts', label:'Accounts' }, { key:'field_staff', label:'Field Staff' }, { key:'viewer', label:'Viewer' },
+];
+
+function usePermSettings() {
+  const [perms, setPerms] = useState(DEFAULT_PERMISSIONS);
+  useEffect(() => {
+    function start() {
+      const { db, doc, onSnapshot } = window.fb;
+      const unsub = onSnapshot(doc(db, 'settings', 'permissions'), snap => {
+        if (snap.exists()) setPerms(s => ({ ...DEFAULT_PERMISSIONS, ...snap.data() }));
+      }, err => console.error('Perms listener', err));
+      return unsub;
+    }
+    if (window.fb) { const u=start(); return ()=>u&&u(); }
+    let u; const h=()=>{u=start();};
+    window.addEventListener('firebase-ready',h,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); if(u)u(); };
+  }, []);
+  async function savePerms(newPerms) {
+    const { db, doc, setDoc } = window.fb;
+    await setDoc(doc(db, 'settings', 'permissions'), newPerms, { merge: true });
+  }
+  return { perms, setPerms, savePerms };
+}
+
+function PermissionMatrix({ currentUser }) {
+  const { perms, setPerms, savePerms } = usePermSettings();
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  function toggle(role, action) {
+    if (role==='owner') return;
+    setPerms(p => ({ ...p, [role]: { ...(p[role]||{}), [action]: !(p[role]||{})[action] } }));
+  }
+  async function handleSave() {
+    setSaving(true);
+    try { await savePerms(perms); setSaved(true); setTimeout(()=>setSaved(false),2000); }
+    catch(e) { console.error(e); alert('Could not save.'); }
+    finally { setSaving(false); }
+  }
+  return (
+    <div className="card">
+      <div className="card-header" style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <span className="card-title">Role & Permission Matrix</span>
+        <button className="btn btn-sm btn-primary" onClick={handleSave} disabled={saving}>
+          {saving?'Saving…':saved?'✓ Saved':'Save Permissions'}
+        </button>
+      </div>
+      <div className="card-body" style={{overflowX:'auto'}}>
+        <table style={{width:'100%',minWidth:500}}>
+          <thead>
+            <tr>
+              <th style={{textAlign:'left',fontSize:11,color:'var(--text-muted)',padding:'6px 10px',width:180}}>Action</th>
+              {ROLES_LIST.map(r=><th key={r.key} style={{textAlign:'center',fontSize:11,color:'var(--text-muted)',padding:'6px 10px'}}>{r.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {ACTIONS_LIST.map(a=>(
+              <tr key={a.key} style={{borderTop:'1px solid var(--grey-50)'}}>
+                <td style={{fontSize:12.5,padding:'8px 10px'}}>{a.label}</td>
+                {ROLES_LIST.map(r=>{
+                  const granted = r.key==='owner' ? true : !!(perms[r.key]||{})[a.key];
+                  return (
+                    <td key={r.key} style={{textAlign:'center',padding:'8px 10px'}}>
+                      <div onClick={()=>toggle(r.key,a.key)} style={{width:36,height:20,borderRadius:10,margin:'0 auto',
+                        cursor:r.key==='owner'?'not-allowed':'pointer',
+                        background:granted?'var(--green)':'var(--border)',position:'relative',transition:'background .15s'}}>
+                        <div style={{position:'absolute',top:2,left:granted?18:2,width:16,height:16,borderRadius:'50%',
+                          background:'#fff',transition:'left .15s',boxShadow:'0 1px 3px rgba(0,0,0,.2)'}} />
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{fontSize:11,color:'var(--text-muted)',marginTop:10}}>Owner always has full access.</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Settings ─────────────────────────────────────────
+function Settings() {
+  return (
+    <div>
+      <div className="card">
+        <div className="card-header"><span className="card-title">Danger Zone</span></div>
+        <div className="card-body">
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>
+            {[
+              { label:'Clear All Tasks', desc:'Removes all tasks permanently.', scope:'tasks' },
+              { label:'Clear Work Orders', desc:'Deletes all WOs and data.', scope:'workorders' },
+              { label:'Clear Cash Flow Data', desc:'Wipes forecast entries.', scope:'cashflow' },
+              { label:'Clear Bill Payments', desc:'Removes all bills and advances.', scope:'bills' },
+              { label:'Clear Milestones', desc:'Deletes all payment milestones.', scope:'milestones' },
+              { label:'Clear Quotations', desc:'Removes all quotations.', scope:'quotations' },
+              { label:'Clear Purchase Orders', desc:'Removes all POs.', scope:'purchaseorders' },
+              { label:'Clear Petty Cash', desc:'Removes all petty cash entries.', scope:'pettycash' },
+              { label:'Reset All Data', desc:'Wipes everything. Cannot be undone.', scope:'all' },
+            ].map(item => <ClearDataCard key={item.scope} item={item} />)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettingsWithUser({ currentUser }) {
   return (
     <div>
