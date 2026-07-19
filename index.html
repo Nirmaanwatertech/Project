@@ -459,7 +459,17 @@ function ListsManager() {
 }
 
 // Reusable project selector — drop-in for any form
-function ProjectSelect({ value, onChange, required }) {
+function ProjectSelect({ value, onChange, split, onSplitChange, required }) {
+  // split = { pontoon: 50, wtp: 50 } — passed down from parent form state
+  function handleSplitChange(field, val) {
+    const num = Math.min(100, Math.max(0, Number(val)||0));
+    const other = 100 - num;
+    if (field === 'pontoon') onSplitChange && onSplitChange({ pontoon: num, wtp: other });
+    else onSplitChange && onSplitChange({ pontoon: other, wtp: num });
+  }
+  const total = (split?.pontoon||0) + (split?.wtp||0);
+  const valid = total === 100;
+
   return (
     <div className="form-group">
       <label className="form-label">
@@ -469,6 +479,32 @@ function ProjectSelect({ value, onChange, required }) {
         <option value="">Select project…</option>
         {PROJECTS.map(p=><option key={p}>{p}</option>)}
       </select>
+      {value === 'Both' && (
+        <div style={{marginTop:8,padding:'10px 12px',background:'var(--primary-50)',borderRadius:6,border:'1px solid var(--primary)'}}>
+          <div style={{fontSize:11.5,fontWeight:600,color:'var(--primary)',marginBottom:8}}>Apportion between projects</div>
+          <div style={{display:'flex',gap:12,alignItems:'center'}}>
+            <div style={{flex:1}}>
+              <label style={{fontSize:11,color:'var(--text-muted)',display:'block',marginBottom:3}}>Pontoon %</label>
+              <input type="number" min="0" max="100" className="form-input font-mono"
+                style={{textAlign:'center'}}
+                value={split?.pontoon ?? 50}
+                onChange={e=>handleSplitChange('pontoon', e.target.value)} />
+            </div>
+            <div style={{fontSize:13,color:'var(--text-muted)',paddingTop:16}}>+</div>
+            <div style={{flex:1}}>
+              <label style={{fontSize:11,color:'var(--text-muted)',display:'block',marginBottom:3}}>WTP %</label>
+              <input type="number" min="0" max="100" className="form-input font-mono"
+                style={{textAlign:'center'}}
+                value={split?.wtp ?? 50}
+                onChange={e=>handleSplitChange('wtp', e.target.value)} />
+            </div>
+            <div style={{paddingTop:16,fontSize:13,fontWeight:700,color:valid?'var(--green)':'var(--red)',minWidth:40}}>
+              = {total}%
+            </div>
+          </div>
+          {!valid && <div style={{fontSize:11,color:'var(--red)',marginTop:4}}>Must total 100%</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -915,7 +951,7 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
             <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} />
           </div>
           <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
-          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -936,7 +972,7 @@ function NewMilestoneModal({ onClose, pos, existing }) {
     name: existing.name||'', pct: existing.pct||'',
     amount: existing.amount ? String(existing.amount) : '',
     due: existing.due||'', po: existing.po||'', wo: existing.wo||'', project: existing.project||''
-  } : { name:'', pct:'', amount:'', due:'', po:'', wo:'', project:'' });
+  } : { name:'', pct:'', amount:'', due:'', po:'', wo:'', project:'', split:{pontoon:50,wtp:50} });
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
 
@@ -979,7 +1015,7 @@ function NewMilestoneModal({ onClose, pos, existing }) {
               {(pos||[]).map(p=><option key={p.docId} value={p.po}>{p.po} — {p.vendorName}</option>)}
             </select>
           </div>
-          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -1800,11 +1836,11 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
     linkedQuotation: existing.linkedQuotation||'', stage: existing.stage||'Draft',
     due: existing.due||'', notes: existing.notes||'',
-    project: existing.project||''
+    project: existing.project||'', split: existing.split||{pontoon:50,wtp:50}
   } : {
     wo: nextNumber, vendorName: '', description: '', value: '',
     linkedQuotation: '', stage: 'Draft', due: '', notes: '',
-    project: ''
+    project: '', split:{pontoon:50,wtp:50}
   });
   const [schedule, setSchedule] = useState(isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) : []);
   const [saving, setSaving] = useState(false);
@@ -2115,7 +2151,7 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
     po: nextNumber, vendorName: prefill?.party || '', description: prefill?.description || '',
     value: prefill?.value ? String(prefill.value) : '',
     linkedQuotation: prefill?.fromQuotation || '',
-    stage: 'Draft', project: ''
+    stage: 'Draft', project: '', split:{pontoon:50,wtp:50}
   });
   const [schedule, setSchedule] = useState(
     isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) :
@@ -2206,7 +2242,7 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
               {PO_STAGES.map(s => <option key={s}>{s}</option>)}
             </select>
           </div>
-          <ProjectSelect value={form.project||''} onChange={v=>set('project',v)} />
+          <ProjectSelect value={form.project||''} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -2768,9 +2804,9 @@ function NewBillModal({ onClose, existing }) {
   const [form, setForm] = useState(isEdit ? {
     payee: existing.payee||'', category: existing.category||'Vendor',
     invoiceNo: existing.invoiceNo||'', invoiceDate: existing.invoiceDate||'',
-    due: existing.due||'', amount: existing.amount ? String(existing.amount) : '', notes: existing.notes||'', project: existing.project||''
+    due: existing.due||'', amount: existing.amount ? String(existing.amount) : '', notes: existing.notes||'', project: existing.project||'', split: existing.split||{pontoon:50,wtp:50}
   } : {
-    payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '', notes: '', project: ''
+    payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '', notes: '', project: '', split:{pontoon:50,wtp:50}
   });
   const [saving, setSaving] = useState(false);
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
@@ -2831,7 +2867,7 @@ function NewBillModal({ onClose, existing }) {
             <label className="form-label">Notes</label>
             <input className="form-input" value={form.notes} onChange={e=>set('notes', e.target.value)} placeholder="Optional notes" />
           </div>
-          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -2851,7 +2887,7 @@ function NewAdvanceModal({ onClose, pos, bills }) {
   const [form, setForm] = useState({
     vendor: '', amount: '', datePaid: new Date().toISOString().slice(0,10),
     paymentMode: 'NEFT', refNumber: '', narration: '',
-    linkedPO: '', linkedBill: '', project: ''
+    linkedPO: '', linkedBill: '', project: '', split:{pontoon:50,wtp:50}
   });
   const [saving, setSaving] = useState(false);
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
@@ -2930,7 +2966,7 @@ function NewAdvanceModal({ onClose, pos, bills }) {
               </div>
             </div>
           </div>
-          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -3471,7 +3507,7 @@ function NewBillingScheduleModal({ onClose }) {
               </span>
             </div>
           </div>
-          <ProjectSelect value={form.project} onChange={v=>set('project',v)} required />
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} required />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -4088,6 +4124,7 @@ function NewPettyModal({ onClose, currentUser, existing }) {
     paidBy: currentUser ? currentUser.name : 'Neer',
     description: '',
     project: '',
+    split: {pontoon:50,wtp:50},
   });
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
@@ -4142,7 +4179,7 @@ function NewPettyModal({ onClose, currentUser, existing }) {
             <label className="form-label">Description</label>
             <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. Petrol for site visit — Thane" />
           </div>
-          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -4399,7 +4436,7 @@ function NewCapitalModal({ onClose, existing }) {
   } : {
     type: 'Bank Loan', source: '', amount: '', dateReceived: new Date().toISOString().slice(0,10),
     paymentMode: 'NEFT', refNumber: '', notes: '',
-    isLoan: true, emiAmount: '', tenureMonths: '', emiStartDate: '', interestRate: '', project: ''
+    isLoan: true, emiAmount: '', tenureMonths: '', emiStartDate: '', interestRate: '', project: '', split:{pontoon:50,wtp:50}
   });
   const [saving, setSaving] = useState(false);
   function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
@@ -4507,7 +4544,7 @@ function NewCapitalModal({ onClose, existing }) {
               )}
             </div>
           )}
-          <ProjectSelect value={form.project||''} onChange={v=>set('project',v)} />
+          <ProjectSelect value={form.project||''} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
@@ -4611,31 +4648,35 @@ function ProjectPnL() {
   const { items: capital }   = useCapitalLoans();
 
   function calcProject(proj) {
-    const match = (item) => item.project === proj || item.project === 'Both';
+    const projKey = proj === 'Pontoon' ? 'pontoon' : 'wtp';
+
+    function matchAmt(item, amtField) {
+      const amt = Number(item[amtField]||0);
+      if (item.project === proj) return amt;
+      if (item.project === 'Both') {
+        const pct = (item.split?.[projKey] ?? 50) / 100;
+        return amt * pct;
+      }
+      return 0;
+    }
 
     // ── INCOME ──────────────────────────────────────
-    // Client receipts only
-    const receiptIncome = receipts.filter(r => {
-      const rp = r.project || r.scheduleProject || '';
-      return rp === proj || rp === 'Both';
-    }).reduce((s,r) => s + Number(r.amountReceived||0), 0);
-
-    // Payment milestones received (vendor-side, not client)
-    const milestoneIncome = milestones.filter(m => m.paid && match(m)).reduce((s,m) => s + Number(m.amount||0), 0);
-
-    const capitalIncome = 0; // Excluded from P&L — shown in Cash Flow only
+    const receiptIncome = receipts.filter(r => r.project===proj || r.project==='Both')
+      .reduce((s,r) => s + matchAmt(r,'amountReceived'), 0);
+    const milestoneIncome = milestones.filter(m => m.paid && (m.project===proj || m.project==='Both'))
+      .reduce((s,m) => s + matchAmt(m,'amount'), 0);
+    const capitalIncome = 0;
     const totalIncome = receiptIncome + milestoneIncome;
 
     // ── EXPENSES (Paid / Incurred) ────────────────────
-    const billExp    = bills.filter(b => match(b)).reduce((s,b) => s + Number(b.amount||0), 0);
-    const advanceExp = advances.filter(a => match(a)).reduce((s,a) => s + Number(a.amount||0), 0);
-    const pettyExp   = petty.filter(p => match(p)).reduce((s,p) => s + Number(p.amount||0), 0);
-
+    const billExp    = bills.filter(b => b.project===proj || b.project==='Both').reduce((s,b) => s + matchAmt(b,'amount'), 0);
+    const advanceExp = advances.filter(a => a.project===proj || a.project==='Both').reduce((s,a) => s + matchAmt(a,'amount'), 0);
+    const pettyExp   = petty.filter(p => p.project===proj || p.project==='Both').reduce((s,p) => s + matchAmt(p,'amount'), 0);
     const totalExpenses = billExp + advanceExp + pettyExp;
 
     // ── COMMITMENTS (Not yet paid) ────────────────────
-    const poExp = pos.filter(p => match(p)).reduce((s,p) => s + Number(p.value||0), 0);
-    const woExp = wos.filter(w => match(w)).reduce((s,w) => s + Number(w.value||0), 0);
+    const poExp = pos.filter(p => p.project===proj || p.project==='Both').reduce((s,p) => s + matchAmt(p,'value'), 0);
+    const woExp = wos.filter(w => w.project===proj || w.project==='Both').reduce((s,w) => s + matchAmt(w,'value'), 0);
     const totalCommitted = poExp + woExp;
 
     const margin    = totalIncome - totalExpenses;
@@ -4645,10 +4686,10 @@ function ProjectPnL() {
       receiptIncome, milestoneIncome, capitalIncome, totalIncome,
       billExp, advanceExp, poExp, woExp, pettyExp,
       totalExpenses, totalCommitted, margin, marginPct,
-      billCount:  bills.filter(b=>match(b)).length,
-      poCount:    pos.filter(p=>match(p)).length,
-      woCount:    wos.filter(w=>match(w)).length,
-      pettyCount: petty.filter(p=>match(p)).length,
+      billCount:  bills.filter(b=>b.project===proj||b.project==='Both').length,
+      poCount:    pos.filter(p=>p.project===proj||p.project==='Both').length,
+      woCount:    wos.filter(w=>w.project===proj||w.project==='Both').length,
+      pettyCount: petty.filter(p=>p.project===proj||p.project==='Both').length,
     };
   }
 
@@ -4854,7 +4895,7 @@ function NewReminderModal({ onClose }) {
               </select>
             </div>
           </div>
-          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
           <div className="form-group">
             <label className="form-label">Notes</label>
             <input className="form-input" value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Optional details" />
@@ -5565,7 +5606,7 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
             <label className="form-label">Notes</label>
             <textarea className="form-input" rows="2" value={form.notes} onChange={e=>set('notes',e.target.value)} style={{resize:'vertical'}} />
           </div>
-          <ProjectSelect value={form.project} onChange={v=>set('project',v)} />
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
