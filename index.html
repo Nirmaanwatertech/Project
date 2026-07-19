@@ -4614,14 +4614,8 @@ function ProjectPnL() {
     const match = (item) => item.project === proj || item.project === 'Both';
 
     // ── INCOME ──────────────────────────────────────
-    // Client receipts — match via scheduleId → billing schedule project
-    // Receipts store scheduleId; billing schedules store project
-    const scheduleIds = new Set(
-      useCapitalLoans ? [] : [] // placeholder — matched below via direct join
-    );
+    // Client receipts only
     const receiptIncome = receipts.filter(r => {
-      // receipts may have project directly (if billing schedule had project set)
-      // or we match via schedule's project field stored on the receipt
       const rp = r.project || r.scheduleProject || '';
       return rp === proj || rp === 'Both';
     }).reduce((s,r) => s + Number(r.amountReceived||0), 0);
@@ -4629,10 +4623,8 @@ function ProjectPnL() {
     // Payment milestones received (vendor-side, not client)
     const milestoneIncome = milestones.filter(m => m.paid && match(m)).reduce((s,m) => s + Number(m.amount||0), 0);
 
-    // Capital inflows tagged to this project
-    const capitalIncome = capital.filter(c => match(c)).reduce((s,c) => s + Number(c.amount||0), 0);
-
-    const totalIncome = receiptIncome + milestoneIncome + capitalIncome;
+    const capitalIncome = 0; // Excluded from P&L — shown in Cash Flow only
+    const totalIncome = receiptIncome + milestoneIncome;
 
     // ── EXPENSES (Paid / Incurred) ────────────────────
     const billExp    = bills.filter(b => match(b)).reduce((s,b) => s + Number(b.amount||0), 0);
