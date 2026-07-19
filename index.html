@@ -5694,6 +5694,76 @@ const TITLES = {
 };
 
 // ─── App ──────────────────────────────────────────────
+// ─── Login Screen ─────────────────────────────────────
+function LoginScreen({ onLogin }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function handleLogin() {
+    if (!email.trim() || !password) return;
+    setLoading(true); setError('');
+    try {
+      const { auth, signInWithEmailAndPassword, db, doc, onSnapshot } = window.fb;
+      const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const uid = cred.user.uid;
+      // Fetch profile from Firestore
+      const userRef = doc(db, 'users', uid);
+      const snap = await new Promise((res,rej) => {
+        const unsub = onSnapshot(userRef, s => { unsub(); res(s); }, rej);
+      });
+      let profile;
+      if (snap.exists()) {
+        const d = snap.data();
+        profile = { uid, name: d.name||d.Name||cred.user.email, email: cred.user.email, initials: d.initials||(d.name||d.Name||'U')[0].toUpperCase(), role: d.role||'viewer' };
+      } else {
+        profile = { uid, name: cred.user.email, email: cred.user.email, initials: cred.user.email[0].toUpperCase(), role: 'owner' };
+      }
+      window.currentUser = profile;
+      onLogin(profile);
+    } catch(e) {
+      console.error('Login error:', e);
+      if (e.code==='auth/invalid-credential'||e.code==='auth/wrong-password'||e.code==='auth/user-not-found') setError('Incorrect email or password.');
+      else if (e.code==='auth/invalid-email') setError('Please enter a valid email address.');
+      else if (e.code==='auth/too-many-requests') setError('Too many attempts. Please wait and try again.');
+      else setError('Sign in failed. Check your connection and try again.');
+    } finally { setLoading(false); }
+  }
+
+  return (
+    <div style={{minHeight:'100vh',background:'var(--primary-dark)',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'var(--font-sans)'}}>
+      <div style={{background:'var(--surface)',borderRadius:12,width:380,boxShadow:'0 8px 40px rgba(0,0,0,.3)',overflow:'hidden'}}>
+        <div style={{background:'var(--primary)',padding:'32px 28px 28px',textAlign:'center'}}>
+          <div style={{fontSize:36,marginBottom:10}}>💧</div>
+          <div style={{fontWeight:800,fontSize:18,color:'#fff',letterSpacing:.3}}>Nirmaan Watertech</div>
+          <div style={{fontSize:12,color:'rgba(255,255,255,.65)',marginTop:4}}>Internal Workflow Platform</div>
+        </div>
+        <div style={{padding:'28px 28px 24px'}}>
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:11.5,fontWeight:600,color:'var(--text-secondary)',display:'block',marginBottom:5}}>Email Address</label>
+            <input type="email" value={email} onChange={e=>{setEmail(e.target.value);setError('');}}
+              onKeyDown={e=>e.key==='Enter'&&handleLogin()} placeholder="you@nirmaanwatertech.com" autoFocus
+              style={{width:'100%',padding:'10px 12px',border:`1px solid ${error?'var(--red)':'var(--border)'}`,borderRadius:6,fontSize:13,outline:'none',boxSizing:'border-box'}} />
+          </div>
+          <div style={{marginBottom:20}}>
+            <label style={{fontSize:11.5,fontWeight:600,color:'var(--text-secondary)',display:'block',marginBottom:5}}>Password</label>
+            <input type="password" value={password} onChange={e=>{setPassword(e.target.value);setError('');}}
+              onKeyDown={e=>e.key==='Enter'&&handleLogin()} placeholder="Your password"
+              style={{width:'100%',padding:'10px 12px',border:`1px solid ${error?'var(--red)':'var(--border)'}`,borderRadius:6,fontSize:13,outline:'none',boxSizing:'border-box'}} />
+          </div>
+          {error && <div style={{background:'#FFEBEE',border:'1px solid #FFCDD2',borderRadius:6,padding:'8px 12px',fontSize:12,color:'var(--red)',marginBottom:16}}>{error}</div>}
+          <button onClick={handleLogin} disabled={loading||!email.trim()||!password}
+            style={{width:'100%',background:loading||!email.trim()||!password?'#90CAF9':'var(--primary)',color:'#fff',border:'none',borderRadius:6,padding:'11px',fontWeight:700,fontSize:13,cursor:'pointer'}}>
+            {loading?'Signing in…':'Sign In'}
+          </button>
+          <div style={{fontSize:11,color:'var(--text-muted)',textAlign:'center',marginTop:16}}>Nirmaan Watertech Solutions · Mulund West, Mumbai</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true); // true while checking session
