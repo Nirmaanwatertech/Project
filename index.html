@@ -5775,7 +5775,7 @@ function LoginScreen({ onLogin }) {
       const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
       const uid = cred.user.uid;
       // Fetch profile from Firestore
-      const userRef = doc(db, 'users', uid);
+      const userRef = doc(db, uid, uid);
       const snap = await new Promise((res,rej) => {
         const unsub = onSnapshot(userRef, s => { unsub(); res(s); }, rej);
       });
@@ -5849,7 +5849,7 @@ function App() {
       const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
         if (firebaseUser) {
           // User is signed in — fetch their Firestore profile
-          const userRef = doc(db, 'users', firebaseUser.uid);
+          const userRef = doc(db, firebaseUser.uid, firebaseUser.uid);
           const profileUnsub = onSnapshot(userRef, (snap) => {
             if (snap.exists()) {
               const data = snap.data();
