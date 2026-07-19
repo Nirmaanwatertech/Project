@@ -5907,41 +5907,45 @@ function App() {
   // Listen for Firebase Auth state — persists across page reloads
   useEffect(() => {
     function startAuthListener() {
-      const { auth, onAuthStateChanged, db, doc, onSnapshot } = window.fb;
+      const { auth, onAuthStateChanged, db, doc, getDoc, onSnapshot } = window.fb;
       const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
         if (firebaseUser) {
-          // User is signed in — fetch their Firestore profile
-          const userRef = doc(db, firebaseUser.uid, firebaseUser.uid);
+          const uid = firebaseUser.uid;
+
+          function buildProfile(data, fallbackName) {
+            const name = data?.name || data?.Name || fallbackName || firebaseUser.email;
+            const role = data?.role || data?.Role || 'owner';
+            return {
+              uid, name, email: firebaseUser.email,
+              initials: data?.initials || name[0].toUpperCase(),
+              role
+            };
+          }
+
+          function applyProfile(profile) {
+            window.currentUser = profile;
+            setCurrentUser(profile);
+            setAuthLoading(false);
+            window.dispatchEvent(new CustomEvent('user-ready', { detail: { uid } }));
+          }
+
+          // Try path 1: doc(db, uid, uid) — collection named UID, doc named UID
+          const userRef = doc(db, uid, uid);
           const profileUnsub = onSnapshot(userRef, (snap) => {
             if (snap.exists()) {
-              const data = snap.data();
-              const name = data.name || data.Name || firebaseUser.email;
-              const role = data.role || data.Role || 'owner';
-              const profile = {
-                uid: firebaseUser.uid,
-                name,
-                email: firebaseUser.email,
-                initials: data.initials || (name[0]||'U').toUpperCase(),
-                role
-              };
-              window.currentUser = profile;
-              setCurrentUser(profile);
+              applyProfile(buildProfile(snap.data()));
             } else {
-              // Auth user exists but no Firestore profile — default to owner
-              const profile = {
-                uid: firebaseUser.uid,
-                name: firebaseUser.email,
-                email: firebaseUser.email,
-                initials: firebaseUser.email[0].toUpperCase(),
-                role: 'owner'
-              };
-              window.currentUser = profile;
-              setCurrentUser(profile);
+              // Try path 2: doc(db, 'users', uid)
+              getDoc(doc(db, 'users', uid)).then(snap2 => {
+                if (snap2.exists()) {
+                  applyProfile(buildProfile(snap2.data()));
+                } else {
+                  // No profile found — use email but default role to owner
+                  applyProfile(buildProfile(null));
+                }
+              }).catch(() => applyProfile(buildProfile(null)));
             }
-            setAuthLoading(false);
-            // Tell all hooks the user is now authenticated
-            window.dispatchEvent(new CustomEvent('user-ready', { detail: { uid: firebaseUser.uid } }));
-          });
+          }, () => applyProfile(buildProfile(null)));
           return profileUnsub;
         } else {
           // Not signed in
@@ -6017,7 +6021,7 @@ function App() {
               {currentUser.initials}
             </div>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:12,fontWeight:600,color:'#fff',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{currentUser.name}</div>
+              <div style={{fontSize:12,fontWeight:600,color:'#fff',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{currentUser.name.charAt(0).toUpperCase()+currentUser.name.slice(1)}</div>
               <div style={{fontSize:10,color:'rgba(255,255,255,.5)',textTransform:'capitalize'}}>{currentUser.role.replace('_',' ')} · Sign out</div>
             </div>
           </div>
