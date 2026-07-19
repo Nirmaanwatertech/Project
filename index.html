@@ -279,24 +279,20 @@ const inr = (n) => '₹' + Number(n).toLocaleString('en-IN');
 // These helpers resolve the correct path for every read/write operation.
 
 function getUserUID() {
-  // Read from Firebase Auth directly — always in sync, no timing issues
   if (window.fb?.auth?.currentUser?.uid) return window.fb.auth.currentUser.uid;
-  // Fallback to window.currentUser set by onAuthStateChanged
   return window.currentUser?.uid || null;
 }
 
+// Data is at ROOT level in Firestore — not under users/{uid}
+// userCol and userDoc simply reference root collections directly
 function userCol(colName) {
   const { db, collection } = window.fb;
-  const uid = getUserUID();
-  if (!uid) throw new Error('Not authenticated — cannot access: ' + colName);
-  return collection(db, 'users', uid, colName);
+  return collection(db, colName);
 }
 
 function userDoc(colName, docId) {
   const { db, doc } = window.fb;
-  const uid = getUserUID();
-  if (!uid) throw new Error('Not authenticated — cannot access: ' + colName + '/' + docId);
-  return doc(db, 'users', uid, colName, docId);
+  return doc(db, colName, docId);
 }
 
 // ─── Projects ─────────────────────────────────────────
