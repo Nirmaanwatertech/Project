@@ -710,6 +710,137 @@ function ClearCollectionButton({ label, count, onClear }) {
   );
 }
 
+// ─── Utility helpers ──────────────────────────────────
+function genRowId() { return Math.random().toString(36).slice(2,8); }
+
+function ComingSoon({ title, icon, desc }) {
+  return (
+    <div>
+      <div className="section-header"><div className="section-title">{title}</div></div>
+      <div className="card">
+        <div className="module-coming">
+          <div className="big-icon">{icon}</div>
+          <h3>{title}</h3>
+          <p className="text-muted">{desc}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PermGate({ user, action, customPerms, children, fallback }) {
+  if (can(user, action, customPerms)) return children;
+  return fallback || null;
+}
+
+function ClearDataCard({ item }) {
+  const isWired = ['tasks','workorders','bills','cashflow','milestones','quotations','purchaseorders','pettycash'].includes(item.scope);
+  const [step, setStep] = useState(0);
+  const [typed, setTyped] = useState('');
+  const [working, setWorking] = useState(false);
+  const [cleared, setCleared] = useState(false);
+
+  async function handleClear() {
+    setWorking(true);
+    try {
+      if (item.scope==='tasks')          await clearAllTasks();
+      else if (item.scope==='workorders') await clearAllWorkOrders();
+      else if (item.scope==='bills')      await Promise.all([clearAllBills(), clearAllAdvances()]);
+      else if (item.scope==='cashflow')   await clearCashFlowData();
+      else if (item.scope==='milestones') await clearAllMilestones();
+      else if (item.scope==='quotations') await clearAllQuotations();
+      else if (item.scope==='purchaseorders') await clearAllPOs();
+      else if (item.scope==='pettycash')  await clearAllPettyCash();
+      else if (item.scope==='all') {
+        await Promise.all([
+          clearAllTasks(), clearAllWorkOrders(), clearCashFlowData(),
+          clearAllMilestones(), clearAllQuotations(), clearAllPOs(),
+          clearAllBills(), clearAllAdvances(), clearAllPettyCash()
+        ]);
+      }
+      setCleared(true); setStep(0); setTyped('');
+    } catch(e) { console.error(e); alert('Could not clear data.'); }
+    finally { setWorking(false); }
+  }
+
+  return (
+    <div style={{background:'var(--surface)',border:'1px solid #FFCDD2',borderRadius:8,padding:'14px 16px'}}>
+      <div style={{fontWeight:600,fontSize:12.5,marginBottom:4}}>{item.label}</div>
+      <div style={{fontSize:11.5,color:'var(--text-muted)',marginBottom:10}}>{item.desc}</div>
+      {cleared && <div style={{fontSize:11.5,color:'var(--green)',marginBottom:8}}>✓ Cleared</div>}
+      {!isWired ? (
+        <span style={{fontSize:11,color:'var(--text-muted)'}}>Coming soon</span>
+      ) : step===0 ? (
+        <button onClick={()=>setStep(1)} className="btn btn-sm" style={{background:'#FFEBEE',color:'var(--red)',border:'1px solid #FFCDD2'}}>Clear →</button>
+      ) : step===1 ? (
+        <div>
+          <div style={{fontSize:11.5,color:'var(--red)',marginBottom:6}}>Type DELETE to confirm:</div>
+          <div style={{display:'flex',gap:6}}>
+            <input className="form-input font-mono" style={{fontSize:12,width:100}} value={typed} onChange={e=>setTyped(e.target.value.toUpperCase())} placeholder="DELETE" />
+            <button onClick={handleClear} disabled={typed!=='DELETE'||working}
+              style={{background:typed==='DELETE'?'var(--red)':'#BDBDBD',color:'#fff',border:'none',borderRadius:4,padding:'6px 12px',fontSize:12,cursor:'pointer'}}>
+              {working?'…':'Confirm'}
+            </button>
+            <button onClick={()=>{setStep(0);setTyped('');}} className="btn btn-sm btn-ghost">Cancel</button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// PaymentScheduleEditor — used in WO, PO, Quotation modals
+function PaymentScheduleEditor({ rows, setRows, totalValue }) {
+  function addRow() { setRows(r=>[...r,{id:genRowId(),name:'',pct:'',amount:'',date:''}]); }
+  function removeRow(id) { setRows(r=>r.filter(x=>x.id!==id)); }
+  function updateRow(id,field,value) {
+    setRows(r=>r.map(x=>{
+      if(x.id!==id) return x;
+      const next={...x,[field]:value};
+      if(field==='pct'&&totalValue) next.amount=String(Math.round((parseFloat(value)||0)/100*Number(totalValue)));
+      if(field==='amount'&&totalValue&&Number(totalValue)>0) next.pct=String(Math.round((Number(value)||0)/Number(totalValue)*100));
+      return next;
+    }));
+  }
+  const total = rows.reduce((s,r)=>s+(parseFloat(r.pct)||0),0);
+  return (
+    <div className="form-group">
+      <label className="form-label">Payment Schedule <span style={{color:'var(--text-muted)',fontWeight:400,fontSize:11}}>(optional)</span></label>
+      {rows.length>0 && (
+        <div style={{border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',marginBottom:8}}>
+          <table style={{width:'100%'}}>
+            <thead><tr style={{background:'var(--grey-50)'}}>
+              {['Stage','%','Amount (₹)','Date',''].map((h,i)=><th key={i} style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {rows.map(r=>(
+                <tr key={r.id} style={{borderTop:'1px solid var(--grey-50)'}}>
+                  <td style={{padding:3}}><input className="form-input" style={{fontSize:11.5,padding:'4px 6px'}} value={r.name} onChange={e=>updateRow(r.id,'name',e.target.value)} placeholder="e.g. Advance" /></td>
+                  <td style={{padding:3,width:60}}><input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px'}} value={r.pct} onChange={e=>updateRow(r.id,'pct',e.target.value)} placeholder="30" /></td>
+                  <td style={{padding:3,width:110}}><input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px'}} value={r.amount} onChange={e=>updateRow(r.id,'amount',e.target.value)} placeholder="0" /></td>
+                  <td style={{padding:3,width:130}}><input className="form-input" type="date" style={{fontSize:11.5,padding:'4px 6px'}} value={r.date} onChange={e=>updateRow(r.id,'date',e.target.value)} /></td>
+                  <td style={{padding:3,textAlign:'center',width:24}}><span onClick={()=>removeRow(r.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {total>0 && <div style={{padding:'4px 8px',fontSize:11,color:Math.abs(total-100)<1?'var(--green)':'var(--amber)',background:'var(--grey-50)'}}>Total: {total}%{Math.abs(total-100)<1?' ✓':' (should total 100%)'}</div>}
+        </div>
+      )}
+      <button type="button" onClick={addRow} className="btn btn-sm btn-outline">+ Add Stage</button>
+    </div>
+  );
+}
+
+// updateMilestone — used by NewMilestoneModal edit mode
+async function updateMilestone(docId, data) {
+  const { updateDoc } = window.fb;
+  await updateDoc(userDoc(MILESTONES_COLLECTION, docId), data);
+}
+
+// useRequisitions stub — referenced in CrossReference (removed) but may still be called
+function useRequisitions() { return { items: [], loading: false }; }
+
 // ─── Dashboard Module ─────────────────────────────────
 function Dashboard({ setActive }) {
   const { tasks }            = useTasks();
@@ -2212,6 +2343,100 @@ function CashFlow() {
       </div>
     </div>
   );
+}
+
+// ─── Quotations hook (used by PO, WO, ProjectPnL, Reports) ───
+const QUOTATIONS_COLLECTION = 'quotations';
+const QUOTE_STAGES = ['Receipt of Quotation','Negotiation','Finalization of T&C','Issuing of PO/WO'];
+const STAGE_COLOR = { 'Receipt of Quotation':'grey','Negotiation':'amber','Finalization of T&C':'blue','Issuing of PO/WO':'green' };
+
+function useQuotations() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, query, orderBy, onSnapshot } = window.fb;
+      const unsub = onSnapshot(
+        query(userCol(QUOTATIONS_COLLECTION), orderBy('createdAt','desc')),
+        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
+        err  => { console.error('Quotations listener',err); setLoading(false); }
+      );
+      return unsub;
+    }
+    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+    let u;
+    const h=()=>{ if(getUserUID()) u=start(); };
+    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
+    window.addEventListener('firebase-ready',h,{once:true});
+    window.addEventListener('user-ready',hu,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u)u(); };
+  },[]);
+  return {items,loading};
+}
+async function addQuotation(data) {
+  const { addDoc } = window.fb;
+  await addDoc(userCol(QUOTATIONS_COLLECTION), {...data, createdAt:Date.now()});
+}
+async function updateQuotation(docId, data) {
+  const { updateDoc } = window.fb;
+  await updateDoc(userDoc(QUOTATIONS_COLLECTION, docId), data);
+}
+async function deleteQuotation(docId) {
+  const { deleteDoc } = window.fb;
+  await deleteDoc(userDoc(QUOTATIONS_COLLECTION, docId));
+}
+async function clearAllQuotations() {
+  const { getDocs, writeBatch, db } = window.fb;
+  const snap = await getDocs(userCol(QUOTATIONS_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d=>batch.delete(d.ref));
+  await batch.commit();
+}
+
+// ─── Milestones hook (used by PaymentTracker, ProjectPnL, Reports) ──
+const MILESTONES_COLLECTION = 'milestones';
+
+function useMilestones() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, query, orderBy, onSnapshot } = window.fb;
+      const unsub = onSnapshot(
+        query(userCol(MILESTONES_COLLECTION), orderBy('createdAt','desc')),
+        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
+        err  => { console.error('Milestones listener',err); setLoading(false); }
+      );
+      return unsub;
+    }
+    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+    let u;
+    const h=()=>{ if(getUserUID()) u=start(); };
+    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
+    window.addEventListener('firebase-ready',h,{once:true});
+    window.addEventListener('user-ready',hu,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u)u(); };
+  },[]);
+  return {items,loading};
+}
+async function addMilestone(data) {
+  const { addDoc } = window.fb;
+  await addDoc(userCol(MILESTONES_COLLECTION), {...data, createdAt:Date.now()});
+}
+async function markMilestonePaid(docId) {
+  const { updateDoc } = window.fb;
+  await updateDoc(userDoc(MILESTONES_COLLECTION, docId), {paid:true, paidAt:Date.now()});
+}
+async function deleteMilestone(docId) {
+  const { deleteDoc } = window.fb;
+  await deleteDoc(userDoc(MILESTONES_COLLECTION, docId));
+}
+async function clearAllMilestones() {
+  const { getDocs, writeBatch, db } = window.fb;
+  const snap = await getDocs(userCol(MILESTONES_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d=>batch.delete(d.ref));
+  await batch.commit();
 }
 
 // ─── Bills Module ─────────────────────────────────────
