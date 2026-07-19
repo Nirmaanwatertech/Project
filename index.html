@@ -299,6 +299,165 @@ function userDoc(colName, docId) {
 const PROJECTS = ['Pontoon', 'WTP', 'Both'];
 const PROJECT_COLOR = { 'Pontoon': 'blue', 'WTP': 'teal', 'Both': 'grey' };
 
+// ─── Configurable Lists ───────────────────────────────
+const DEFAULT_LISTS = {
+  employees:      ['Neer','Manav','Vikram Singh','Amardeep Singh','Pritesh','Hardik','Kushan'],
+  pettyCategories:['Auto / Fuel','Tea & Snacks','Courier','Stationery','Site Travel','Minor Hardware','Telephone / Recharge','Printing','Bank Charges','Miscellaneous'],
+  billCategories: ['Vendor','Fixed','Professional','Utilities','Logistics','GST/Govt'],
+  paymentModes:   ['NEFT','RTGS','Cheque','Cash','UPI','Other'],
+  capitalTypes:   ['Investor Fund','Bank Loan','Overdraft','Owner Capital Injection','Grant','Other'],
+  reqCategories:  ['Materials','Services','Both'],
+  reqPriorities:  ['Urgent','Normal','Low'],
+};
+
+window.appLists = { ...DEFAULT_LISTS };
+
+function useLists() {
+  const [lists, setLists] = useState(window.appLists);
+  useEffect(() => {
+    function start() {
+      const { db, doc, onSnapshot } = window.fb;
+      const unsub = onSnapshot(doc(db, 'settings', 'lists'), snap => {
+        if (snap.exists()) {
+          const merged = { ...DEFAULT_LISTS, ...snap.data() };
+          window.appLists = merged;
+          setLists(merged);
+        }
+      }, err => console.error('Lists listener', err));
+      return unsub;
+    }
+    if (window.fb) { const u = start(); return () => u && u(); }
+    let u; const h = () => { u = start(); };
+    window.addEventListener('firebase-ready', h, { once: true });
+    return () => { window.removeEventListener('firebase-ready', h); if (u) u(); };
+  }, []);
+  return lists;
+}
+
+async function saveLists(lists) {
+  const { db, doc, setDoc } = window.fb;
+  await setDoc(doc(db, 'settings', 'lists'), lists, { merge: true });
+  window.appLists = { ...window.appLists, ...lists };
+}
+
+function ListsManager() {
+  const lists = useLists();
+  const [localLists, setLocalLists] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [newItems, setNewItems] = useState({});
+  const [dragging, setDragging] = useState(null);
+  const [dragTarget, setDragTarget] = useState(null);
+
+  useEffect(() => { setLocalLists({ ...lists }); }, [JSON.stringify(lists)]);
+
+  if (!localLists) return <div style={{padding:16,color:'var(--text-muted)',fontSize:12}}>Loading lists…</div>;
+
+  function removeItem(listKey, idx) {
+    setLocalLists(l => ({ ...l, [listKey]: l[listKey].filter((_,i) => i !== idx) }));
+  }
+
+  function addItem(listKey) {
+    const val = (newItems[listKey] || '').trim();
+    if (!val) return;
+    if (localLists[listKey].map(s=>s.toLowerCase()).includes(val.toLowerCase())) return;
+    setLocalLists(l => ({ ...l, [listKey]: [...l[listKey], val] }));
+    setNewItems(n => ({ ...n, [listKey]: '' }));
+  }
+
+  function onDragStart(listKey, idx) { setDragging({ listKey, idx }); }
+  function onDragEnter(listKey, idx) { setDragTarget({ listKey, idx }); }
+  function onDragEnd(listKey) {
+    if (!dragging || !dragTarget) { setDragging(null); setDragTarget(null); return; }
+    if (dragging.listKey !== listKey || dragging.idx === dragTarget.idx) { setDragging(null); setDragTarget(null); return; }
+    setLocalLists(l => {
+      const arr = [...l[listKey]];
+      const [moved] = arr.splice(dragging.idx, 1);
+      arr.splice(dragTarget.idx, 0, moved);
+      return { ...l, [listKey]: arr };
+    });
+    setDragging(null); setDragTarget(null);
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try { await saveLists(localLists); setSaved(true); setTimeout(() => setSaved(false), 2000); }
+    catch(e) { console.error(e); alert('Could not save.'); }
+    finally { setSaving(false); }
+  }
+
+  const SECTIONS = [
+    { key: 'employees',       label: '👷 Employees',              desc: 'Task assigned-to · Petty Cash paid-by' },
+    { key: 'pettyCategories', label: '💰 Petty Cash Categories',  desc: 'Petty Cash entry category' },
+    { key: 'billCategories',  label: '📑 Bill Categories',        desc: 'Bill Payments category' },
+    { key: 'paymentModes',    label: '💳 Payment Modes',          desc: 'Advances · Receipts · Capital & Loans' },
+    { key: 'capitalTypes',    label: '🏦 Capital / Loan Types',   desc: 'Capital & Loans type selector' },
+  ];
+
+  return (
+    <div className="card">
+      <div className="card-header" style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <span className="card-title">Lists Manager</span>
+        <button className="btn btn-sm btn-primary" onClick={handleSave} disabled={saving}>
+          {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save All Changes'}
+        </button>
+      </div>
+      <div className="card-body">
+        <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:16}}>
+          Drag ☰ to reorder · × to remove · type and press Enter to add. Changes apply everywhere after saving.
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+          {SECTIONS.map(sec => (
+            <div key={sec.key} style={{border:'1px solid var(--border)',borderRadius:8,overflow:'hidden'}}>
+              <div style={{background:'var(--grey-50)',padding:'8px 12px',borderBottom:'1px solid var(--border)'}}>
+                <div style={{fontWeight:700,fontSize:12.5}}>{sec.label}</div>
+                <div style={{fontSize:10.5,color:'var(--text-muted)',marginTop:1}}>{sec.desc}</div>
+              </div>
+              <div style={{padding:'8px 12px'}}>
+                <div style={{marginBottom:8}}>
+                  {localLists[sec.key].length === 0 && (
+                    <div style={{fontSize:11.5,color:'var(--text-muted)',padding:'6px 0'}}>No items — add one below.</div>
+                  )}
+                  {localLists[sec.key].map((item, idx) => (
+                    <div key={idx} draggable
+                      onDragStart={() => onDragStart(sec.key, idx)}
+                      onDragEnter={() => onDragEnter(sec.key, idx)}
+                      onDragEnd={() => onDragEnd(sec.key)}
+                      onDragOver={e => e.preventDefault()}
+                      style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'5px 4px',
+                        borderBottom:'1px solid var(--grey-50)',cursor:'grab',userSelect:'none',borderRadius:4,
+                        background: dragging?.listKey===sec.key&&dragging?.idx===idx?'var(--primary-50)':
+                                    dragTarget?.listKey===sec.key&&dragTarget?.idx===idx?'var(--grey-50)':'',
+                        opacity: dragging?.listKey===sec.key&&dragging?.idx===idx?0.5:1}}>
+                      <div style={{display:'flex',alignItems:'center',gap:8}}>
+                        <span style={{color:'var(--text-muted)',fontSize:13}}>☰</span>
+                        <span style={{fontSize:12.5}}>{item}</span>
+                      </div>
+                      <span onClick={() => removeItem(sec.key, idx)}
+                        style={{cursor:'pointer',color:'var(--red)',fontSize:17,lineHeight:1,padding:'0 4px'}}>×</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{display:'flex',gap:6}}>
+                  <input className="form-input" style={{fontSize:12,padding:'5px 8px',flex:1}}
+                    value={newItems[sec.key] || ''}
+                    onChange={e => setNewItems(n => ({ ...n, [sec.key]: e.target.value }))}
+                    onKeyDown={e => e.key === 'Enter' && addItem(sec.key)}
+                    placeholder="Type and press Enter…" />
+                  <button onClick={() => addItem(sec.key)}
+                    style={{background:'var(--primary)',color:'#fff',border:'none',borderRadius:4,padding:'5px 10px',fontSize:12,cursor:'pointer'}}>
+                    + Add
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Reusable project selector — drop-in for any form
 function ProjectSelect({ value, onChange, required }) {
   return (
