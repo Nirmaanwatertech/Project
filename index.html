@@ -4270,7 +4270,7 @@ function PettyCash({ currentUser }) {
 
   const filtered = itemsSortedByDate.filter(i=>
     (catFilter==='all' || i.category===catFilter) &&
-    (paidByFilter==='all' || i.paidBy===paidByFilter) &&
+    (paidByFilter==='all' || normName(i.paidBy)===paidByFilter) &&
     (monthFilter==='all' || (i.date||'').startsWith(monthFilter))
   );
 
@@ -4284,11 +4284,24 @@ function PettyCash({ currentUser }) {
     amt: filtered.filter(i=>i.category===cat).reduce((s,i)=>s+Number(i.amount||0),0)
   })).filter(c=>c.amt>0).sort((a,b)=>b.amt-a.amt);
 
-  // Paid by breakdown
-  const byPerson = [...new Set(items.map(i=>i.paidBy).filter(Boolean))].map(p=>({
-    person:p,
-    amt: filtered.filter(i=>i.paidBy===p).reduce((s,i)=>s+Number(i.amount||0),0)
-  })).filter(p=>p.amt>0).sort((a,b)=>b.amt-a.amt);
+  // Normalise paidBy: strip email domain if stored as email
+  function normName(v) {
+    if (!v) return '';
+    if (!v.includes('@')) return v;
+    const n = v.split('@')[0];
+    return n.charAt(0).toUpperCase() + n.slice(1);
+  }
+
+  // Paid by breakdown — group by normalised name
+  const personTotals = {};
+  filtered.forEach(i => {
+    const n = normName(i.paidBy) || 'Unknown';
+    personTotals[n] = (personTotals[n]||0) + Number(i.amount||0);
+  });
+  const byPerson = Object.entries(personTotals).map(([person,amt])=>({person,amt})).filter(p=>p.amt>0).sort((a,b)=>b.amt-a.amt);
+
+  // Unique staff names (normalised) for dropdown
+  const staffOptions = [...new Set(items.map(i=>normName(i.paidBy)).filter(Boolean))].sort();
 
   const thisMonth = new Date().toISOString().slice(0,7);
   const thisMonthTotal = items.filter(i=>(i.date||'').startsWith(thisMonth)).reduce((s,i)=>s+Number(i.amount||0),0);
@@ -4376,7 +4389,7 @@ function PettyCash({ currentUser }) {
             </select>
             <select className="form-input form-select" style={{width:140}} onChange={e=>setPaidByFilter(e.target.value)}>
               <option value="all">All Staff</option>
-              {[...new Set(items.map(i=>i.paidBy).filter(Boolean))].map(p=><option key={p}>{p}</option>)}
+              {staffOptions.map(p=><option key={p}>{p}</option>)}
             </select>
             <select className="form-input form-select" style={{width:150}} onChange={e=>setMonthFilter(e.target.value)}>
               <option value="all">All Months</option>
