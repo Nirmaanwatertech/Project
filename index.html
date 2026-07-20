@@ -2883,6 +2883,7 @@ async function clearAllAdvances() {
 // ─── New Bill Modal ────────────────────────────────
 function NewBillModal({ onClose, existing }) {
   const isEdit = !!existing;
+  const lists = useLists();
   const knownNames = useKnownNames();
   const { items: pos } = usePurchaseOrders();
   const { items: wos } = useWorkOrders();
@@ -2929,7 +2930,7 @@ function NewBillModal({ onClose, existing }) {
             <div className="form-group">
               <label className="form-label">Category</label>
               <select className="form-input form-select" value={form.category} onChange={e=>set('category', e.target.value)}>
-                {(window.appLists?.billCategories||DEFAULT_LISTS.billCategories).map(c=><option key={c}>{c}</option>)}
+                {(lists.billCategories||DEFAULT_LISTS.billCategories).map(c=><option key={c}>{c}</option>)}
               </select>
             </div>
             <div className="form-group">
@@ -4276,6 +4277,7 @@ async function clearAllPettyCash() {
 // ─── New Petty Cash Entry Modal ────────────────────
 function NewPettyModal({ onClose, currentUser, existing }) {
   const isEdit = !!existing;
+  const lists = useLists();
   const { items: wos } = useWorkOrders();
   const [form, setForm] = useState(isEdit ? {
     date: existing.date||'', amount: existing.amount ? String(existing.amount) : '',
@@ -4327,13 +4329,13 @@ function NewPettyModal({ onClose, currentUser, existing }) {
             <div className="form-group">
               <label className="form-label">Category</label>
               <select className="form-input form-select" value={form.category} onChange={e=>set('category',e.target.value)}>
-                {(window.appLists?.pettyCategories||DEFAULT_LISTS.pettyCategories).map(c=><option key={c}>{c}</option>)}
+                {(lists.pettyCategories||DEFAULT_LISTS.pettyCategories).map(c=><option key={c}>{c}</option>)}
               </select>
             </div>
             <div className="form-group">
               <label className="form-label">Paid By</label>
               <select className="form-input form-select" value={form.paidBy} onChange={e=>set('paidBy',e.target.value)}>
-                {(window.appLists?.employees||DEFAULT_LISTS.employees).map(n=><option key={n}>{n}</option>)}
+                {(lists.employees||DEFAULT_LISTS.employees).map(n=><option key={n}>{n}</option>)}
               </select>
             </div>
           </div>
@@ -4614,6 +4616,7 @@ async function clearAllExpenses() {
 
 function NewExpenseModal({ onClose, currentUser, existing }) {
   const isEdit = !!existing;
+  const lists = useLists();
   const knownNames = useKnownNames();
   const { items: pos } = usePurchaseOrders();
   const { items: wos } = useWorkOrders();
@@ -4674,14 +4677,14 @@ function NewExpenseModal({ onClose, currentUser, existing }) {
               <label className="form-label">Category</label>
               <select className="form-input form-select" value={form.category} onChange={e=>set('category',e.target.value)}>
                 <option value="">Select category…</option>
-                {(window.appLists?.expenseCategories||DEFAULT_LISTS.expenseCategories).map(c=><option key={c}>{c}</option>)}
+                {(lists.expenseCategories||DEFAULT_LISTS.expenseCategories).map(c=><option key={c}>{c}</option>)}
               </select>
             </div>
             <div className="form-group">
               <label className="form-label">Paid By</label>
               <select className="form-input form-select" value={form.paidBy} onChange={e=>set('paidBy',e.target.value)}>
                 <option value="">Select…</option>
-                {(window.appLists?.employees||DEFAULT_LISTS.employees).map(n=><option key={n}>{n}</option>)}
+                {(lists.employees||DEFAULT_LISTS.employees).map(n=><option key={n}>{n}</option>)}
               </select>
             </div>
           </div>
@@ -4689,7 +4692,7 @@ function NewExpenseModal({ onClose, currentUser, existing }) {
             <div className="form-group">
               <label className="form-label">Payment Mode</label>
               <select className="form-input form-select" value={form.paymentMode} onChange={e=>set('paymentMode',e.target.value)}>
-                {(window.appLists?.paymentModes||DEFAULT_LISTS.paymentModes).map(m=><option key={m}>{m}</option>)}
+                {(lists.paymentModes||DEFAULT_LISTS.paymentModes).map(m=><option key={m}>{m}</option>)}
               </select>
             </div>
             <div className="form-group">
