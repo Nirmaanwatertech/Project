@@ -4406,9 +4406,9 @@ function PettyCash({ currentUser }) {
                   <td>
                     <div style={{display:'flex',alignItems:'center',gap:6}}>
                       <div style={{width:22,height:22,borderRadius:'50%',background:'var(--primary)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700}}>
-                        {(i.paidBy||'?')[0]}
+                        {(i.paidBy||'?')[0].toUpperCase()}
                       </div>
-                      {i.paidBy||'—'}
+                      {i.paidBy?.includes('@') ? i.paidBy.split('@')[0].charAt(0).toUpperCase()+i.paidBy.split('@')[0].slice(1) : (i.paidBy||'—')}
                     </div>
                   </td>
                   <td>{i.project?<span className={`badge ${PROJECT_COLOR[i.project]||'grey'}`}>{i.project}</span>:<span className="text-muted">—</span>}</td>
@@ -4683,7 +4683,7 @@ function Expenses({ currentUser }) {
                   <td><span className="badge grey">{i.category||'—'}</span></td>
                   <td><span className="badge blue">{i.paymentMode||'—'}</span></td>
                   <td className="mono" style={{fontSize:11}}>{i.refNumber||'—'}</td>
-                  <td>{i.paidBy||'—'}</td>
+                  <td>{i.paidBy?.includes('@') ? i.paidBy.split('@')[0].charAt(0).toUpperCase()+i.paidBy.split('@')[0].slice(1) : (i.paidBy||'—')}</td>
                   <td>{i.project?<span className={`badge ${PROJECT_COLOR[i.project]||'grey'}`}>{i.project}</span>:<span className="text-muted">—</span>}</td>
                   <td className="amount fw-600" style={{color:'var(--red)'}}>{inr(i.amount||0)}</td>
                   <td>
