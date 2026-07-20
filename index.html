@@ -4954,7 +4954,7 @@ function Expenses({ currentUser }) {
 
       <div className="card">
         <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
-          <div className="flex gap-2">
+          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
             <select className="form-input form-select" style={{width:160}} value={catFilter} onChange={e=>setCatFilter(e.target.value)}>
               <option value="all">All Categories</option>
               {[...new Set(items.map(i=>i.category).filter(Boolean))].map(c=><option key={c}>{c}</option>)}
@@ -4966,6 +4966,21 @@ function Expenses({ currentUser }) {
             <select className="form-input form-select" style={{width:150}} value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}>
               <option value="all">All Months</option>
               {months.map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:150}} value={expVendorFilter} onChange={e=>setExpVendorFilter(e.target.value)}>
+              <option value="all">All Vendors</option>
+              {expVendors.map(v=><option key={v}>{v}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:130}} value={expProjectFilter} onChange={e=>setExpProjectFilter(e.target.value)}>
+              <option value="all">All Projects</option>
+              {PROJECTS.map(p=><option key={p}>{p}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:180}} value={expSortBy} onChange={e=>setExpSortBy(e.target.value)}>
+              <option value="date_desc">↓ Date (Newest)</option>
+              <option value="date_asc">↑ Date (Oldest)</option>
+              <option value="amount_desc">↓ Amount (Highest)</option>
+              <option value="amount_asc">↑ Amount (Lowest)</option>
+              <option value="desc_asc">A→Z Description</option>
             </select>
           </div>
         </div>
