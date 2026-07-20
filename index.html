@@ -343,10 +343,82 @@ function useLists() {
   return lists;
 }
 
-async function saveLists(lists) {
-  const { db, doc, setDoc } = window.fb;
-  await setDoc(doc(db, 'settings', 'lists'), lists, { merge: true });
-  window.appLists = { ...window.appLists, ...lists };
+async function saveLists(newLists, oldLists) {
+  const { db, doc, setDoc, collection, getDocs, writeBatch } = window.fb;
+
+  // 1. Save the new lists to Firestore settings
+  await setDoc(doc(db, 'settings', 'lists'), newLists, { merge: true });
+  window.appLists = { ...window.appLists, ...newLists };
+
+  // 2. Detect renames for each list key and which Firestore field/collection to update
+  const FIELD_MAP = {
+    paymentModes:     [
+      { col:'bills',          field:'paymentMode' },
+      { col:'advances',       field:'paymentMode' },
+      { col:'expenses',       field:'paymentMode' },
+      { col:'capital_loans',  field:'paymentMode' },
+      { col:'receipts',       field:'paymentMode' },
+    ],
+    pettyCategories:  [{ col:'petty_cash',   field:'category' }],
+    billCategories:   [{ col:'bills',         field:'category' }],
+    expenseCategories:[{ col:'expenses',       field:'category' }],
+    employees:        [
+      { col:'petty_cash',  field:'paidBy' },
+      { col:'expenses',    field:'paidBy' },
+    ],
+    capitalTypes:     [{ col:'capital_loans', field:'type' }],
+  };
+
+  if (!oldLists) return; // first save, nothing to migrate
+
+  let totalMigrated = 0;
+
+  for (const [listKey, targets] of Object.entries(FIELD_MAP)) {
+    const oldItems = oldLists[listKey] || [];
+    const newItems = newLists[listKey] || [];
+
+    // Build rename map: if same number of items and one changed, it's a rename
+    // More robust: match by position for same-length arrays
+    const renames = {}; // { oldValue: newValue }
+
+    if (oldItems.length === newItems.length) {
+      oldItems.forEach((oldVal, i) => {
+        const newVal = newItems[i];
+        if (oldVal !== newVal) renames[oldVal] = newVal;
+      });
+    } else {
+      // Items were added or removed — find renames by elimination
+      // Items in old but not in new AND items in new but not in old, paired by order
+      const removed = oldItems.filter(v => !newItems.includes(v));
+      const added   = newItems.filter(v => !oldItems.includes(v));
+      removed.forEach((oldVal, i) => {
+        if (added[i]) renames[oldVal] = added[i];
+      });
+    }
+
+    if (Object.keys(renames).length === 0) continue;
+
+    // Migrate each target collection
+    for (const { col, field } of targets) {
+      const snap = await getDocs(collection(db, col));
+      const toUpdate = snap.docs.filter(d => renames[d.data()[field]]);
+      if (toUpdate.length === 0) continue;
+
+      // Batch update in groups of 500
+      const chunks = [];
+      for (let i = 0; i < toUpdate.length; i += 500) chunks.push(toUpdate.slice(i, i+500));
+      for (const chunk of chunks) {
+        const batch = writeBatch(db);
+        chunk.forEach(d => batch.update(d.ref, { [field]: renames[d.data()[field]] }));
+        await batch.commit();
+        totalMigrated += chunk.length;
+      }
+
+      console.log(`Migrated ${toUpdate.length} docs in ${col}.${field}:`, renames);
+    }
+  }
+
+  return totalMigrated;
 }
 
 function ListsManager() {
@@ -354,7 +426,7 @@ function ListsManager() {
   const [localLists, setLocalLists] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [newItems, setNewItems] = useState({});
+  const [savedMsg, setSavedMsg] = useState('✓ Saved');
   const [dragging, setDragging] = useState(null);
   const [dragTarget, setDragTarget] = useState(null);
   const [editingItem, setEditingItem] = useState(null); // { listKey, idx }
@@ -412,7 +484,17 @@ function ListsManager() {
 
   async function handleSave() {
     setSaving(true);
-    try { await saveLists(localLists); setSaved(true); setTimeout(() => setSaved(false), 2000); }
+    try {
+      const migrated = await saveLists(localLists, lists);
+      setSaved(true);
+      if (migrated > 0) {
+        setTimeout(() => setSaved(false), 4000);
+        setSavedMsg(`✓ Saved · ${migrated} existing entr${migrated===1?'y':'ies'} updated`);
+      } else {
+        setSavedMsg('✓ Saved');
+        setTimeout(() => setSaved(false), 2000);
+      }
+    }
     catch(e) { console.error(e); alert('Could not save.'); }
     finally { setSaving(false); }
   }
@@ -431,7 +513,7 @@ function ListsManager() {
       <div className="card-header" style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
         <span className="card-title">Lists Manager</span>
         <button className="btn btn-sm btn-primary" onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save All Changes'}
+          {saving ? 'Saving & migrating…' : saved ? savedMsg : 'Save All Changes'}
         </button>
       </div>
       <div className="card-body">
