@@ -3112,6 +3112,7 @@ function BillPayments() {
   const { items: pos } = usePurchaseOrders();
   const [catFilter, setCatFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('date_desc');
   const [tab, setTab] = useState('bills'); // 'bills' | 'advances'
   const [showNewBill, setShowNewBill] = useState(false);
   const [showNewAdvance, setShowNewAdvance] = useState(false);
@@ -3129,16 +3130,33 @@ function BillPayments() {
     else if (b.due < todayStr) status = 'Overdue';
     else status = 'Upcoming';
     const days = (status === 'Overdue' && b.due) ? Math.floor((new Date(todayStr) - new Date(b.due)) / 86400000) : 0;
-    // Find linked advance deduction
     const linkedAdv = advances.filter(a => a.linkedBill === b.docId);
     const advanceDeducted = linkedAdv.reduce((s,a) => s + Number(a.adjustedAmount||0), 0);
     const netPayable = Math.max(0, Number(b.amount||0) - advanceDeducted);
     return { ...b, computedStatus: status, days, advanceDeducted, netPayable };
   });
 
-  const filtered = withStatus.filter(b =>
-    (catFilter === 'all' || b.category === catFilter) &&
-    (statusFilter === 'all' || b.computedStatus === statusFilter)
+  function applySort(arr, key) {
+    const sorted = [...arr];
+    switch(key) {
+      case 'date_desc':   return sorted.sort((a,b)=>(b.due||b.invoiceDate||'').localeCompare(a.due||a.invoiceDate||''));
+      case 'date_asc':    return sorted.sort((a,b)=>(a.due||a.invoiceDate||'').localeCompare(b.due||b.invoiceDate||''));
+      case 'amount_desc': return sorted.sort((a,b)=>Number(b.amount||0)-Number(a.amount||0));
+      case 'amount_asc':  return sorted.sort((a,b)=>Number(a.amount||0)-Number(b.amount||0));
+      case 'payee_asc':   return sorted.sort((a,b)=>(a.payee||'').localeCompare(b.payee||''));
+      case 'status':      return sorted.sort((a,b)=>{
+        const order = {Overdue:0,'Due Today':1,Upcoming:2,Paid:3};
+        return (order[a.computedStatus]??4)-(order[b.computedStatus]??4);
+      });
+      default: return sorted;
+    }
+  }
+
+  const filtered = applySort(
+    withStatus.filter(b =>
+      (catFilter === 'all' || b.category === catFilter) &&
+      (statusFilter === 'all' || b.computedStatus === statusFilter)
+    ), sortBy
   );
 
   // Stats
@@ -3202,7 +3220,7 @@ function BillPayments() {
           </div>
           <div className="card">
             <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
-              <div className="flex gap-2">
+              <div className="flex gap-2" style={{flexWrap:'wrap'}}>
                 <select className="form-input form-select" style={{width:150}} onChange={e=>setCatFilter(e.target.value)}>
                   <option value="all">All Categories</option>
                   {(window.appLists?.billCategories||DEFAULT_LISTS.billCategories).map(c=><option key={c}>{c}</option>)}
@@ -3210,6 +3228,14 @@ function BillPayments() {
                 <select className="form-input form-select" style={{width:140}} onChange={e=>setStatusFilter(e.target.value)}>
                   <option value="all">All Status</option>
                   <option>Overdue</option><option>Due Today</option><option>Upcoming</option><option>Paid</option>
+                </select>
+                <select className="form-input form-select" style={{width:180}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
+                  <option value="date_desc">↓ Due Date (Newest)</option>
+                  <option value="date_asc">↑ Due Date (Oldest)</option>
+                  <option value="amount_desc">↓ Amount (Highest)</option>
+                  <option value="amount_asc">↑ Amount (Lowest)</option>
+                  <option value="payee_asc">A→Z Payee</option>
+                  <option value="status">By Status (Urgent first)</option>
                 </select>
               </div>
             </div>
@@ -3240,6 +3266,7 @@ function BillPayments() {
                       <td><span className={`badge ${BILL_STATUS_COLOR[b.computedStatus]}`}>{b.computedStatus}</span></td>
                       <td>
                         <div className="flex gap-2">
+                          <button className="btn btn-sm btn-ghost" onClick={()=>setEditBill(b)}>Edit</button>
                           {!b.paid && <button className="btn btn-sm btn-primary" onClick={()=>markBillPaid(b.docId)}>Mark Paid</button>}
                           <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteBill(b.docId);}}>Delete</button>
                         </div>
@@ -4257,24 +4284,25 @@ function PettyCash({ currentUser }) {
   const [paidByFilter, setPaidByFilter] = useState('all');
   const [monthFilter, setMonthFilter] = useState('all');
   const [editEntry, setEditEntry] = useState(null);
+  const [pettySortBy, setPettySortBy] = useState('date_desc');
 
-  // Month options from entries
   const months = [...new Set(items.map(i=>i.date?.slice(0,7)).filter(Boolean))].sort().reverse();
 
-  // Sort by actual expense date descending (YYYY-MM-DD string comparison works correctly)
-  const itemsSortedByDate = [...items].sort((a,b) => {
-    const da = a.date || '';
-    const db = b.date || '';
-    if (db > da) return 1;
-    if (db < da) return -1;
-    return 0;
-  });
+  function sortPetty(arr) {
+    const s = [...arr];
+    if (pettySortBy==='date_asc')    return s.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    if (pettySortBy==='date_desc')   return s.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    if (pettySortBy==='amount_desc') return s.sort((a,b)=>Number(b.amount||0)-Number(a.amount||0));
+    if (pettySortBy==='amount_asc')  return s.sort((a,b)=>Number(a.amount||0)-Number(b.amount||0));
+    if (pettySortBy==='desc_asc')    return s.sort((a,b)=>(a.description||'').localeCompare(b.description||''));
+    return s;
+  }
 
-  const filtered = itemsSortedByDate.filter(i=>
+  const filtered = sortPetty(items.filter(i=>
     (catFilter==='all' || i.category===catFilter) &&
     (paidByFilter==='all' || normName(i.paidBy)===paidByFilter) &&
     (monthFilter==='all' || (i.date||'').startsWith(monthFilter))
-  );
+  ));
 
   const total = filtered.reduce((s,i)=>s+Number(i.amount||0),0);
   const totalAll = items.reduce((s,i)=>s+Number(i.amount||0),0);
@@ -4606,14 +4634,25 @@ function Expenses({ currentUser }) {
   const [catFilter, setCatFilter] = useState('all');
   const [modeFilter, setModeFilter] = useState('all');
   const [monthFilter, setMonthFilter] = useState('all');
+  const [expSortBy, setExpSortBy] = useState('date_desc');
 
   const months = [...new Set(items.map(i=>i.date?.slice(0,7)).filter(Boolean))].sort().reverse();
-  const sorted = [...items].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  const filtered = sorted.filter(i=>
+
+  function sortExp(arr) {
+    const s = [...arr];
+    if (expSortBy==='date_asc')    return s.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    if (expSortBy==='date_desc')   return s.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    if (expSortBy==='amount_desc') return s.sort((a,b)=>Number(b.amount||0)-Number(a.amount||0));
+    if (expSortBy==='amount_asc')  return s.sort((a,b)=>Number(a.amount||0)-Number(b.amount||0));
+    if (expSortBy==='desc_asc')    return s.sort((a,b)=>(a.description||'').localeCompare(b.description||''));
+    return s;
+  }
+
+  const filtered = sortExp(items.filter(i=>
     (catFilter==='all'||i.category===catFilter) &&
     (modeFilter==='all'||i.paymentMode===modeFilter) &&
     (monthFilter==='all'||(i.date||'').startsWith(monthFilter))
-  );
+  ));
 
   const total    = filtered.reduce((s,i)=>s+Number(i.amount||0),0);
   const thisMonth = new Date().toISOString().slice(0,7);
