@@ -1092,6 +1092,7 @@ function PaymentTracker() {
   const [showNew, setShowNew] = useState(false);
   const [editMilestone, setEditMilestone] = useState(null);
   const [filter, setFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('date_desc');
 
   const today = new Date().toISOString().slice(0,10);
   const withStatus = items.map(m => {
@@ -1102,11 +1103,10 @@ function PaymentTracker() {
     else status = 'Upcoming';
     return {...m, computedStatus: status};
   });
-  const filtered = filter==='all' ? withStatus : withStatus.filter(m=>m.computedStatus===filter);
+  const filtered = (filter==='all' ? [...withStatus] : withStatus.filter(m=>m.computedStatus===filter)).sort((a,b)=>sortBy==='date_asc'?(a.due||'').localeCompare(b.due||''):sortBy==='amount_desc'?Number(b.amount||0)-Number(a.amount||0):sortBy==='amount_asc'?Number(a.amount||0)-Number(b.amount||0):(b.due||'').localeCompare(a.due||''));
   const totalDue = items.filter(m=>!m.paid).reduce((s,m)=>s+Number(m.amount||0),0);
   const totalPaid = items.filter(m=>m.paid).reduce((s,m)=>s+Number(m.amount||0),0);
   const overdueAmt = withStatus.filter(m=>m.computedStatus==='Overdue').reduce((s,m)=>s+Number(m.amount||0),0);
-
   const MS_STATUS_COLOR = {Paid:'green',Overdue:'red','Due Today':'amber',Upcoming:'blue'};
 
   return (
@@ -1126,10 +1126,18 @@ function PaymentTracker() {
         <div className="stat-card"><div className="stat-label">Total Due</div><div className="stat-value amber">{inr(totalDue)}</div></div>
         <div className="stat-card"><div className="stat-label">Total Paid</div><div className="stat-value green">{inr(totalPaid)}</div></div>
       </div>
-      <div className="tabs">
-        {[['all','All'],['Upcoming','Upcoming'],['Due Today','Due Today'],['Overdue','Overdue'],['Paid','Paid']].map(([v,l])=>(
-          <div key={v} className={`tab ${filter===v?'active':''}`} onClick={()=>setFilter(v)}>{l}</div>
-        ))}
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4,flexWrap:'wrap',gap:8}}>
+        <div className="tabs" style={{marginBottom:0}}>
+          {[['all','All'],['Upcoming','Upcoming'],['Due Today','Due Today'],['Overdue','Overdue'],['Paid','Paid']].map(([v,l])=>(
+            <div key={v} className={`tab ${filter===v?'active':''}`} onClick={()=>setFilter(v)}>{l}</div>
+          ))}
+        </div>
+        <select className="form-input form-select" style={{width:180}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
+          <option value="date_desc">↓ Due Date (Newest)</option>
+          <option value="date_asc">↑ Due Date (Oldest)</option>
+          <option value="amount_desc">↓ Amount (Highest)</option>
+          <option value="amount_asc">↑ Amount (Lowest)</option>
+        </select>
       </div>
       <div className="card">
         {loading ? (
@@ -3145,17 +3153,18 @@ function BillPayments() {
     return { ...b, computedStatus: status, days, advanceDeducted, netPayable };
   });
 
-  function applySort(arr, key) {
+  function applySort(arr, key, dateField='due', amtField='amount', nameField='payee') {
     const sorted = [...arr];
     switch(key) {
-      case 'date_desc':   return sorted.sort((a,b)=>(b.due||b.invoiceDate||'').localeCompare(a.due||a.invoiceDate||''));
-      case 'date_asc':    return sorted.sort((a,b)=>(a.due||a.invoiceDate||'').localeCompare(b.due||b.invoiceDate||''));
-      case 'amount_desc': return sorted.sort((a,b)=>Number(b.amount||0)-Number(a.amount||0));
-      case 'amount_asc':  return sorted.sort((a,b)=>Number(a.amount||0)-Number(b.amount||0));
-      case 'payee_asc':   return sorted.sort((a,b)=>(a.payee||'').localeCompare(b.payee||''));
+      case 'date_desc':   return sorted.sort((a,b)=>(b[dateField]||b.createdAt||0)>=(a[dateField]||a.createdAt||0)?1:-1);
+      case 'date_asc':    return sorted.sort((a,b)=>(a[dateField]||a.createdAt||0)>=(b[dateField]||b.createdAt||0)?1:-1);
+      case 'amount_desc': return sorted.sort((a,b)=>Number(b[amtField]||0)-Number(a[amtField]||0));
+      case 'amount_asc':  return sorted.sort((a,b)=>Number(a[amtField]||0)-Number(b[amtField]||0));
+      case 'payee_asc':   return sorted.sort((a,b)=>(a[nameField]||'').localeCompare(b[nameField]||''));
+      case 'vendor_asc':  return sorted.sort((a,b)=>(a.vendorName||a.vendor||a.source||'').localeCompare(b.vendorName||b.vendor||b.source||''));
       case 'status':      return sorted.sort((a,b)=>{
-        const order = {Overdue:0,'Due Today':1,Upcoming:2,Paid:3};
-        return (order[a.computedStatus]??4)-(order[b.computedStatus]??4);
+        const order = {Overdue:0,'Due Today':1,Upcoming:2,Paid:3,Unadjusted:0,'Partially Adjusted':1,'Fully Adjusted':2};
+        return (order[a.computedStatus||a.status]??4)-(order[b.computedStatus||b.status]??4);
       });
       default: return sorted;
     }
@@ -3298,6 +3307,18 @@ function BillPayments() {
             <div className="stat-card"><div className="stat-label">Fully Adjusted</div><div className="stat-value green">{advances.filter(a=>a.status==='Fully Adjusted').length}</div></div>
           </div>
           <div className="card">
+            <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+              <div className="flex gap-2" style={{flexWrap:'wrap'}}>
+                <select className="form-input form-select" style={{width:180}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
+                  <option value="date_desc">↓ Date Paid (Newest)</option>
+                  <option value="date_asc">↑ Date Paid (Oldest)</option>
+                  <option value="amount_desc">↓ Amount (Highest)</option>
+                  <option value="amount_asc">↑ Amount (Lowest)</option>
+                  <option value="payee_asc">A→Z Vendor</option>
+                  <option value="status">By Status</option>
+                </select>
+              </div>
+            </div>
             {advLoading ? (
               <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
             ) : advances.length===0 ? (
@@ -3312,7 +3333,7 @@ function BillPayments() {
                   <tr><th>Vendor</th><th>Project</th><th>Date Paid</th><th>Mode</th><th>Ref #</th><th>Amount</th><th>Adjusted</th><th>Balance</th><th>Linked To</th><th>Status</th><th>Actions</th></tr>
                 </thead>
                 <tbody>
-                  {advances.map(a => (
+                  {applySort(advances, sortBy, 'datePaid').map(a => (
                     <tr key={a.docId} style={{background: a.status==='Unadjusted' ? 'var(--amber-50)' : a.status==='Fully Adjusted' ? 'var(--green-50)' : ''}}>
                       <td className="fw-600">{a.vendor}</td>
                       <td>{a.project?<span className={`badge ${PROJECT_COLOR[a.project]||'grey'}`}>{a.project}</span>:<span className="text-muted">—</span>}</td>
@@ -4994,12 +5015,22 @@ function CapitalLoans() {
             <p className="text-muted">Record investor funds, bank loans, owner capital injections, or any other financing inflow.</p>
           </div>
         ) : (
+          <>
+          <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+            <select className="form-input form-select" style={{width:210}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
+              <option value="date_desc">↓ Date Received (Newest)</option>
+              <option value="date_asc">↑ Date Received (Oldest)</option>
+              <option value="amount_desc">↓ Amount (Highest)</option>
+              <option value="amount_asc">↑ Amount (Lowest)</option>
+              <option value="vendor_asc">A→Z Source</option>
+            </select>
+          </div>
           <table>
             <thead>
               <tr><th>Type</th><th>Source</th><th>Project</th><th>Date</th><th>Amount</th><th>Mode</th><th>Ref #</th><th>EMI</th><th>Tenure</th><th>Total Repayment</th><th>Actions</th></tr>
             </thead>
             <tbody>
-              {items.map(item => (
+              {[...items].sort((a,b)=>sortBy==='date_asc'?(a.dateReceived||'').localeCompare(b.dateReceived||''):sortBy==='amount_desc'?Number(b.amount||0)-Number(a.amount||0):sortBy==='amount_asc'?Number(a.amount||0)-Number(b.amount||0):sortBy==='vendor_asc'?(a.source||'').localeCompare(b.source||''):(b.dateReceived||'').localeCompare(a.dateReceived||'')).map(item => (
                 <tr key={item.docId}>
                   <td><span className={`badge ${TYPE_COLOR[item.type]||'grey'}`}>{item.type}</span></td>
                   <td className="fw-600">{item.source}</td>
@@ -5019,6 +5050,7 @@ function CapitalLoans() {
               ))}
             </tbody>
           </table>
+          </>
         )}
       </div>
       {showNew && <NewCapitalModal onClose={()=>setShowNew(false)} />}
