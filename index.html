@@ -273,6 +273,14 @@ const { useState, useEffect, useRef } = React;
 // ─── Formatters ───────────────────────────────────────
 const inr = (n) => '₹' + Number(n).toLocaleString('en-IN');
 
+// Format YYYY-MM-DD → DD-MM-YYYY for display
+function fmt(dateStr) {
+  if (!dateStr) return '—';
+  const parts = String(dateStr).split('-');
+  if (parts.length === 3) return `${parts[2]}-${parts[1]}-${parts[0]}`;
+  return dateStr;
+}
+
 // ─── Firestore path helpers ────────────────────────────
 // All data lives under users/{uid}/{collection} — matches where
 // Firestore Console placed it when collections were created inside the user doc.
@@ -929,7 +937,7 @@ function PaymentScheduleEditor({ rows, setRows, totalValue }) {
                   <td style={{padding:3}}><input className="form-input" style={{fontSize:11.5,padding:'4px 6px'}} value={r.name} onChange={e=>updateRow(r.id,'name',e.target.value)} placeholder="e.g. Advance" /></td>
                   <td style={{padding:3,width:60}}><input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px'}} value={r.pct} onChange={e=>updateRow(r.id,'pct',e.target.value)} placeholder="30" /></td>
                   <td style={{padding:3,width:110}}><input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px'}} value={r.amount} onChange={e=>updateRow(r.id,'amount',e.target.value)} placeholder="0" /></td>
-                  <td style={{padding:3,width:130}}><input className="form-input" type="date" style={{fontSize:11.5,padding:'4px 6px'}} value={r.date} onChange={e=>updateRow(r.id,'date',e.target.value)} /></td>
+                  <td style={{padding:3,width:130}}><input className="form-input" type="date" style={{fontSize:11.5,padding:'4px 6px'}} value={fmt(r.date)} onChange={e=>updateRow(r.id,'date',e.target.value)} /></td>
                   <td style={{padding:3,textAlign:'center',width:24}}><span onClick={()=>removeRow(r.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span></td>
                 </tr>
               ))}
@@ -1061,7 +1069,7 @@ function NewMilestoneModal({ onClose, pos, existing }) {
             </div>
             <div className="form-group">
               <label className="form-label">Due Date</label>
-              <input className="form-input" type="date" value={form.due} onChange={e=>set('due',e.target.value)} />
+              <input className="form-input" type="date" value={fmt(form.due)} onChange={e=>set('due',e.target.value)} />
             </div>
           </div>
           <div className="form-group">
@@ -1158,7 +1166,7 @@ function PaymentTracker() {
                   <td className="mono" style={{fontSize:11}}>{m.po||'—'}</td>
                   <td>{m.project?<span className={`badge ${PROJECT_COLOR[m.project]||'grey'}`}>{m.project}</span>:<span className="text-muted">—</span>}</td>
                   <td className="amount fw-600">{inr(m.amount||0)}</td>
-                  <td>{m.due}</td>
+                  <td>{fmt(m.due)}</td>
                   <td><span className={`badge ${MS_STATUS_COLOR[m.computedStatus]||'grey'}`}>{m.computedStatus}</span></td>
                   <td>
                     <div className="flex gap-2">
@@ -1178,6 +1186,17 @@ function PaymentTracker() {
     </div>
   );
 }
+function XRefBadge({ po, wo, bill }) {
+  if (!po && !wo && !bill) return <span className="text-muted" style={{fontSize:11}}>—</span>;
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:2}}>
+      {po && <span className="badge blue" style={{fontSize:10}}>PO: {po}</span>}
+      {wo && <span className="badge teal" style={{fontSize:10}}>WO: {wo}</span>}
+      {bill && <span className="badge grey" style={{fontSize:10}}>Bill linked</span>}
+    </div>
+  );
+}
+
 // ─── Dashboard Module ─────────────────────────────────
 function Dashboard({ setActive }) {
   const { tasks }            = useTasks();
@@ -1312,7 +1331,7 @@ function Dashboard({ setActive }) {
                   {[...overdueBills, ...dueSoonBills].slice(0,6).map(b => (
                     <tr key={b.docId} className={b.computedStatus==='Overdue'?'overdue':b.computedStatus==='Due Today'?'due-today':''}>
                       <td className="fw-600">{b.payee}</td>
-                      <td>{b.due}</td>
+                      <td>{fmt(b.due)}</td>
                       <td className="amount fw-600">{inr(b.amount||0)}</td>
                       <td><span className={`badge ${BILL_STATUS_COLOR[b.computedStatus]||'grey'}`}>{b.computedStatus}</span></td>
                     </tr>
@@ -1339,7 +1358,7 @@ function Dashboard({ setActive }) {
                       <td style={{maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} className="fw-600">{t.name}</td>
                       <td>{t.assigned}</td>
                       <td><span className={`badge ${PRIO_COLOR[t.priority]||'grey'}`}>{t.priority}</span></td>
-                      <td>{t.due}</td>
+                      <td>{fmt(t.due)}</td>
                       <td><StatusBadge status={t.status} /></td>
                     </tr>
                   ))}
@@ -1363,7 +1382,7 @@ function Dashboard({ setActive }) {
                       <div className="urgency-dot critical" />
                       <div>
                         <div className="reminder-title">Bill overdue — {b.payee}</div>
-                        <div className="reminder-meta">{inr(b.amount||0)} · Due {b.due}</div>
+                        <div className="reminder-meta">{inr(b.amount||0)} · Due {fmt(b.due)}</div>
                       </div>
                     </div>
                   ))}
@@ -1381,7 +1400,7 @@ function Dashboard({ setActive }) {
                       <div className="urgency-dot upcoming" />
                       <div>
                         <div className="reminder-title">Task overdue — {t.name}</div>
-                        <div className="reminder-meta">Assigned: {t.assigned} · Due {t.due}</div>
+                        <div className="reminder-meta">Assigned: {t.assigned} · Due {fmt(t.due)}</div>
                       </div>
                     </div>
                   ))}
@@ -1561,7 +1580,7 @@ function NewTaskModal({ onClose, existing }) {
             </div>
             <div className="form-group">
               <label className="form-label">Deadline</label>
-              <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
+              <input className="form-input" type="date" value={fmt(form.due)} onChange={e=>set('due', e.target.value)} />
             </div>
           </div>
         </div>
@@ -1979,7 +1998,7 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
             </div>
             <div className="form-group">
               <label className="form-label">Expected Completion Date</label>
-              <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
+              <input className="form-input" type="date" value={fmt(form.due)} onChange={e=>set('due', e.target.value)} />
             </div>
           </div>
           <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
@@ -2593,13 +2612,13 @@ function CashFlow() {
       {!loading && criticalBreached && (
         <div className="alert-bar critical" style={{marginBottom:14}}>
           <span className="alert-icon">🚨</span>
-          <strong>Critical:</strong>&nbsp;Balance drops to {inr(forecastLow)} {lowRow?`on ${lowRow.date}`:''} — below ₹{Number(settings.criticalThreshold||0).toLocaleString('en-IN')} threshold.
+          <strong>Critical:</strong>&nbsp;Balance drops to {inr(forecastLow)} {lowRow?`on ${fmt(lowRow.date)}`:''} — below ₹{Number(settings.criticalThreshold||0).toLocaleString('en-IN')} threshold.
         </div>
       )}
       {!loading && warningBreached && (
         <div className="alert-bar warning" style={{marginBottom:14}}>
           <span className="alert-icon">⚠️</span>
-          <strong>Warning:</strong>&nbsp;Balance drops to {inr(forecastLow)} {lowRow?`on ${lowRow.date}`:''} — below ₹{Number(settings.warningThreshold||0).toLocaleString('en-IN')} threshold.
+          <strong>Warning:</strong>&nbsp;Balance drops to {inr(forecastLow)} {lowRow?`on ${fmt(lowRow.date)}`:''} — below ₹{Number(settings.warningThreshold||0).toLocaleString('en-IN')} threshold.
         </div>
       )}
 
@@ -2621,7 +2640,7 @@ function CashFlow() {
         </div>
         <div className="stat-card"><div className="stat-label">Inflows ({horizon}d)</div><div className="stat-value green">{inr(inflowsTotal)}</div><div className="stat-sub">{allRows.filter(r=>r.type==='in').length} entries</div></div>
         <div className="stat-card"><div className="stat-label">Outflows ({horizon}d)</div><div className="stat-value red">{inr(outflowsTotal)}</div><div className="stat-sub">{allRows.filter(r=>r.type==='out').length} bills</div></div>
-        <div className="stat-card"><div className="stat-label">Forecast Low</div><div className={`stat-value ${criticalBreached?'red':warningBreached?'amber':'blue'}`}>{inr(forecastLow)}</div>{lowRow&&<div className="stat-sub">{lowRow.date}</div>}</div>
+        <div className="stat-card"><div className="stat-label">Forecast Low</div><div className={`stat-value ${criticalBreached?'red':warningBreached?'amber':'blue'}`}>{inr(forecastLow)}</div>{lowRow&&<div className="stat-sub">{fmt(lowRow.date)}</div>}</div>
         <div className="stat-card"><div className="stat-label">Forecast End ({horizon}d)</div><div className={`stat-value ${forecastEnd>=0?'green':'red'}`}>{inr(forecastEnd)}</div></div>
       </div>
 
@@ -2649,7 +2668,7 @@ function CashFlow() {
               </tr>
               {rows.map((r,i) => (
                 <tr key={i} style={{background:r.type==='in'?'#F0FFF4':r.balance<Number(settings.criticalThreshold||0)?'#FFF3F3':''}}>
-                  <td className="mono">{r.date}</td>
+                  <td className="mono">{fmt(r.date)}</td>
                   <td>{r.label}</td>
                   <td><span className={`badge ${r.type==='in'?'green':'grey'}`}>{r.cat}</span></td>
                   <td>{r.project?<span className={`badge ${PROJECT_COLOR[r.project]||'grey'}`}>{r.project}</span>:<span className="text-muted">—</span>}</td>
@@ -2865,12 +2884,17 @@ async function clearAllAdvances() {
 function NewBillModal({ onClose, existing }) {
   const isEdit = !!existing;
   const knownNames = useKnownNames();
+  const { items: pos } = usePurchaseOrders();
+  const { items: wos } = useWorkOrders();
   const [form, setForm] = useState(isEdit ? {
     payee: existing.payee||'', category: existing.category||'Vendor',
     invoiceNo: existing.invoiceNo||'', invoiceDate: existing.invoiceDate||'',
-    due: existing.due||'', amount: existing.amount ? String(existing.amount) : '', notes: existing.notes||'', project: existing.project||'', split: existing.split||{pontoon:50,wtp:50}
+    due: existing.due||'', amount: existing.amount ? String(existing.amount) : '',
+    notes: existing.notes||'', project: existing.project||'', split: existing.split||{pontoon:50,wtp:50},
+    linkedPO: existing.linkedPO||'', linkedWO: existing.linkedWO||'',
   } : {
-    payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '', notes: '', project: '', split:{pontoon:50,wtp:50}
+    payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '',
+    notes: '', project: '', split:{pontoon:50,wtp:50}, linkedPO: '', linkedWO: '',
   });
   const [saving, setSaving] = useState(false);
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
@@ -2892,7 +2916,7 @@ function NewBillModal({ onClose, existing }) {
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:480,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:520,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
           <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Bill' : '+ Add Bill'}</span>
         </div>
@@ -2927,6 +2951,22 @@ function NewBillModal({ onClose, existing }) {
             <label className="form-label">Amount (₹)</label>
             <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount', e.target.value)} placeholder="0" />
           </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Link to PO <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional)</span></label>
+              <select className="form-input form-select" value={form.linkedPO} onChange={e=>set('linkedPO',e.target.value)}>
+                <option value="">None</option>
+                {pos.map(p=><option key={p.docId} value={p.po}>{p.po} — {p.vendorName}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Link to WO <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional)</span></label>
+              <select className="form-input form-select" value={form.linkedWO} onChange={e=>set('linkedWO',e.target.value)}>
+                <option value="">None</option>
+                {wos.map(w=><option key={w.docId} value={w.wo}>{w.wo} — {w.vendorName}</option>)}
+              </select>
+            </div>
+          </div>
           <div className="form-group">
             <label className="form-label">Notes</label>
             <input className="form-input" value={form.notes} onChange={e=>set('notes', e.target.value)} placeholder="Optional notes" />
@@ -2946,7 +2986,7 @@ function NewBillModal({ onClose, existing }) {
 }
 
 // ─── New Advance Payment Modal ─────────────────────
-function NewAdvanceModal({ onClose, pos, bills, existing }) {
+function NewAdvanceModal({ onClose, pos, wos, bills, existing }) {
   const isEdit = !!existing;
   const knownNames = useKnownNames();
   const [form, setForm] = useState(isEdit ? {
@@ -2954,12 +2994,12 @@ function NewAdvanceModal({ onClose, pos, bills, existing }) {
     datePaid: existing.datePaid||new Date().toISOString().slice(0,10),
     paymentMode: existing.paymentMode||'NEFT', refNumber: existing.refNumber||'',
     narration: existing.narration||'', linkedPO: existing.linkedPO||'',
-    linkedBill: existing.linkedBill||'', project: existing.project||'',
-    split: existing.split||{pontoon:50,wtp:50}
+    linkedWO: existing.linkedWO||'', linkedBill: existing.linkedBill||'',
+    project: existing.project||'', split: existing.split||{pontoon:50,wtp:50}
   } : {
     vendor: '', amount: '', datePaid: new Date().toISOString().slice(0,10),
     paymentMode: 'NEFT', refNumber: '', narration: '',
-    linkedPO: '', linkedBill: '', project: '', split:{pontoon:50,wtp:50}
+    linkedPO: '', linkedWO: '', linkedBill: '', project: '', split:{pontoon:50,wtp:50}
   });
   const [saving, setSaving] = useState(false);
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
@@ -3001,7 +3041,7 @@ function NewAdvanceModal({ onClose, pos, bills, existing }) {
             </div>
             <div className="form-group">
               <label className="form-label">Date Paid</label>
-              <input className="form-input" type="date" value={form.datePaid} onChange={e=>set('datePaid',e.target.value)} />
+              <input className="form-input" type="date" value={fmt(form.datePaid)} onChange={e=>set('datePaid',e.target.value)} />
             </div>
           </div>
           <div className="form-grid">
@@ -3021,7 +3061,7 @@ function NewAdvanceModal({ onClose, pos, bills, existing }) {
             <input className="form-input" value={form.narration} onChange={e=>set('narration',e.target.value)} placeholder="e.g. Advance for RO membranes — Green Valley project" />
           </div>
           <div style={{borderTop:'1px solid var(--border)',marginTop:4,paddingTop:14}}>
-            <div style={{fontSize:11.5,fontWeight:600,color:'var(--text-muted)',marginBottom:10,textTransform:'uppercase',letterSpacing:.4}}>Link to existing PO / Bill (optional)</div>
+            <div style={{fontSize:11.5,fontWeight:600,color:'var(--text-muted)',marginBottom:10,textTransform:'uppercase',letterSpacing:.4}}>Link to PO / WO / Bill (optional)</div>
             <div className="form-grid">
               <div className="form-group">
                 <label className="form-label">Link to Purchase Order</label>
@@ -3031,12 +3071,19 @@ function NewAdvanceModal({ onClose, pos, bills, existing }) {
                 </select>
               </div>
               <div className="form-group">
-                <label className="form-label">Link to Bill</label>
-                <select className="form-input form-select" value={form.linkedBill} onChange={e=>set('linkedBill',e.target.value)}>
+                <label className="form-label">Link to Work Order</label>
+                <select className="form-input form-select" value={form.linkedWO} onChange={e=>set('linkedWO',e.target.value)}>
                   <option value="">None</option>
-                  {(bills||[]).filter(b=>!b.paid).map(b=><option key={b.docId} value={b.docId}>{b.payee} — {inr(b.amount||0)}</option>)}
+                  {(wos||[]).map(w=><option key={w.docId} value={w.wo}>{w.wo} — {w.vendorName}</option>)}
                 </select>
               </div>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Link to Bill</label>
+              <select className="form-input form-select" value={form.linkedBill} onChange={e=>set('linkedBill',e.target.value)}>
+                <option value="">None</option>
+                {(bills||[]).filter(b=>!b.paid).map(b=><option key={b.docId} value={b.docId}>{b.payee} — {inr(b.amount||0)}</option>)}
+              </select>
             </div>
           </div>
           <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
@@ -3127,6 +3174,7 @@ function BillPayments() {
   const { items, loading } = useBills();
   const { items: advances, loading: advLoading } = useAdvances();
   const { items: pos } = usePurchaseOrders();
+  const { items: wos } = useWorkOrders();
   const [catFilter, setCatFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [sortBy, setSortBy] = useState('date_desc');
@@ -3264,7 +3312,7 @@ function BillPayments() {
             ) : (
               <table>
                 <thead>
-                  <tr><th>Payee</th><th>Project</th><th>Category</th><th>Invoice #</th><th>Due Date</th><th>Bill Amount</th><th>Advance Deducted</th><th>Net Payable</th><th>Status</th><th>Actions</th></tr>
+                  <tr><th>Payee</th><th>Project</th><th>Category</th><th>Invoice #</th><th>Due Date</th><th>Bill Amount</th><th>Advance Deducted</th><th>Net Payable</th><th>Linked To</th><th>Status</th><th>Actions</th></tr>
                 </thead>
                 <tbody>
                   {filtered.map(b => (
@@ -3273,7 +3321,7 @@ function BillPayments() {
                       <td>{b.project?<span className={`badge ${PROJECT_COLOR[b.project]||'grey'}`}>{b.project}</span>:<span className="text-muted">—</span>}</td>
                       <td><span className="badge grey">{b.category}</span></td>
                       <td className="mono">{b.invoiceNo||'—'}</td>
-                      <td>{b.due}{b.days>0&&<span style={{color:'var(--red)',fontWeight:600,marginLeft:4}}>+{b.days}d</span>}</td>
+                      <td>{fmt(b.due)}{b.days>0&&<span style={{color:'var(--red)',fontWeight:600,marginLeft:4}}>+{b.days}d</span>}</td>
                       <td className="amount">{inr(b.amount||0)}</td>
                       <td className="amount" style={{color:'var(--green)'}}>
                         {b.advanceDeducted > 0 ? <>− {inr(b.advanceDeducted)}</> : <span className="text-muted">—</span>}
@@ -3281,6 +3329,7 @@ function BillPayments() {
                       <td className="amount fw-600" style={{color: b.advanceDeducted > 0 ? 'var(--primary)' : 'var(--text)'}}>
                         {inr(b.netPayable)}
                       </td>
+                      <td><XRefBadge po={b.linkedPO} wo={b.linkedWO} /></td>
                       <td><span className={`badge ${BILL_STATUS_COLOR[b.computedStatus]}`}>{b.computedStatus}</span></td>
                       <td>
                         <div className="flex gap-2">
@@ -3337,7 +3386,7 @@ function BillPayments() {
                     <tr key={a.docId} style={{background: a.status==='Unadjusted' ? 'var(--amber-50)' : a.status==='Fully Adjusted' ? 'var(--green-50)' : ''}}>
                       <td className="fw-600">{a.vendor}</td>
                       <td>{a.project?<span className={`badge ${PROJECT_COLOR[a.project]||'grey'}`}>{a.project}</span>:<span className="text-muted">—</span>}</td>
-                      <td>{a.datePaid}</td>
+                      <td>{fmt(a.datePaid)}</td>
                       <td><span className="badge grey">{a.paymentMode}</span></td>
                       <td className="mono" style={{fontSize:11}}>{a.refNumber||'—'}</td>
                       <td className="amount fw-600">{inr(a.amount||0)}</td>
@@ -3369,8 +3418,8 @@ function BillPayments() {
 
       {showNewBill && <NewBillModal onClose={()=>setShowNewBill(false)} />}
       {editBill && <NewBillModal onClose={()=>setEditBill(null)} existing={editBill} />}
-      {showNewAdvance && <NewAdvanceModal onClose={()=>setShowNewAdvance(false)} pos={pos} bills={items} />}
-      {editAdvance && <NewAdvanceModal onClose={()=>setEditAdvance(null)} pos={pos} bills={items} existing={editAdvance} />}
+      {showNewAdvance && <NewAdvanceModal onClose={()=>setShowNewAdvance(false)} pos={pos} wos={wos} bills={items} />}
+      {editAdvance && <NewAdvanceModal onClose={()=>setEditAdvance(null)} pos={pos} wos={wos} bills={items} existing={editAdvance} />}
       {linkingAdvance && <LinkAdvanceModal advance={linkingAdvance} onClose={()=>setLinkingAdvance(null)} pos={pos} bills={items} />}
     </div>
   );
@@ -3847,7 +3896,7 @@ function RecordReceiptModal({ raBill, onClose, allReceipts }) {
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Date Received</label>
-              <input className="form-input" type="date" value={form.dateReceived} onChange={e=>set('dateReceived',e.target.value)} />
+              <input className="form-input" type="date" value={fmt(form.dateReceived)} onChange={e=>set('dateReceived',e.target.value)} />
             </div>
             <div className="form-group">
               <label className="form-label">Payment Mode</label>
@@ -4014,7 +4063,7 @@ function Receipts() {
                               <td style={{padding:'7px 10px',fontSize:12.5,fontWeight:600}}>{m.name}</td>
                               <td style={{padding:'7px 10px',fontSize:12}}>{m.pct||'—'}%</td>
                               <td style={{padding:'7px 10px'}} className="amount">{inr(m.amount||0)}</td>
-                              <td style={{padding:'7px 10px',fontSize:12,color:'var(--text-muted)'}}>{m.expectedDate||'—'}</td>
+                              <td style={{padding:'7px 10px',fontSize:12,color:'var(--text-muted)'}}>{fmt(m.expectedDate)||'—'}</td>
                               <td style={{padding:'7px 10px'}} className="amount" style={{color:'var(--primary)'}}>{msClaimed>0?inr(msClaimed):'—'}</td>
                               <td style={{padding:'7px 10px'}} className="amount" style={{color:'var(--green)',fontWeight:600}}>{msReceived>0?inr(msReceived):'—'}</td>
                               <td style={{padding:'7px 10px'}}>
@@ -4141,7 +4190,7 @@ function Receipts() {
               <tbody>
                 {receipts.map(r=>(
                   <tr key={r.docId} style={{background:'var(--green-50)'}}>
-                    <td>{r.dateReceived}</td>
+                    <td>{fmt(r.dateReceived)}</td>
                     <td className="fw-600">{r.client}</td>
                     <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{r.projectRef||'—'}</td>
                     <td className="mono">{r.raBillNo}</td>
@@ -4227,18 +4276,17 @@ async function clearAllPettyCash() {
 // ─── New Petty Cash Entry Modal ────────────────────
 function NewPettyModal({ onClose, currentUser, existing }) {
   const isEdit = !!existing;
+  const { items: wos } = useWorkOrders();
   const [form, setForm] = useState(isEdit ? {
     date: existing.date||'', amount: existing.amount ? String(existing.amount) : '',
     category: existing.category||'Auto / Fuel', paidBy: existing.paidBy||'',
-    description: existing.description||'', project: existing.project||''
+    description: existing.description||'', project: existing.project||'',
+    linkedWO: existing.linkedWO||'', split: existing.split||{pontoon:50,wtp:50}
   } : {
     date: new Date().toISOString().slice(0,10),
-    amount: '',
-    category: 'Auto / Fuel',
+    amount: '', category: 'Auto / Fuel',
     paidBy: currentUser ? currentUser.name : 'Neer',
-    description: '',
-    project: '',
-    split: {pontoon:50,wtp:50},
+    description: '', project: '', linkedWO: '', split: {pontoon:50,wtp:50},
   });
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
@@ -4268,7 +4316,7 @@ function NewPettyModal({ onClose, currentUser, existing }) {
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Date</label>
-              <input className="form-input" type="date" value={form.date} onChange={e=>set('date',e.target.value)} />
+              <input className="form-input" type="date" value={fmt(form.date)} onChange={e=>set('date',e.target.value)} />
             </div>
             <div className="form-group">
               <label className="form-label">Amount (₹)</label>
@@ -4292,6 +4340,13 @@ function NewPettyModal({ onClose, currentUser, existing }) {
           <div className="form-group">
             <label className="form-label">Description</label>
             <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. Petrol for site visit — Thane" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Link to Work Order <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional)</span></label>
+            <select className="form-input form-select" value={form.linkedWO} onChange={e=>set('linkedWO',e.target.value)}>
+              <option value="">None</option>
+              {wos.map(w=><option key={w.docId} value={w.wo}>{w.wo} — {w.vendorName}</option>)}
+            </select>
           </div>
           <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
         </div>
@@ -4474,7 +4529,7 @@ function PettyCash({ currentUser }) {
             <tbody>
               {filtered.map(i=>(
                 <tr key={i.docId}>
-                  <td>{i.date}</td>
+                  <td>{fmt(i.date)}</td>
                   <td><span className="badge grey">{i.category}</span></td>
                   <td>{i.description}</td>
                   <td>
@@ -4559,26 +4614,28 @@ async function clearAllExpenses() {
 
 function NewExpenseModal({ onClose, currentUser, existing }) {
   const isEdit = !!existing;
+  const knownNames = useKnownNames();
+  const { items: pos } = usePurchaseOrders();
+  const { items: wos } = useWorkOrders();
   const [form, setForm] = useState(isEdit ? {
     date: existing.date||'',
     amount: existing.amount ? String(existing.amount) : '',
     category: existing.category||'',
+    vendor: existing.vendor||'',
     paidBy: existing.paidBy||'',
     paymentMode: existing.paymentMode||'NEFT',
     refNumber: existing.refNumber||'',
     description: existing.description||'',
+    linkedPO: existing.linkedPO||'',
+    linkedWO: existing.linkedWO||'',
     project: existing.project||'',
     split: existing.split||{pontoon:50,wtp:50},
   } : {
     date: new Date().toISOString().slice(0,10),
-    amount: '',
-    category: '',
-    paidBy: currentUser?.name||'',
-    paymentMode: 'NEFT',
-    refNumber: '',
-    description: '',
-    project: '',
-    split: {pontoon:50,wtp:50},
+    amount: '', category: '', vendor: '',
+    paidBy: currentUser?.name||'', paymentMode: 'NEFT',
+    refNumber: '', description: '', linkedPO: '', linkedWO: '',
+    project: '', split: {pontoon:50,wtp:50},
   });
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
@@ -4605,7 +4662,7 @@ function NewExpenseModal({ onClose, currentUser, existing }) {
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Date</label>
-              <input className="form-input" type="date" value={form.date} onChange={e=>set('date',e.target.value)} autoFocus />
+              <input className="form-input" type="date" value={fmt(form.date)} onChange={e=>set('date',e.target.value)} autoFocus />
             </div>
             <div className="form-group">
               <label className="form-label">Amount (₹)</label>
@@ -4643,6 +4700,29 @@ function NewExpenseModal({ onClose, currentUser, existing }) {
           <div className="form-group">
             <label className="form-label">Description</label>
             <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. Office rent — July 2026" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Vendor / Paid To <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional)</span></label>
+            <AutocompleteInput value={form.vendor} onChange={v=>set('vendor',v)} suggestions={[...knownNames.vendors,...knownNames.payees]} placeholder="Vendor or payee name" />
+          </div>
+          <div style={{borderTop:'1px solid var(--border)',paddingTop:12,marginTop:4}}>
+            <div style={{fontSize:11,fontWeight:600,color:'var(--text-muted)',marginBottom:8,textTransform:'uppercase',letterSpacing:.4}}>Link to PO / WO (optional)</div>
+            <div className="form-grid">
+              <div className="form-group">
+                <label className="form-label">Purchase Order</label>
+                <select className="form-input form-select" value={form.linkedPO} onChange={e=>set('linkedPO',e.target.value)}>
+                  <option value="">None</option>
+                  {pos.map(p=><option key={p.docId} value={p.po}>{p.po} — {p.vendorName}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Work Order</label>
+                <select className="form-input form-select" value={form.linkedWO} onChange={e=>set('linkedWO',e.target.value)}>
+                  <option value="">None</option>
+                  {wos.map(w=><option key={w.docId} value={w.wo}>{w.wo} — {w.vendorName}</option>)}
+                </select>
+              </div>
+            </div>
           </div>
           <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
         </div>
@@ -4758,18 +4838,20 @@ function Expenses({ currentUser }) {
         ) : (
           <table>
             <thead>
-              <tr><th>Date</th><th>Description</th><th>Category</th><th>Mode</th><th>Ref #</th><th>Paid By</th><th>Project</th><th>Amount</th><th>Actions</th></tr>
+              <tr><th>Date</th><th>Description</th><th>Vendor</th><th>Category</th><th>Mode</th><th>Ref #</th><th>Paid By</th><th>Project</th><th>Linked To</th><th>Amount</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {filtered.map(i=>(
                 <tr key={i.docId}>
-                  <td>{i.date}</td>
+                  <td>{fmt(i.date)}</td>
                   <td className="fw-600">{i.description}</td>
+                  <td style={{fontSize:12}}>{i.vendor||<span className="text-muted">—</span>}</td>
                   <td><span className="badge grey">{i.category||'—'}</span></td>
                   <td><span className="badge blue">{i.paymentMode||'—'}</span></td>
                   <td className="mono" style={{fontSize:11}}>{i.refNumber||'—'}</td>
                   <td>{i.paidBy?.includes('@') ? i.paidBy.split('@')[0].charAt(0).toUpperCase()+i.paidBy.split('@')[0].slice(1) : (i.paidBy||'—')}</td>
                   <td>{i.project?<span className={`badge ${PROJECT_COLOR[i.project]||'grey'}`}>{i.project}</span>:<span className="text-muted">—</span>}</td>
+                  <td><XRefBadge po={i.linkedPO} wo={i.linkedWO} /></td>
                   <td className="amount fw-600" style={{color:'var(--red)'}}>{inr(i.amount||0)}</td>
                   <td>
                     <div className="flex gap-2">
@@ -4906,7 +4988,7 @@ function NewCapitalModal({ onClose, existing }) {
             </div>
             <div className="form-group">
               <label className="form-label">Date Received</label>
-              <input className="form-input" type="date" value={form.dateReceived} onChange={e=>set('dateReceived',e.target.value)} />
+              <input className="form-input" type="date" value={fmt(form.dateReceived)} onChange={e=>set('dateReceived',e.target.value)} />
             </div>
           </div>
           <div className="form-grid">
@@ -4943,7 +5025,7 @@ function NewCapitalModal({ onClose, existing }) {
               <div className="form-grid">
                 <div className="form-group">
                   <label className="form-label">EMI Start Date</label>
-                  <input className="form-input" type="date" value={form.emiStartDate} onChange={e=>set('emiStartDate',e.target.value)} />
+                  <input className="form-input" type="date" value={fmt(form.emiStartDate)} onChange={e=>set('emiStartDate',e.target.value)} />
                 </div>
                 <div className="form-group">
                   <label className="form-label">Interest Rate (% p.a.)</label>
@@ -5035,7 +5117,7 @@ function CapitalLoans() {
                   <td><span className={`badge ${TYPE_COLOR[item.type]||'grey'}`}>{item.type}</span></td>
                   <td className="fw-600">{item.source}</td>
                   <td>{item.project?<span className={`badge ${PROJECT_COLOR[item.project]||'grey'}`}>{item.project}</span>:<span className="text-muted">—</span>}</td>
-                  <td>{item.dateReceived}</td>
+                  <td>{fmt(item.dateReceived)}</td>
                   <td className="amount fw-600" style={{color:'var(--green)'}}>{inr(item.amount||0)}</td>
                   <td><span className="badge grey">{item.paymentMode}</span></td>
                   <td className="mono" style={{fontSize:11}}>{item.refNumber||'—'}</td>
@@ -5314,7 +5396,7 @@ function NewReminderModal({ onClose }) {
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Due Date</label>
-              <input className="form-input" type="date" value={form.dueDate} onChange={e=>set('dueDate',e.target.value)} />
+              <input className="form-input" type="date" value={fmt(form.dueDate)} onChange={e=>set('dueDate',e.target.value)} />
             </div>
             <div className="form-group">
               <label className="form-label">Priority</label>
@@ -5359,7 +5441,7 @@ function Reminders() {
     ...bills.filter(b=>!b.paid&&b.due&&b.due<today).map(b=>({
       docId: `auto-bill-${b.docId}`, auto:true,
       title: `Overdue bill — ${b.payee}`,
-      notes: `${inr(b.amount||0)} · Due ${b.due}`,
+      notes: `${inr(b.amount||0)} · Due ${fmt(b.due)}`,
       dueDate: b.due, priority:'Urgent', project:b.project||'',
       done:false, category:'Bill'
     })),
@@ -5367,7 +5449,7 @@ function Reminders() {
     ...bills.filter(b=>!b.paid&&b.due&&b.due>=today&&b.due<=in7).map(b=>({
       docId: `auto-billdue-${b.docId}`, auto:true,
       title: `Bill due soon — ${b.payee}`,
-      notes: `${inr(b.amount||0)} · Due ${b.due}`,
+      notes: `${inr(b.amount||0)} · Due ${fmt(b.due)}`,
       dueDate: b.due, priority:'Normal', project:b.project||'',
       done:false, category:'Bill'
     })),
@@ -5375,7 +5457,7 @@ function Reminders() {
     ...tasks.filter(t=>t.status!=='Completed'&&t.due&&t.due<today).map(t=>({
       docId: `auto-task-${t.docId}`, auto:true,
       title: `Overdue task — ${t.name}`,
-      notes: `Assigned: ${t.assigned} · Due ${t.due}`,
+      notes: `Assigned: ${t.assigned} · Due ${fmt(t.due)}`,
       dueDate: t.due, priority:'Urgent', project:t.project||'',
       done:false, category:'Task'
     })),
@@ -5476,7 +5558,7 @@ function Reminders() {
             </div>
             <div style={{textAlign:'right',flexShrink:0}}>
               <div style={{fontSize:11.5,color:r.dueDate<today&&!r.done?'var(--red)':'var(--text-muted)',fontWeight:r.dueDate<today&&!r.done?600:400}}>
-                {r.dueDate<today&&!r.done?'⚠ ':''}{r.dueDate}
+                {r.dueDate<today&&!r.done?'⚠ ':''}{fmt(r.dueDate)}
               </div>
               {!r.auto && (
                 <button className="btn btn-sm btn-ghost" style={{marginTop:4,fontSize:10}} onClick={()=>deleteReminder(r.docId)}>Delete</button>
@@ -6010,7 +6092,7 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
             </div>
             <div className="form-group">
               <label className="form-label">Received Date</label>
-              <input className="form-input" type="date" value={form.receivedDate} onChange={e=>set('receivedDate',e.target.value)} />
+              <input className="form-input" type="date" value={fmt(form.receivedDate)} onChange={e=>set('receivedDate',e.target.value)} />
             </div>
           </div>
           <div className="form-group">
