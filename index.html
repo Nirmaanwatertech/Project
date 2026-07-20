@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Nirmaan Watertech Platform v2.7 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4589,6 +4590,7 @@ function PettyCash({ currentUser }) {
   const [monthFilter, setMonthFilter] = useState('all');
   const [editEntry, setEditEntry] = useState(null);
   const [pettySortBy, setPettySortBy] = useState('date_desc');
+  const [pettyProjectFilter, setPettyProjectFilter] = useState('all');
 
   const months = [...new Set(items.map(i=>i.date?.slice(0,7)).filter(Boolean))].sort().reverse();
 
@@ -4605,7 +4607,8 @@ function PettyCash({ currentUser }) {
   const filtered = sortPetty(items.filter(i=>
     (catFilter==='all' || i.category===catFilter) &&
     (paidByFilter==='all' || normName(i.paidBy)===paidByFilter) &&
-    (monthFilter==='all' || (i.date||'').startsWith(monthFilter))
+    (monthFilter==='all' || (i.date||'').startsWith(monthFilter)) &&
+    (pettyProjectFilter==='all' || i.project===pettyProjectFilter)
   ));
 
   const total = filtered.reduce((s,i)=>s+Number(i.amount||0),0);
@@ -4716,7 +4719,7 @@ function PettyCash({ currentUser }) {
       {/* Filters + table */}
       <div className="card">
         <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
-          <div className="flex gap-2">
+          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
             <select className="form-input form-select" style={{width:160}} onChange={e=>setCatFilter(e.target.value)}>
               <option value="all">All Categories</option>
               {activePettyCategories.map(c=><option key={c}>{c}</option>)}
@@ -4728,6 +4731,17 @@ function PettyCash({ currentUser }) {
             <select className="form-input form-select" style={{width:150}} onChange={e=>setMonthFilter(e.target.value)}>
               <option value="all">All Months</option>
               {months.map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:130}} onChange={e=>setPettyProjectFilter(e.target.value)}>
+              <option value="all">All Projects</option>
+              {PROJECTS.map(p=><option key={p}>{p}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:180}} value={pettySortBy} onChange={e=>setPettySortBy(e.target.value)}>
+              <option value="date_desc">↓ Date (Newest)</option>
+              <option value="date_asc">↑ Date (Oldest)</option>
+              <option value="amount_desc">↓ Amount (Highest)</option>
+              <option value="amount_asc">↑ Amount (Lowest)</option>
+              <option value="desc_asc">A→Z Description</option>
             </select>
           </div>
         </div>
