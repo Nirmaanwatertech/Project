@@ -2938,9 +2938,17 @@ function NewBillModal({ onClose, existing }) {
 }
 
 // ─── New Advance Payment Modal ─────────────────────
-function NewAdvanceModal({ onClose, pos, bills }) {
+function NewAdvanceModal({ onClose, pos, bills, existing }) {
+  const isEdit = !!existing;
   const knownNames = useKnownNames();
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(isEdit ? {
+    vendor: existing.vendor||'', amount: String(existing.amount||''),
+    datePaid: existing.datePaid||new Date().toISOString().slice(0,10),
+    paymentMode: existing.paymentMode||'NEFT', refNumber: existing.refNumber||'',
+    narration: existing.narration||'', linkedPO: existing.linkedPO||'',
+    linkedBill: existing.linkedBill||'', project: existing.project||'',
+    split: existing.split||{pontoon:50,wtp:50}
+  } : {
     vendor: '', amount: '', datePaid: new Date().toISOString().slice(0,10),
     paymentMode: 'NEFT', refNumber: '', narration: '',
     linkedPO: '', linkedBill: '', project: '', split:{pontoon:50,wtp:50}
@@ -2953,11 +2961,12 @@ function NewAdvanceModal({ onClose, pos, bills }) {
     setSaving(true);
     try {
       const amt = Number(form.amount);
-      await addAdvance({
-        ...form,
-        amount: amt,
-        balanceAmount: amt, // full amount unadjusted initially
-      });
+      if (isEdit) {
+        const { updateDoc } = window.fb;
+        await updateDoc(userDoc(ADVANCES_COLLECTION, existing.docId), { ...form, amount: amt });
+      } else {
+        await addAdvance({ ...form, amount: amt, balanceAmount: amt });
+      }
       onClose();
     } catch (e) { console.error(e); alert('Could not save advance payment.'); }
     finally { setSaving(false); }
@@ -2967,7 +2976,7 @@ function NewAdvanceModal({ onClose, pos, bills }) {
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
       <div style={{background:'var(--surface)',borderRadius:10,width:520,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--secondary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ Record Advance Payment</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Advance Payment' : '+ Record Advance Payment'}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div style={{background:'var(--secondary-50)',border:'1px solid #B2DFDB',borderRadius:6,padding:'8px 12px',fontSize:12,color:'var(--secondary)',marginBottom:16}}>
@@ -3028,7 +3037,7 @@ function NewAdvanceModal({ onClose, pos, bills }) {
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
           <button onClick={handleSave} disabled={saving||!form.vendor.trim()||!form.amount||!form.datePaid} className="btn btn-primary"
             style={{background:'var(--secondary)',opacity:saving||!form.vendor.trim()||!form.amount||!form.datePaid?0.6:1}}>
-            {saving?'Saving…':'Record Advance'}
+            {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Record Advance'}
           </button>
         </div>
       </div>
@@ -3340,6 +3349,7 @@ function BillPayments() {
       {showNewBill && <NewBillModal onClose={()=>setShowNewBill(false)} />}
       {editBill && <NewBillModal onClose={()=>setEditBill(null)} existing={editBill} />}
       {showNewAdvance && <NewAdvanceModal onClose={()=>setShowNewAdvance(false)} pos={pos} bills={items} />}
+      {editAdvance && <NewAdvanceModal onClose={()=>setEditAdvance(null)} pos={pos} bills={items} existing={editAdvance} />}
       {linkingAdvance && <LinkAdvanceModal advance={linkingAdvance} onClose={()=>setLinkingAdvance(null)} pos={pos} bills={items} />}
     </div>
   );
