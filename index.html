@@ -234,7 +234,7 @@
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import {
     getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, setDoc,
-    onSnapshot, query, orderBy, getDocs, writeBatch
+    onSnapshot, query, orderBy, getDocs, getDoc, writeBatch
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import {
     getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
@@ -258,7 +258,7 @@
   window.fb = {
     db, auth,
     collection, addDoc, updateDoc, deleteDoc, doc, setDoc,
-    onSnapshot, query, orderBy, getDocs, writeBatch,
+    onSnapshot, query, orderBy, getDocs, getDoc, writeBatch,
     signInWithEmailAndPassword, signOut, onAuthStateChanged
   };
 
@@ -4525,7 +4525,7 @@ function NewExpenseModal({ onClose, currentUser, existing }) {
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
       <div style={{background:'var(--surface)',borderRadius:10,width:500,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--red)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit?'✏ Edit Expense':'+ New Bank Expense'}</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit?'✏ Edit Expense':'+ New General Expense'}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-grid">
@@ -4612,7 +4612,7 @@ function Expenses({ currentUser }) {
     <div>
       <div className="section-header">
         <div>
-          <div className="section-title">Bank Expenses</div>
+          <div className="section-title">General Expenses</div>
           <div className="section-sub">{loading?'Loading…':`${items.length} entries · Direct bank payments (not petty cash)`}</div>
         </div>
         <div className="flex gap-2">
@@ -4667,7 +4667,7 @@ function Expenses({ currentUser }) {
         ) : filtered.length===0 ? (
           <div className="module-coming">
             <div className="big-icon">🏦</div>
-            <h3>No bank expenses yet</h3>
+            <h3>No general expenses yet</h3>
             <p className="text-muted">Record direct bank payments — rent, salaries, vendor payments, professional fees, etc.</p>
           </div>
         ) : (
@@ -5691,7 +5691,7 @@ const NAV = [
   { id:'billpayments',   label:'Bill Payments',    icon:'📑' },
   { id:'cashflow',       label:'Cash Flow',        icon:'📈' },
   { id:'pettycash',      label:'Petty Cash',       icon:'💰' },
-  { id:'expenses',       label:'Bank Expenses',     icon:'🏦' },
+  { id:'expenses',       label:'General Expenses',     icon:'🏦' },
   { section: 'Team' },
   { id:'reminders',      label:'Reminders',        icon:'🔔' },
   { id:'reports',        label:'Reports',          icon:'📊' },
@@ -6066,7 +6066,7 @@ function Settings() {
               { label:'Clear Quotations', desc:'Removes all quotations.', scope:'quotations' },
               { label:'Clear Purchase Orders', desc:'Removes all POs.', scope:'purchaseorders' },
               { label:'Clear Petty Cash', desc:'Removes all petty cash entries.', scope:'pettycash' },
-              { label:'Clear Bank Expenses', desc:'Removes all bank expense entries.', scope:'expenses' },
+              { label:'Clear General Expenses', desc:'Removes all general expense entries.', scope:'expenses' },
               { label:'Reset All Data', desc:'Wipes everything. Cannot be undone.', scope:'all' },
             ].map(item => <ClearDataCard key={item.scope} item={item} />)}
           </div>
@@ -6303,7 +6303,11 @@ function App() {
               {currentUser.initials}
             </div>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:12,fontWeight:600,color:'#fff',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{currentUser.name.charAt(0).toUpperCase()+currentUser.name.slice(1)}</div>
+              <div style={{fontSize:12,fontWeight:600,color:'#fff',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                {currentUser.name.includes('@')
+                  ? currentUser.name.split('@')[0].charAt(0).toUpperCase()+currentUser.name.split('@')[0].slice(1)
+                  : currentUser.name.charAt(0).toUpperCase()+currentUser.name.slice(1)}
+              </div>
               <div style={{fontSize:10,color:'rgba(255,255,255,.5)',textTransform:'capitalize'}}>{currentUser.role.replace('_',' ')} · Sign out</div>
             </div>
           </div>
