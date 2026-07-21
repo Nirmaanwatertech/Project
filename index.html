@@ -230,29 +230,6 @@
 </head>
 <body>
 <div id="root"></div>
-<div id="err" style="display:none;position:fixed;inset:0;background:#fff;z-index:99999;padding:24px;font-family:monospace;font-size:12px;color:#c00;white-space:pre-wrap;overflow:auto;border-top:4px solid red"></div>
-<script>
-(function(){
-  function show(msg) {
-    var d=document.getElementById('err');
-    if(d){d.style.display='block';d.textContent=msg;}
-  }
-  window.addEventListener('error', function(e) {
-    show('RUNTIME ERROR:\n' + e.message + '\n\nFile: ' + e.filename + '\nLine: ' + e.lineno + ':' + e.colno + '\n\n' + (e.error&&e.error.stack||''));
-  }, true); // capture phase to catch cross-origin too
-  window.addEventListener('unhandledrejection', function(e) {
-    show('PROMISE REJECTION:\n' + (e.reason&&e.reason.stack||String(e.reason)));
-  });
-  // Also intercept Babel transform errors
-  document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(function() {
-      if (!document.getElementById('root').innerHTML) {
-        show('App did not mount. React root is empty.\nThis usually means a top-level JS error before ReactDOM.render().\nCheck the console (F12) for more details.');
-      }
-    }, 5000);
-  });
-})();
-</script>
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
@@ -1045,6 +1022,7 @@ function useRequisitions() { return { items: [], loading: false }; }
 
 // ─── IssuePOModal — from approved quotation ───────────
 function IssuePOModal({ quotation, onClose, onIssued }) {
+  const knownNames = useKnownNames();
   const [form, setForm] = useState({
     po: '', vendorName: quotation?.vendorName||'',
     description: quotation?.description||'',
@@ -1087,7 +1065,7 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
           </div>
           <div className="form-group">
             <label className="form-label">Vendor Name</label>
-            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={useKnownNames().vendors} />
+            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={knownNames.vendors} />
           </div>
           <div className="form-group">
             <label className="form-label">Description</label>
@@ -2013,6 +1991,7 @@ function finalizedQuotations(quotations) {
 
 function NewWOModal({ onClose, nextNumber, quotations, existing }) {
   const isEdit = !!existing;
+  const knownNames = useKnownNames();
   const [form, setForm] = useState(isEdit ? {
     wo: existing.wo||nextNumber, vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
@@ -2084,7 +2063,7 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
           </div>
           <div className="form-group">
             <label className="form-label">Vendor Name</label>
-            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={useKnownNames().vendors} placeholder="Vendor / contractor name" />
+            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={knownNames.vendors} placeholder="Vendor / contractor name" />
           </div>
           <div className="form-group">
             <label className="form-label">Scope of Work / Description</label>
@@ -2362,6 +2341,7 @@ async function clearAllPOs() {
 
 function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existing }) {
   const isEdit = !!existing;
+  const knownNames = useKnownNames();
   const [form, setForm] = useState(isEdit ? {
     po: existing.po||nextNumber, vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
@@ -2444,7 +2424,7 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
                 )}
               </select>
             ) : (
-              <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={useKnownNames().vendors} placeholder="Vendor name" />
+              <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={knownNames.vendors} placeholder="Vendor name" />
             )}
           </div>
           <div className="form-group">
@@ -3875,7 +3855,7 @@ function NewBillingScheduleModal({ onClose }) {
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Client Name</label>
-              <AutocompleteInput value={form.client} onChange={v=>set('client',v)} suggestions={useKnownNames().clients} placeholder="e.g. Green Valley CHS" />
+              <AutocompleteInput value={form.client} onChange={v=>set('client',v)} suggestions={knownNames.clients} placeholder="e.g. Green Valley CHS" />
             </div>
             <div className="form-group">
               <label className="form-label">Project / Site Reference</label>
@@ -4543,6 +4523,7 @@ async function clearAllPettyCash() {
 // ─── New Petty Cash Entry Modal ────────────────────
 function NewPettyModal({ onClose, currentUser, existing }) {
   const isEdit = !!existing;
+  const knownNames = useKnownNames();
   const lists = useLists();
   const { items: wos } = useWorkOrders();
   const [form, setForm] = useState(isEdit ? {
@@ -5216,6 +5197,7 @@ async function clearAllCapital() {
 
 function NewCapitalModal({ onClose, existing }) {
   const isEdit = !!existing;
+  const knownNames = useKnownNames();
   const [form, setForm] = useState(isEdit ? {
     type: existing.type||'Bank Loan', source: existing.source||'',
     amount: existing.amount ? String(existing.amount) : '',
@@ -5273,7 +5255,7 @@ function NewCapitalModal({ onClose, existing }) {
             </div>
             <div className="form-group">
               <label className="form-label">Source / Lender Name</label>
-              <AutocompleteInput value={form.source} onChange={v=>set('source',v)} suggestions={useKnownNames().capital||[]} placeholder="e.g. HDFC Bank, Mr. Ramesh" />
+              <AutocompleteInput value={form.source} onChange={v=>set('source',v)} suggestions={knownNames.capital||[]} placeholder="e.g. HDFC Bank, Mr. Ramesh" />
             </div>
           </div>
           <div className="form-grid">
@@ -6394,6 +6376,7 @@ function QuotationsWithUser({ currentUser }) {
 // ─── New Quotation with REQ dropdown and Quot Number ─
 function NewQuotationWithREQ({ onClose, reqs, existing }) {
   const isEdit = !!existing;
+  const knownNames = useKnownNames();
   const [form, setForm] = useState(isEdit ? {
     quotNo: existing.quotNo||'', vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
@@ -6441,7 +6424,7 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
           </div>
           <div className="form-group">
             <label className="form-label">Vendor Name</label>
-            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={useKnownNames().vendors} placeholder="Vendor / supplier name" />
+            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={knownNames.vendors} placeholder="Vendor / supplier name" />
           </div>
           <div className="form-group">
             <label className="form-label">Description</label>
