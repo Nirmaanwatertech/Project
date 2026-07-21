@@ -2696,64 +2696,108 @@ async function clearCashFlowData() {
 }
 
 function CashFlow() {
-  const [horizon, setHorizon] = useState('30');
+  const [view, setView] = useState('all'); // 'all' | 'past' | 'future'
+  const [typeFilter, setTypeFilter] = useState('all'); // 'all' | 'in' | 'out'
+  const [projectFilter, setCFProjectFilter] = useState('all');
   const { items: bills,    loading: billsLoading    } = useBills();
+  const { items: advances, loading: advLoading      } = useAdvances();
   const { items: receipts, loading: receiptsLoading } = useReceipts();
   const { items: capital,  loading: capitalLoading  } = useCapitalLoans();
+  const { items: expenses, loading: expLoading      } = useExpenses();
+  const { items: petty,    loading: pettyLoading    } = usePettyCash();
   const { settings, loading: settingsLoading } = useCashSettings();
   const [editingBalance, setEditingBalance] = useState(false);
   const [balanceInput, setBalanceInput] = useState('');
 
-  const loading = billsLoading || settingsLoading || receiptsLoading || capitalLoading;
+  const loading = billsLoading || settingsLoading || receiptsLoading || capitalLoading || advLoading || expLoading || pettyLoading;
   const todayStr = new Date().toISOString().slice(0,10);
-  const horizonDate = new Date(Date.now() + Number(horizon)*86400000).toISOString().slice(0,10);
 
-  // ── OUTFLOWS: unpaid bills within horizon ──
-  const unpaidInRange = bills
-    .filter(b => !b.paid && b.due && b.due >= todayStr && b.due <= horizonDate)
-    .sort((a,b) => (a.due||'').localeCompare(b.due||''));
-
-  // ── INFLOWS: receipts within horizon ──
-  const receiptsInRange = receipts
-    .filter(r => r.dateReceived && r.dateReceived >= todayStr && r.dateReceived <= horizonDate)
-    .sort((a,b) => (a.dateReceived||'').localeCompare(b.dateReceived||''));
-
-  // ── INFLOWS: capital received within horizon ──
-  const capitalInRange = capital
-    .filter(c => c.dateReceived && c.dateReceived >= todayStr && c.dateReceived <= horizonDate)
-    .sort((a,b) => (a.dateReceived||'').localeCompare(b.dateReceived||''));
-
-  // Merge and sort all rows by date
+  // ── Build all rows from every money movement ──
   const allRows = [
-    ...unpaidInRange.map(b => ({
-      date: b.due, label: b.payee, cat: b.category||'Bill',
-      type: 'out', amt: Number(b.amount||0), project: b.project||''
+    // OUTFLOWS
+    ...bills.flatMap(b => {
+      // If bill has a payment schedule, use each stage as a separate outflow
+      if (b.paymentSchedule && b.paymentSchedule.length > 0) {
+        return b.paymentSchedule.map(stage => ({
+          date: stage.date||b.due||'',
+          label: `${b.payee} — ${stage.name||'Payment'}`,
+          cat: b.category||'Bill', subcat: `${stage.pct||''}% of ${inr(b.amount||0)}`,
+          type: 'out', amt: Number(stage.amount||0), project: b.project||'',
+          ref: b.invoiceNo||'', isPast: (stage.date||b.due||'') < todayStr,
+        }));
+      }
+      // No schedule — single outflow on due date
+      return [{
+        date: b.due||b.invoiceDate||'', label: b.payee,
+        cat: b.category||'Bill', subcat: b.paid?'Paid':'Unpaid',
+        type: 'out', amt: Number(b.amount||0), project: b.project||'',
+        ref: b.invoiceNo||'', isPast: (b.due||'') < todayStr,
+      }];
+    }),
+    ...advances.map(a => ({
+      date: a.datePaid||'', label: `Advance — ${a.vendor}`,
+      cat: 'Advance', subcat: a.status||'',
+      type: 'out', amt: Number(a.amount||0), project: a.project||'',
+      ref: a.refNumber||'', isPast: (a.datePaid||'') <= todayStr,
     })),
-    ...receiptsInRange.map(r => ({
-      date: r.dateReceived, label: `Receipt — ${r.client} (${r.raBillNo||r.milestoneName||'General'})`,
-      cat: 'Client Receipt', type: 'in', amt: Number(r.amountReceived||0), project: r.project||''
+    ...expenses.map(e => ({
+      date: e.date||'', label: e.description||(e.vendor||'General Expense'),
+      cat: e.category||'General Expense', subcat: e.paymentMode||'',
+      type: 'out', amt: Number(e.amount||0), project: e.project||'',
+      ref: e.refNumber||'', isPast: (e.date||'') <= todayStr,
     })),
-    ...capitalInRange.map(c => ({
-      date: c.dateReceived, label: `${c.type} — ${c.source}`,
-      cat: 'Capital Inflow', type: 'in', amt: Number(c.amount||0), project: c.project||''
+    ...petty.map(p => ({
+      date: p.date||'', label: p.description||'Petty Cash',
+      cat: `Petty — ${p.category||''}`, subcat: p.paidBy||'',
+      type: 'out', amt: Number(p.amount||0), project: p.project||'',
+      ref: '', isPast: (p.date||'') <= todayStr,
     })),
-  ].sort((a,b) => (a.date||'').localeCompare(b.date||''));
+    // INFLOWS
+    ...receipts.map(r => ({
+      date: r.dateReceived||'', label: `${r.client||'Client'} — ${r.raBillNo||r.milestoneName||'Receipt'}`,
+      cat: 'Client Receipt', subcat: r.paymentMode||'',
+      type: 'in', amt: Number(r.amountReceived||0), project: r.project||'',
+      ref: r.refNumber||'', isPast: (r.dateReceived||'') <= todayStr,
+    })),
+    ...capital.map(c => ({
+      date: c.dateReceived||'', label: `${c.type} — ${c.source}`,
+      cat: 'Capital Inflow', subcat: c.paymentMode||'',
+      type: 'in', amt: Number(c.amount||0), project: c.project||'',
+      ref: c.refNumber||'', isPast: (c.dateReceived||'') <= todayStr,
+    })),
+  ]
+  .filter(r => r.date && r.amt > 0)
+  .sort((a,b) => (a.date||'').localeCompare(b.date||''));
+
+  // Apply filters
+  const filtered = allRows.filter(r =>
+    (view==='all' || (view==='past' && r.isPast) || (view==='future' && !r.isPast)) &&
+    (typeFilter==='all' || r.type===typeFilter) &&
+    (projectFilter==='all' || r.project===projectFilter)
+  );
 
   // Build running balance
   let running = Number(settings.startingBalance) || 0;
-  const rows = allRows.map(r => {
-    if (r.type === 'out') running -= r.amt;
+  const rows = filtered.map(r => {
+    if (r.type==='out') running -= r.amt;
     else running += r.amt;
     return { ...r, balance: running };
   });
 
-  const outflowsTotal  = allRows.filter(r=>r.type==='out').reduce((s,r)=>s+r.amt,0);
-  const inflowsTotal   = allRows.filter(r=>r.type==='in').reduce((s,r)=>s+r.amt,0);
-  const forecastLow    = rows.length ? Math.min(...rows.map(r=>r.balance)) : Number(settings.startingBalance)||0;
-  const forecastEnd    = rows.length ? rows[rows.length-1].balance : Number(settings.startingBalance)||0;
-  const lowRow         = rows.find(r => r.balance === forecastLow);
+  const totalIn  = filtered.filter(r=>r.type==='in').reduce((s,r)=>s+r.amt,0);
+  const totalOut = filtered.filter(r=>r.type==='out').reduce((s,r)=>s+r.amt,0);
+  const netFlow  = totalIn - totalOut;
+  const forecastLow = rows.length ? Math.min(...rows.map(r=>r.balance)) : Number(settings.startingBalance)||0;
+  const forecastEnd = rows.length ? rows[rows.length-1].balance : Number(settings.startingBalance)||0;
+  const lowRow = rows.find(r=>r.balance===forecastLow);
   const criticalBreached = forecastLow < Number(settings.criticalThreshold||0);
   const warningBreached  = !criticalBreached && forecastLow < Number(settings.warningThreshold||0);
+
+  // Category breakdown
+  const outByCat = {};
+  filtered.filter(r=>r.type==='out').forEach(r=>{ outByCat[r.cat]=(outByCat[r.cat]||0)+r.amt; });
+  const inByCat = {};
+  filtered.filter(r=>r.type==='in').forEach(r=>{ inByCat[r.cat]=(inByCat[r.cat]||0)+r.amt; });
 
   async function saveBalance() {
     const { db, doc, setDoc } = window.fb;
@@ -2763,19 +2807,15 @@ function CashFlow() {
     } catch(e) { console.error(e); alert('Could not save balance.'); }
   }
 
+  const TYPE_BADGE = { 'Bill':'red', 'Advance':'amber', 'General Expense':'red', 'Client Receipt':'green', 'Capital Inflow':'blue' };
+
   return (
     <div>
       <div className="section-header">
         <div>
           <div className="section-title">Cash Flow</div>
-          <div className="section-sub">{loading ? 'Loading…' : 'Bills (outflows) · Receipts + Capital (inflows) · live Firestore'}</div>
+          <div className="section-sub">{loading?'Loading…':`${allRows.length} transactions — Bills · Advances · Expenses · Petty Cash · Receipts · Capital`}</div>
         </div>
-        <select className="form-input form-select" style={{width:130}} value={horizon} onChange={e=>setHorizon(e.target.value)}>
-          <option value="30">30-day view</option>
-          <option value="45">45-day view</option>
-          <option value="60">60-day view</option>
-          <option value="90">90-day view</option>
-        </select>
       </div>
 
       {!loading && criticalBreached && (
@@ -2787,65 +2827,125 @@ function CashFlow() {
       {!loading && warningBreached && (
         <div className="alert-bar warning" style={{marginBottom:14}}>
           <span className="alert-icon">⚠️</span>
-          <strong>Warning:</strong>&nbsp;Balance drops to {inr(forecastLow)} {lowRow?`on ${fmt(lowRow.date)}`:''} — below ₹{Number(settings.warningThreshold||0).toLocaleString('en-IN')} threshold.
+          <strong>Warning:</strong>&nbsp;Balance drops to {inr(forecastLow)} {lowRow?`on ${fmt(lowRow.date)}`:''}.
         </div>
       )}
 
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(5,1fr)',marginBottom:14}}>
+      {/* Stats */}
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(6,1fr)',marginBottom:14}}>
         <div className="stat-card">
-          <div className="stat-label">Starting Balance</div>
+          <div className="stat-label">Opening Balance</div>
           {editingBalance ? (
-            <div className="flex gap-2 items-center mt-1">
-              <input className="form-input font-mono" style={{width:110}} value={balanceInput} onChange={e=>setBalanceInput(e.target.value)} autoFocus onKeyDown={e=>e.key==='Enter'&&saveBalance()} />
-              <button className="btn btn-sm btn-primary" onClick={saveBalance}>Save</button>
+            <div style={{display:'flex',gap:4,marginTop:4}}>
+              <input className="form-input font-mono" style={{width:90,fontSize:12}} value={balanceInput}
+                onChange={e=>setBalanceInput(e.target.value)} autoFocus onKeyDown={e=>e.key==='Enter'&&saveBalance()} />
+              <button className="btn btn-sm btn-primary" onClick={saveBalance}>✓</button>
               <button className="btn btn-sm btn-ghost" onClick={()=>setEditingBalance(false)}>✕</button>
             </div>
           ) : (
             <>
               <div className="stat-value green">{inr(settings.startingBalance||0)}</div>
-              <div className="stat-sub" style={{cursor:'pointer',color:'var(--primary)'}} onClick={()=>{setBalanceInput(String(settings.startingBalance||0));setEditingBalance(true);}}>Edit</div>
+              <div className="stat-sub" style={{cursor:'pointer',color:'var(--primary)'}}
+                onClick={()=>{setBalanceInput(String(settings.startingBalance||0));setEditingBalance(true);}}>Edit</div>
             </>
           )}
         </div>
-        <div className="stat-card"><div className="stat-label">Inflows ({horizon}d)</div><div className="stat-value green">{inr(inflowsTotal)}</div><div className="stat-sub">{allRows.filter(r=>r.type==='in').length} entries</div></div>
-        <div className="stat-card"><div className="stat-label">Outflows ({horizon}d)</div><div className="stat-value red">{inr(outflowsTotal)}</div><div className="stat-sub">{allRows.filter(r=>r.type==='out').length} bills</div></div>
-        <div className="stat-card"><div className="stat-label">Forecast Low</div><div className={`stat-value ${criticalBreached?'red':warningBreached?'amber':'blue'}`}>{inr(forecastLow)}</div>{lowRow&&<div className="stat-sub">{fmt(lowRow.date)}</div>}</div>
-        <div className="stat-card"><div className="stat-label">Forecast End ({horizon}d)</div><div className={`stat-value ${forecastEnd>=0?'green':'red'}`}>{inr(forecastEnd)}</div></div>
+        <div className="stat-card"><div className="stat-label">Total Inflows</div><div className="stat-value green">{inr(totalIn)}</div><div className="stat-sub">{filtered.filter(r=>r.type==='in').length} entries</div></div>
+        <div className="stat-card"><div className="stat-label">Total Outflows</div><div className="stat-value red">{inr(totalOut)}</div><div className="stat-sub">{filtered.filter(r=>r.type==='out').length} entries</div></div>
+        <div className="stat-card"><div className="stat-label">Net Flow</div><div className={`stat-value ${netFlow>=0?'green':'red'}`}>{inr(Math.abs(netFlow))}{netFlow<0?' ↓':' ↑'}</div></div>
+        <div className="stat-card"><div className="stat-label">Balance Low</div><div className={`stat-value ${criticalBreached?'red':warningBreached?'amber':'blue'}`}>{inr(forecastLow)}</div>{lowRow&&<div className="stat-sub">{fmt(lowRow.date)}</div>}</div>
+        <div className="stat-card"><div className="stat-label">Closing Balance</div><div className={`stat-value ${forecastEnd>=0?'green':'red'}`}>{inr(forecastEnd)}</div></div>
       </div>
 
-      <div className="card">
-        <div className="card-header">
-          <span className="card-title">{horizon}-Day Cash Flow — Bills + Receipts + Capital</span>
+      {/* Breakdown summary */}
+      {!loading && rows.length > 0 && (
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
+          <div className="card">
+            <div className="card-header"><span className="card-title">Outflows by Category</span></div>
+            <div className="card-body">
+              {Object.entries(outByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
+                <div key={cat} style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                  <span style={{fontSize:12,color:'var(--text-secondary)'}}>{cat}</span>
+                  <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--red)'}}>{inr(amt)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="card">
+            <div className="card-header"><span className="card-title">Inflows by Source</span></div>
+            <div className="card-body">
+              {Object.entries(inByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
+                <div key={cat} style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                  <span style={{fontSize:12,color:'var(--text-secondary)'}}>{cat}</span>
+                  <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--green)'}}>{inr(amt)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
+      )}
+
+      {/* Filters */}
+      <div className="card">
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
+            <div className="tabs" style={{marginBottom:0}}>
+              {[['all','All'],['past','Past'],['future','Future / Due']].map(([v,l])=>(
+                <div key={v} className={`tab ${view===v?'active':''}`} onClick={()=>setView(v)}>{l}</div>
+              ))}
+            </div>
+            <select className="form-input form-select" style={{width:140}} value={typeFilter} onChange={e=>setTypeFilter(e.target.value)}>
+              <option value="all">All Types</option>
+              <option value="in">Inflows only</option>
+              <option value="out">Outflows only</option>
+            </select>
+            <select className="form-input form-select" style={{width:130}} value={projectFilter} onChange={e=>setCFProjectFilter(e.target.value)}>
+              <option value="all">All Projects</option>
+              {PROJECTS.map(p=><option key={p}>{p}</option>)}
+            </select>
+          </div>
+        </div>
+
         {loading ? (
           <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
-        ) : rows.length === 0 ? (
+        ) : rows.length===0 ? (
           <div className="module-coming">
             <div className="big-icon">📈</div>
-            <h3>No entries in this horizon</h3>
-            <p className="text-muted">Add bills, record receipts, or log capital inflows to see the forecast.</p>
+            <h3>No transactions found</h3>
+            <p className="text-muted">All your money movements will appear here once entered.</p>
           </div>
         ) : (
           <table>
             <thead>
-              <tr><th>Date</th><th>Description</th><th>Category</th><th>Project</th><th>Inflow</th><th>Outflow</th><th>Balance</th></tr>
+              <tr><th>Date</th><th>Description</th><th>Category</th><th>Project</th><th>Ref #</th><th>Inflow</th><th>Outflow</th><th>Balance</th></tr>
             </thead>
             <tbody>
               <tr style={{background:'var(--primary-50)'}}>
-                <td colSpan={6} style={{fontSize:12,fontWeight:600,color:'var(--primary)',padding:'6px 12px'}}>Opening Balance</td>
+                <td colSpan={7} style={{fontSize:12,fontWeight:600,color:'var(--primary)',padding:'6px 12px'}}>Opening Balance</td>
                 <td className="amount fw-600" style={{color:'var(--primary)'}}>{inr(settings.startingBalance||0)}</td>
               </tr>
               {rows.map((r,i) => (
-                <tr key={i} style={{background:r.type==='in'?'#F0FFF4':r.balance<Number(settings.criticalThreshold||0)?'#FFF3F3':''}}>
-                  <td className="mono">{fmt(r.date)}</td>
-                  <td>{r.label}</td>
-                  <td><span className={`badge ${r.type==='in'?'green':'grey'}`}>{r.cat}</span></td>
+                <tr key={i} style={{
+                  background: r.type==='in'?'#F0FFF4':r.balance<Number(settings.criticalThreshold||0)?'#FFF3F3':'',
+                  opacity: r.isPast ? 1 : 0.85,
+                  borderLeft: r.isPast ? 'none' : '3px solid var(--amber)',
+                }}>
+                  <td className="mono">{fmt(r.date)}{!r.isPast&&<span style={{fontSize:9,color:'var(--amber)',marginLeft:4}}>DUE</span>}</td>
+                  <td style={{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} className="fw-600">{r.label}</td>
+                  <td><span className={`badge ${TYPE_BADGE[r.cat]||'grey'}`} style={{fontSize:10}}>{r.cat}</span></td>
                   <td>{r.project?<span className={`badge ${PROJECT_COLOR[r.project]||'grey'}`}>{r.project}</span>:<span className="text-muted">—</span>}</td>
+                  <td className="mono" style={{fontSize:11}}>{r.ref||'—'}</td>
                   <td className="amount" style={{color:'var(--green)',fontWeight:600}}>{r.type==='in'?`+ ${inr(r.amt)}`:'—'}</td>
                   <td className="amount" style={{color:'var(--red)',fontWeight:600}}>{r.type==='out'?`− ${inr(r.amt)}`:'—'}</td>
                   <td className="amount fw-600" style={{color:r.balance<0?'var(--red)':r.balance<Number(settings.warningThreshold||0)?'var(--amber)':'var(--text)'}}>{inr(r.balance)}</td>
                 </tr>
               ))}
+              <tr style={{background:'var(--grey-50)',fontWeight:700}}>
+                <td colSpan={5} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Totals ({rows.length} transactions)</td>
+                <td className="amount" style={{color:'var(--green)',fontWeight:700}}>+ {inr(totalIn)}</td>
+                <td className="amount" style={{color:'var(--red)',fontWeight:700}}>− {inr(totalOut)}</td>
+                <td className="amount fw-600" style={{color:forecastEnd>=0?'var(--green)':'var(--red)'}}>{inr(forecastEnd)}</td>
+              </tr>
             </tbody>
           </table>
         )}
@@ -2853,100 +2953,8 @@ function CashFlow() {
     </div>
   );
 }
-
-// ─── Quotations hook (used by PO, WO, ProjectPnL, Reports) ───
-const QUOTATIONS_COLLECTION = 'quotations';
-const QUOTE_STAGES = ['Receipt of Quotation','Finalized'];
-const STAGE_COLOR = { 'Receipt of Quotation':'grey', 'Finalized':'green' };
-
-function useQuotations() {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    function start() {
-      const { db, query, orderBy, onSnapshot } = window.fb;
-      const unsub = onSnapshot(
-        query(userCol(QUOTATIONS_COLLECTION), orderBy('createdAt','desc')),
-        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
-        err  => { console.error('Quotations listener',err); setLoading(false); }
-      );
-      return unsub;
-    }
-    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
-    let u;
-    const h=()=>{ if(getUserUID()) u=start(); };
-    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
-    window.addEventListener('firebase-ready',h,{once:true});
-    window.addEventListener('user-ready',hu,{once:true});
-    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u)u(); };
-  },[]);
-  return {items,loading};
-}
-async function addQuotation(data) {
-  const { addDoc } = window.fb;
-  await addDoc(userCol(QUOTATIONS_COLLECTION), {...data, createdAt:Date.now()});
-}
-async function updateQuotation(docId, data) {
-  const { updateDoc } = window.fb;
-  await updateDoc(userDoc(QUOTATIONS_COLLECTION, docId), data);
-}
-async function deleteQuotation(docId) {
-  const { deleteDoc } = window.fb;
-  await deleteDoc(userDoc(QUOTATIONS_COLLECTION, docId));
-}
-async function clearAllQuotations() {
-  const { getDocs, writeBatch, db } = window.fb;
-  const snap = await getDocs(userCol(QUOTATIONS_COLLECTION));
-  const batch = writeBatch(db);
-  snap.docs.forEach(d=>batch.delete(d.ref));
-  await batch.commit();
-}
-
-// ─── Milestones hook (used by PaymentTracker, ProjectPnL, Reports) ──
-const MILESTONES_COLLECTION = 'milestones';
-
-function useMilestones() {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    function start() {
-      const { db, query, orderBy, onSnapshot } = window.fb;
-      const unsub = onSnapshot(
-        query(userCol(MILESTONES_COLLECTION), orderBy('createdAt','desc')),
-        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
-        err  => { console.error('Milestones listener',err); setLoading(false); }
-      );
-      return unsub;
-    }
-    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
-    let u;
-    const h=()=>{ if(getUserUID()) u=start(); };
-    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
-    window.addEventListener('firebase-ready',h,{once:true});
-    window.addEventListener('user-ready',hu,{once:true});
-    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u)u(); };
-  },[]);
-  return {items,loading};
-}
-async function addMilestone(data) {
-  const { addDoc } = window.fb;
-  await addDoc(userCol(MILESTONES_COLLECTION), {...data, createdAt:Date.now()});
-}
-async function markMilestonePaid(docId) {
-  const { updateDoc } = window.fb;
-  await updateDoc(userDoc(MILESTONES_COLLECTION, docId), {paid:true, paidAt:Date.now()});
-}
-async function deleteMilestone(docId) {
-  const { deleteDoc } = window.fb;
-  await deleteDoc(userDoc(MILESTONES_COLLECTION, docId));
-}
-async function clearAllMilestones() {
-  const { getDocs, writeBatch, db } = window.fb;
-  const snap = await getDocs(userCol(MILESTONES_COLLECTION));
-  const batch = writeBatch(db);
-  snap.docs.forEach(d=>batch.delete(d.ref));
-  await batch.commit();
-}
+  const [editingBalance, setEditingBalance] = useState(false);
+  const [balanceInput, setBalanceInput] = useState('');
 
 // ─── Bills Module ─────────────────────────────────────
 const BILLS_COLLECTION = 'bills';
@@ -3066,6 +3074,11 @@ function NewBillModal({ onClose, existing }) {
     payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '',
     notes: '', project: '', split:{pontoon:50,wtp:50}, linkedPO: '', linkedWO: '',
   });
+  const [schedule, setSchedule] = useState(
+    isEdit && existing.paymentSchedule
+      ? existing.paymentSchedule.map(r=>({...r, id:genRowId()}))
+      : []
+  );
   const [saving, setSaving] = useState(false);
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
 
@@ -3075,9 +3088,9 @@ function NewBillModal({ onClose, existing }) {
     try {
       if (isEdit) {
         const { db, doc, updateDoc } = window.fb;
-        await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...form, amount: Number(form.amount) });
+        await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...form, amount: Number(form.amount), paymentSchedule: schedule });
       } else {
-        await addBill({ ...form, amount: Number(form.amount), entryType: 'invoice' });
+        await addBill({ ...form, amount: Number(form.amount), entryType: 'invoice', paymentSchedule: schedule });
       }
       onClose();
     } catch (e) { console.error(e); alert('Could not save bill.'); }
@@ -3121,6 +3134,7 @@ function NewBillModal({ onClose, existing }) {
             <label className="form-label">Amount (₹)</label>
             <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount', e.target.value)} placeholder="0" />
           </div>
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.amount} />
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Link to PO <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional)</span></label>
@@ -3357,6 +3371,7 @@ function BillPayments() {
   const [linkingAdvance, setLinkingAdvance] = useState(null);
   const [editBill, setEditBill] = useState(null);
   const [editAdvance, setEditAdvance] = useState(null);
+  const [viewBillSchedule, setViewBillSchedule] = useState(null);
 
   const todayStr = new Date().toISOString().slice(0,10);
 
@@ -3536,6 +3551,7 @@ function BillPayments() {
                       <td>
                         <div className="flex gap-2">
                           <button className="btn btn-sm btn-ghost" onClick={()=>setEditBill(b)}>Edit</button>
+                          {b.paymentSchedule&&b.paymentSchedule.length>0&&<button className="btn btn-sm btn-outline" onClick={()=>setViewBillSchedule(b)}>Schedule</button>}
                           {!b.paid && <button className="btn btn-sm btn-primary" onClick={()=>markBillPaid(b.docId)}>Mark Paid</button>}
                           <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteBill(b.docId);}}>Delete</button>
                         </div>
@@ -3638,6 +3654,39 @@ function BillPayments() {
       {editBill && <NewBillModal onClose={()=>setEditBill(null)} existing={editBill} />}
       {showNewAdvance && <NewAdvanceModal onClose={()=>setShowNewAdvance(false)} pos={pos} wos={wos} bills={items} />}
       {editAdvance && <NewAdvanceModal onClose={()=>setEditAdvance(null)} pos={pos} wos={wos} bills={items} existing={editAdvance} />}
+      {viewBillSchedule && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{background:'var(--surface)',borderRadius:10,width:500,maxHeight:'80vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+            <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payment Schedule — {viewBillSchedule.payee}</span>
+            </div>
+            <div style={{padding:'16px 20px'}}>
+              <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:12}}>Total: {inr(viewBillSchedule.amount||0)}</div>
+              <table style={{width:'100%'}}>
+                <thead><tr style={{background:'var(--grey-50)'}}>
+                  <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Stage</th>
+                  <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>%</th>
+                  <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Amount</th>
+                  <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Due Date</th>
+                </tr></thead>
+                <tbody>
+                  {(viewBillSchedule.paymentSchedule||[]).map((s,i)=>(
+                    <tr key={i} style={{borderTop:'1px solid var(--grey-50)'}}>
+                      <td style={{padding:'8px 10px',fontSize:12.5,fontWeight:600}}>{s.name||`Stage ${i+1}`}</td>
+                      <td style={{padding:'8px 10px',fontSize:12}}>{s.pct||'—'}%</td>
+                      <td style={{padding:'8px 10px',fontSize:12,fontWeight:600,color:'var(--red)'}}>{inr(s.amount||0)}</td>
+                      <td style={{padding:'8px 10px',fontSize:12}}>{fmt(s.date)||'—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{padding:'0 20px 16px',display:'flex',justifyContent:'flex-end'}}>
+              <button className="btn btn-ghost" onClick={()=>setViewBillSchedule(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
       {linkingAdvance && <LinkAdvanceModal advance={linkingAdvance} onClose={()=>setLinkingAdvance(null)} pos={pos} bills={items} />}
     </div>
   );
@@ -5304,6 +5353,10 @@ function CapitalLoans() {
   const { items, loading } = useCapitalLoans();
   const [showNew, setShowNew] = useState(false);
   const [editCapital, setEditCapital] = useState(null);
+  const [sortBy, setSortBy] = useState('date_desc');
+  const [capTypeFilter, setCapTypeFilter] = useState('all');
+  const [capProjectFilter, setCapProjectFilter] = useState('all');
+  const [capMonthFilter, setCapMonthFilter] = useState('all');
 
   const totalInflow = items.reduce((s,i) => s + Number(i.amount||0), 0);
   const totalRepayable = items.filter(i=>i.isRepayable).reduce((s,i) => s + Number(i.emiAmount||0)*Number(i.tenureMonths||0), 0);
