@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Nirmaan Watertech Platform v2.7 -->
+<!-- Nirmaan Watertech Platform v2.8 - 2026-07-21 16:16 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -230,6 +230,11 @@
 </head>
 <body>
 <div id="root"></div>
+<div id="err" style="display:none;position:fixed;inset:0;background:#fff;z-index:99999;padding:30px;font-family:monospace;font-size:12px;color:red;white-space:pre-wrap;overflow:auto"></div>
+<script>
+window.onerror=function(m,s,l,c,e){var d=document.getElementById('err');if(d){d.style.display='block';d.textContent='ERROR:\n'+m+'\n\nAt: '+s+':'+l+':'+c+'\n\n'+(e&&e.stack||'')}};
+window.onunhandledrejection=function(e){var d=document.getElementById('err');if(d){d.style.display='block';d.textContent='PROMISE ERROR:\n'+(e.reason&&e.reason.stack||e.reason||'unknown')}};
+</script>
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
