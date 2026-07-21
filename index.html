@@ -4500,12 +4500,12 @@ function NewPettyModal({ onClose, currentUser, existing }) {
     date: existing.date||'', amount: existing.amount ? String(existing.amount) : '',
     category: existing.category||'Auto / Fuel', paidBy: existing.paidBy||'',
     description: existing.description||'', project: existing.project||'',
-    linkedWO: existing.linkedWO||'', split: existing.split||{pontoon:50,wtp:50}
+    split: existing.split||{pontoon:50,wtp:50}
   } : {
     date: new Date().toISOString().slice(0,10),
     amount: '', category: 'Auto / Fuel',
     paidBy: currentUser ? currentUser.name : 'Neer',
-    description: '', project: '', linkedWO: '', split: {pontoon:50,wtp:50},
+    description: '', project: '', split: {pontoon:50,wtp:50},
   });
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
@@ -4559,13 +4559,6 @@ function NewPettyModal({ onClose, currentUser, existing }) {
           <div className="form-group">
             <label className="form-label">Description</label>
             <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. Petrol for site visit — Thane" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Link to Work Order <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional)</span></label>
-            <select className="form-input form-select" value={form.linkedWO} onChange={e=>set('linkedWO',e.target.value)}>
-              <option value="">None</option>
-              {wos.map(w=><option key={w.docId} value={w.wo}>{w.wo} — {w.vendorName}</option>)}
-            </select>
           </div>
           <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
         </div>
