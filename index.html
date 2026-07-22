@@ -409,6 +409,7 @@ function ListsManager() {
   const [dragTarget, setDragTarget] = useState(null);
   const [editingItem, setEditingItem] = useState(null); // { listKey, idx }
   const [editValue, setEditValue] = useState('');
+  const [newItems, setNewItems] = useState({}); // { [listKey]: text of the "add new item" input }
 
   useEffect(() => { setLocalLists({ ...lists }); }, [JSON.stringify(lists)]);
 
@@ -1009,6 +1010,59 @@ function PaymentScheduleEditor({ rows, setRows, totalValue }) {
       <button type="button" onClick={addRow} className="btn btn-sm btn-outline">+ Add Stage</button>
     </div>
   );
+}
+
+// ─── Milestones data layer ─────────────────────────────
+// (Same gap as Quotations had: useMilestones/addMilestone/markMilestonePaid/
+// deleteMilestone/clearAllMilestones/MILESTONES_COLLECTION were referenced
+// throughout Payment Tracker but never defined. Restored here, next to the
+// updateMilestone function that *was* present.)
+const MILESTONES_COLLECTION = 'milestones';
+function useMilestones() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const q = query(userCol(MILESTONES_COLLECTION), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, (snap) => {
+        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
+        setLoading(false);
+      }, (err) => { console.error('Milestones listener error', err); setLoading(false); });
+      return unsub;
+    }
+    if (window.fb && getUserUID()) { const unsub = start(); return () => unsub && unsub(); }
+    let unsub;
+    const handler = () => { if(getUserUID()) { unsub = start(); } };
+    const userHandler = () => { if(unsub) unsub(); if(window.fb) unsub = start(); };
+    window.addEventListener('firebase-ready', handler, { once: true });
+    window.addEventListener('user-ready', userHandler, { once: true });
+    return () => {
+      window.removeEventListener('firebase-ready', handler);
+      window.removeEventListener('user-ready', userHandler);
+      if (unsub) unsub();
+    };
+  }, []);
+  return { items, loading };
+}
+async function addMilestone(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(userCol(MILESTONES_COLLECTION), { ...data, createdAt: Date.now(), paid: false });
+}
+async function markMilestonePaid(docId) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(userDoc(MILESTONES_COLLECTION, docId), { paid: true, paidAt: Date.now() });
+}
+async function deleteMilestone(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(userDoc(MILESTONES_COLLECTION, docId));
+}
+async function clearAllMilestones() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(userCol(MILESTONES_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
 }
 
 // ─── updateMilestone ──────────────────────────────────
@@ -1923,6 +1977,64 @@ function Tasks() {
 
 
 // ════════════════════════════════════════════════════
+// QUOTATIONS — vendor quotations, received → finalized → issue PO/WO
+// (Restores a data layer that was missing from this file: useQuotations,
+// addQuotation/updateQuotation/deleteQuotation/clearAllQuotations, plus
+// the QUOTATIONS_COLLECTION/QUOTE_STAGES/STAGE_COLOR constants the
+// Quotations, Purchase Orders and Work Orders modules all rely on.)
+// ════════════════════════════════════════════════════
+const QUOTATIONS_COLLECTION = 'quotations';
+const QUOTE_STAGES = ['Receipt of Quotation', 'Finalized'];
+const STAGE_COLOR = { 'Receipt of Quotation':'amber', 'Finalized':'green' };
+
+function useQuotations() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const q = query(userCol(QUOTATIONS_COLLECTION), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, (snap) => {
+        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
+        setLoading(false);
+      }, (err) => { console.error('Quotations listener error', err); setLoading(false); });
+      return unsub;
+    }
+    if (window.fb && getUserUID()) { const unsub = start(); return () => unsub && unsub(); }
+    let unsub;
+    const handler = () => { if(getUserUID()) { unsub = start(); } };
+    const userHandler = () => { if(unsub) unsub(); if(window.fb) unsub = start(); };
+    window.addEventListener('firebase-ready', handler, { once: true });
+    window.addEventListener('user-ready', userHandler, { once: true });
+    return () => {
+      window.removeEventListener('firebase-ready', handler);
+      window.removeEventListener('user-ready', userHandler);
+      if (unsub) unsub();
+    };
+  }, []);
+  return { items, loading };
+}
+async function addQuotation(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(userCol(QUOTATIONS_COLLECTION), { ...data, createdAt: Date.now(), approved: false });
+}
+async function updateQuotation(docId, data) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(userDoc(QUOTATIONS_COLLECTION, docId), data);
+}
+async function deleteQuotation(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(userDoc(QUOTATIONS_COLLECTION, docId));
+}
+async function clearAllQuotations() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(userCol(QUOTATIONS_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+// ════════════════════════════════════════════════════
 // WORK ORDERS — issued to vendors for services/labour
 // Series: NWTS/WO/2026-27/001
 // ════════════════════════════════════════════════════
@@ -2461,6 +2573,7 @@ const PO_STAGE_COLOR = { 'Draft':'grey','Issued':'blue','Goods In Transit':'ambe
 function PurchaseOrders() {
   const { items, loading } = usePurchaseOrders();
   const { items: quotations } = useQuotations();
+  const { items: vendors } = useVendors();
   const [showNew, setShowNew] = useState(false);
   const [editPO, setEditPO] = useState(null);
   const [viewSchedule, setViewSchedule] = useState(null);
@@ -3908,6 +4021,7 @@ function nextRABillNumber(existing) {
 // MODAL 1 — New Billing Schedule
 // ════════════════════════════════════════════════════
 function NewBillingScheduleModal({ onClose }) {
+  const knownNames = useKnownNames();
   const [form, setForm] = useState({ client:'', projectRef:'', contractValue:'', project:'' });
   const [milestones, setMilestones] = useState([
     { id:genRowId(), name:'Advance',    pct:'', amount:'', expectedDate:'' },
