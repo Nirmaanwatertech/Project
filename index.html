@@ -2933,6 +2933,8 @@ function CashFlow() {
     </div>
   );
 }
+  const [editingBalance, setEditingBalance] = useState(false);
+  const [balanceInput, setBalanceInput] = useState('');
 
 // ─── Bills Module ─────────────────────────────────────
 const BILLS_COLLECTION = 'bills';
@@ -4235,4 +4237,2611 @@ function Receipts() {
           📄 RA Bills
           {totalPending>0 && <span className="nav-badge" style={{background:'var(--amber)',marginLeft:8}}>{raBills.filter(b=>b.status!=='Fully Received').length}</span>}
         </div>
-        <div className={`tab ${tab==='receipts'?'activeI'm having a hard time fulfilling your request. Can I help you with something else instead?
+        <div className={`tab ${tab==='receipts'?'active':''}`} onClick={()=>setTab('receipts')}>✓ All Receipts</div>
+      </div>
+
+      {/* ── TAB 1: BILLING SCHEDULES ── */}
+      {tab==='schedules' && (
+        <div className="card">
+          {schedLoading ? (
+            <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+          ) : schedules.length===0 ? (
+            <div className="module-coming">
+              <div className="big-icon">📋</div>
+              <h3>No billing schedules yet</h3>
+              <p className="text-muted">Create a billing schedule per client to define milestones — Advance, RA Bill 1, RA Bill 2, Final, etc.</p>
+            </div>
+          ) : schedules.map(sc => {
+            const scRABills  = raBillsForSchedule(sc.docId);
+            const scReceived = scRABills.reduce((s,b)=>s+Number(b.amountReceived||0),0);
+            const scClaimed  = scRABills.reduce((s,b)=>s+Number(b.amountClaimed||0),0);
+            const scPending  = scRABills.reduce((s,b)=>s+Number(b.balancePending||0),0);
+            const pct        = sc.contractValue>0 ? Math.round((scReceived/sc.contractValue)*100) : 0;
+            const isExp      = expandedSchedule===sc.docId;
+
+            return (
+              <div key={sc.docId} style={{borderBottom:'1px solid var(--border)'}}>
+                {/* Schedule header */}
+                <div style={{padding:'12px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:12}}
+                  onClick={()=>setExpandedSchedule(isExp?null:sc.docId)}>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700,fontSize:13}}>{sc.client}</div>
+                    <div style={{fontSize:11.5,color:'var(--text-muted)',marginTop:2}}>
+                      {sc.projectRef && <span>{sc.projectRef} · </span>}
+                      Contract: <span className="amount">{inr(sc.contractValue||0)}</span> · {sc.milestones?.length||0} milestones · {scRABills.length} RA bills submitted
+                    </div>
+                  </div>
+                  <div style={{textAlign:'right',minWidth:260}}>
+                    <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginBottom:5,flexWrap:'wrap'}}>
+                      <span style={{fontSize:11.5}}>Billed: <strong className="amount">{inr(scClaimed)}</strong></span>
+                      <span style={{fontSize:11.5,color:'var(--green)'}}>Rcvd: <strong className="amount">{inr(scReceived)}</strong></span>
+                      <span style={{fontSize:11.5,color:scPending>0?'var(--red)':'var(--green)'}}>Pending: <strong className="amount">{inr(scPending)}</strong></span>
+                    </div>
+                    <div style={{display:'flex',alignItems:'center',gap:8}}>
+                      <div className="progress-wrap" style={{flex:1,height:8}}>
+                        <div className="progress-fill green" style={{width:`${Math.min(100,pct)}%`}} />
+                      </div>
+                      <span style={{fontSize:11,color:'var(--text-muted)',width:32}}>{pct}%</span>
+                    </div>
+                  </div>
+                  <span style={{fontSize:12,color:'var(--text-muted)',marginLeft:4}}>{isExp?'▲':'▼'}</span>
+                </div>
+
+                {/* Expanded: milestone + RA bills breakdown */}
+                {isExp && (
+                  <div style={{background:'var(--grey-50)',borderTop:'1px solid var(--border)',padding:'12px 16px'}}>
+                    <div style={{fontSize:11.5,fontWeight:600,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.4,marginBottom:8}}>Billing Milestones</div>
+                    <table style={{width:'100%',background:'var(--surface)',borderRadius:6,overflow:'hidden',marginBottom:12}}>
+                      <thead>
+                        <tr style={{background:'var(--primary-50)'}}>
+                          {['Milestone','%','Amount','Expected','Billed (RA Bills)','Received','Status'].map(h=>(
+                            <th key={h} style={{fontSize:10,padding:'6px 10px',textAlign:'left',color:'var(--primary)'}}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(sc.milestones||[]).map((m,i)=>{
+                          const msRABills  = scRABills.filter(b=>b.milestoneName===m.name);
+                          const msClaimed  = msRABills.reduce((s,b)=>s+Number(b.amountClaimed||0),0);
+                          const msReceived = msRABills.reduce((s,b)=>s+Number(b.amountReceived||0),0);
+                          const msStatus   = msReceived>0 && msReceived>=msClaimed ? 'Received' : msClaimed>0 ? 'Partially Billed' : 'Not Yet Billed';
+                          return (
+                            <tr key={i} style={{borderTop:'1px solid var(--grey-50)',background:msStatus==='Received'?'var(--green-50)':''}}>
+                              <td style={{padding:'7px 10px',fontSize:12.5,fontWeight:600}}>{m.name}</td>
+                              <td style={{padding:'7px 10px',fontSize:12}}>{m.pct||'—'}%</td>
+                              <td style={{padding:'7px 10px'}} className="amount">{inr(m.amount||0)}</td>
+                              <td style={{padding:'7px 10px',fontSize:12,color:'var(--text-muted)'}}>{fmt(m.expectedDate)||'—'}</td>
+                              <td style={{padding:'7px 10px'}} className="amount" style={{color:'var(--primary)'}}>{msClaimed>0?inr(msClaimed):'—'}</td>
+                              <td style={{padding:'7px 10px'}} className="amount" style={{color:'var(--green)',fontWeight:600}}>{msReceived>0?inr(msReceived):'—'}</td>
+                              <td style={{padding:'7px 10px'}}>
+                                <span className={`badge ${msStatus==='Received'?'green':msStatus==='Partially Billed'?'amber':'grey'}`}>{msStatus}</span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+
+                    {scRABills.length>0 && (
+                      <>
+                        <div style={{fontSize:11.5,fontWeight:600,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.4,marginBottom:8}}>RA Bills Submitted</div>
+                        <table style={{width:'100%',background:'var(--surface)',borderRadius:6,overflow:'hidden',marginBottom:10}}>
+                          <thead>
+                            <tr style={{background:'var(--grey-50)'}}>
+                              {['RA Bill #','Milestone','Date','Claimed','Received','Pending','Status',''].map(h=>(
+                                <th key={h} style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {scRABills.map(b=>(
+                              <tr key={b.docId} style={{borderTop:'1px solid var(--grey-50)'}}>
+                                <td style={{padding:'6px 8px'}} className="mono">{b.raBillNo}</td>
+                                <td style={{padding:'6px 8px',fontSize:12}}>{b.milestoneName||'—'}</td>
+                                <td style={{padding:'6px 8px',fontSize:12}}>{b.dateSubmitted}</td>
+                                <td style={{padding:'6px 8px'}} className="amount">{inr(b.amountClaimed||0)}</td>
+                                <td style={{padding:'6px 8px'}} className="amount" style={{color:'var(--green)',fontWeight:600}}>{inr(b.amountReceived||0)}</td>
+                                <td style={{padding:'6px 8px'}} className="amount" style={{color:Number(b.balancePending||0)>0?'var(--red)':'var(--green)'}}>{inr(b.balancePending||0)}</td>
+                                <td style={{padding:'6px 8px'}}><span className={`badge ${RA_STATUS_COLOR[b.status]||'grey'}`}>{b.status}</span></td>
+                                <td style={{padding:'6px 8px'}}>
+                                  {b.status!=='Fully Received' && (
+                                    <button className="btn btn-sm btn-primary" style={{background:'var(--green)'}}
+                                      onClick={()=>setRecordingFor(b)}>
+                                      Record Receipt
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </>
+                    )}
+
+                    <div className="flex gap-2">
+                      <button className="btn btn-sm btn-ghost" style={{color:'var(--red)'}}
+                        onClick={()=>{if(confirm('Delete this billing schedule and all linked RA bills?'))deleteBillingSchedule(sc.docId);}}>
+                        Delete Schedule
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── TAB 2: RA BILLS ── */}
+      {tab==='rabills' && (
+        <div className="card">
+          {raBillLoading ? (
+            <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+          ) : raBills.length===0 ? (
+            <div className="module-coming">
+              <div className="big-icon">📄</div>
+              <h3>No RA bills submitted yet</h3>
+              <p className="text-muted">Submit a running bill against a billing schedule milestone.</p>
+            </div>
+          ) : (
+            <table>
+              <thead>
+                <tr><th>RA Bill #</th><th>Client</th><th>Project Tag</th><th>Milestone</th><th>Date Submitted</th><th>Claimed</th><th>Received</th><th>Pending</th><th>Status</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                {raBills.map(b=>(
+                  <tr key={b.docId} style={{background:b.status==='Fully Received'?'var(--green-50)':b.status==='Partially Received'?'var(--amber-50)':''}}>
+                    <td className="mono" style={{whiteSpace:'nowrap'}}>{b.raBillNo}</td>
+                    <td className="fw-600">{b.client}</td>
+                    <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{b.projectRef||'—'}</td>
+                    <td>{b.milestoneName||'—'}</td>
+                    <td>{b.dateSubmitted}</td>
+                    <td className="amount fw-600">{inr(b.amountClaimed||0)}</td>
+                    <td className="amount" style={{color:'var(--green)',fontWeight:600}}>{inr(b.amountReceived||0)}</td>
+                    <td className="amount" style={{color:Number(b.balancePending||0)>0?'var(--red)':'var(--green)',fontWeight:600}}>{inr(b.balancePending||0)}</td>
+                    <td><span className={`badge ${RA_STATUS_COLOR[b.status]||'grey'}`}>{b.status}</span></td>
+                    <td>
+                      <div className="flex gap-2">
+                        {b.status!=='Fully Received' && (
+                          <button className="btn btn-sm btn-primary" style={{background:'var(--green)'}} onClick={()=>setRecordingFor(b)}>
+                            Record Receipt
+                          </button>
+                        )}
+                        <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this RA Bill?'))deleteRABill(b.docId);}}>Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* ── TAB 3: ALL RECEIPTS ── */}
+      {tab==='receipts' && (
+        <div className="card">
+          {recLoading ? (
+            <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+          ) : receipts.length===0 ? (
+            <div className="module-coming">
+              <div className="big-icon">✓</div>
+              <h3>No receipts yet</h3>
+              <p className="text-muted">Record receipts from the RA Bills tab.</p>
+            </div>
+          ) : (
+            <table>
+              <thead>
+                <tr><th>Date</th><th>Client</th><th>Project</th><th>RA Bill #</th><th>Milestone</th><th>Claimed</th><th>Received</th><th>Mode</th><th>Ref #</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                {receipts.map(r=>(
+                  <tr key={r.docId} style={{background:'var(--green-50)'}}>
+                    <td>{fmt(r.dateReceived)}</td>
+                    <td className="fw-600">{r.client}</td>
+                    <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{r.projectRef||'—'}</td>
+                    <td className="mono">{r.raBillNo}</td>
+                    <td>{r.milestoneName||'—'}</td>
+                    <td className="amount">{inr(r.amountClaimed||0)}</td>
+                    <td className="amount fw-600" style={{color:'var(--green)'}}>{inr(r.amountReceived||0)}</td>
+                    <td><span className="badge teal">{r.paymentMode}</span></td>
+                    <td className="mono" style={{fontSize:11}}>{r.refNumber||'—'}</td>
+                    <td><button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this receipt?'))deleteReceipt(r.docId);}}>Delete</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {showNewSchedule && <NewBillingScheduleModal onClose={()=>setShowNewSchedule(false)} />}
+      {showNewRABill   && <SubmitRABillModal onClose={()=>setShowNewRABill(false)} schedules={schedules} existingCount={raBills.length} />}
+      {recordingFor    && <RecordReceiptModal raBill={recordingFor} onClose={()=>setRecordingFor(null)} allReceipts={receipts} />}
+    </div>
+  );
+}
+
+
+// ════════════════════════════════════════════════════
+// PETTY CASH — day-to-day small cash expenses
+// ════════════════════════════════════════════════════
+const PETTY_COLLECTION = 'petty_cash';
+const PETTY_CATEGORIES = [
+  'Auto / Fuel',
+  'Tea & Snacks',
+  'Courier',
+  'Stationery',
+  'Site Travel',
+  'Minor Hardware',
+  'Telephone / Recharge',
+  'Printing',
+  'Bank Charges',
+  'Miscellaneous',
+];
+
+function usePettyCash() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const unsub = onSnapshot(
+        query(userCol(PETTY_COLLECTION), orderBy('createdAt','desc')),
+        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
+        err  => { console.error('Petty cash listener',err); setLoading(false); }
+      );
+      return unsub;
+    }
+    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+    let u;
+    const h=()=>{ if(getUserUID()) u=start(); };
+    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
+    window.addEventListener('firebase-ready',h,{once:true});
+    window.addEventListener('user-ready',hu,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u) u(); };
+  },[]);
+  return {items,loading};
+}
+
+async function addPettyEntry(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(userCol(PETTY_COLLECTION), {...data, createdAt:Date.now()});
+}
+async function deletePettyEntry(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(userDoc(PETTY_COLLECTION, docId));
+}
+async function clearAllPettyCash() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(userCol(PETTY_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d=>batch.delete(d.ref));
+  await batch.commit();
+}
+
+// ─── New Petty Cash Entry Modal ────────────────────
+function NewPettyModal({ onClose, currentUser, existing }) {
+  const isEdit = !!existing;
+  const knownNames = useKnownNames();
+  const lists = useLists();
+  const { items: wos } = useWorkOrders();
+  const [form, setForm] = useState(isEdit ? {
+    date: existing.date||'', amount: existing.amount ? String(existing.amount) : '',
+    category: existing.category||'Auto / Fuel', paidBy: existing.paidBy||'',
+    description: existing.description||'', project: existing.project||'',
+    split: existing.split||{pontoon:50,wtp:50}
+  } : {
+    date: new Date().toISOString().slice(0,10),
+    amount: '', category: 'Auto / Fuel',
+    paidBy: currentUser ? currentUser.name : 'Neer',
+    description: '', project: '', split: {pontoon:50,wtp:50},
+  });
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  async function handleSave() {
+    if (!form.amount || !form.description.trim() || !form.date) return;
+    setSaving(true);
+    try {
+      if (isEdit) {
+        const { db, doc, updateDoc } = window.fb;
+        await updateDoc(userDoc(PETTY_COLLECTION, existing.docId), {...form, amount: Number(form.amount)});
+      } else {
+        await addPettyEntry({...form, amount: Number(form.amount)});
+      }
+      onClose();
+    } catch(e){ console.error(e); alert('Could not save entry.'); }
+    finally{ setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:480,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--secondary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Entry' : '+ Petty Cash Entry'}</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Date</label>
+              <input className="form-input" type="date" value={form.date} onChange={e=>set('date',e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Amount (₹)</label>
+              <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount',e.target.value)} placeholder="0" autoFocus />
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Category</label>
+              <select className="form-input form-select" value={form.category} onChange={e=>set('category',e.target.value)}>
+                {(lists.pettyCategories||DEFAULT_LISTS.pettyCategories).map(c=><option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Paid By</label>
+              <select className="form-input form-select" value={form.paidBy} onChange={e=>set('paidBy',e.target.value)}>
+                {(lists.employees||DEFAULT_LISTS.employees).map(n=><option key={n}>{n}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Description</label>
+            <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. Petrol for site visit — Thane" />
+          </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.amount||!form.description.trim()} className="btn btn-primary"
+            style={{background:'var(--secondary)',opacity:saving||!form.amount||!form.description.trim()?0.6:1}}>
+            {saving?'Saving…': isEdit ? 'Save Changes' : 'Save Entry'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Petty Cash Module ──────────────────────────────
+function PettyCash({ currentUser }) {
+  const { items, loading } = usePettyCash();
+  const [showNew, setShowNew] = useState(false);
+  const [catFilter, setCatFilter] = useState('all');
+  const [paidByFilter, setPaidByFilter] = useState('all');
+  const [monthFilter, setMonthFilter] = useState('all');
+  const [editEntry, setEditEntry] = useState(null);
+  const [pettySortBy, setPettySortBy] = useState('date_desc');
+  const [pettyProjectFilter, setPettyProjectFilter] = useState('all');
+
+  const months = [...new Set(items.map(i=>i.date?.slice(0,7)).filter(Boolean))].sort().reverse();
+
+  function sortPetty(arr) {
+    const s = [...arr];
+    if (pettySortBy==='date_asc')    return s.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    if (pettySortBy==='date_desc')   return s.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    if (pettySortBy==='amount_desc') return s.sort((a,b)=>Number(b.amount||0)-Number(a.amount||0));
+    if (pettySortBy==='amount_asc')  return s.sort((a,b)=>Number(a.amount||0)-Number(b.amount||0));
+    if (pettySortBy==='desc_asc')    return s.sort((a,b)=>(a.description||'').localeCompare(b.description||''));
+    return s;
+  }
+
+  const filtered = sortPetty(items.filter(i=>
+    (catFilter==='all' || i.category===catFilter) &&
+    (paidByFilter==='all' || normName(i.paidBy)===paidByFilter) &&
+    (monthFilter==='all' || (i.date||'').startsWith(monthFilter)) &&
+    (pettyProjectFilter==='all' || i.project===pettyProjectFilter)
+  ));
+
+  const total = filtered.reduce((s,i)=>s+Number(i.amount||0),0);
+  const totalAll = items.reduce((s,i)=>s+Number(i.amount||0),0);
+
+  // Category breakdown for filtered period
+  const activePettyCategories = window.appLists?.pettyCategories || DEFAULT_LISTS.pettyCategories;
+  const byCategory = activePettyCategories.map(cat=>({
+    cat,
+    amt: filtered.filter(i=>i.category===cat).reduce((s,i)=>s+Number(i.amount||0),0)
+  })).filter(c=>c.amt>0).sort((a,b)=>b.amt-a.amt);
+
+  // Normalise paidBy: strip email domain if stored as email
+  function normName(v) {
+    if (!v) return '';
+    if (!v.includes('@')) return v;
+    const n = v.split('@')[0];
+    return n.charAt(0).toUpperCase() + n.slice(1);
+  }
+
+  // Paid by breakdown — group by normalised name
+  const personTotals = {};
+  filtered.forEach(i => {
+    const n = normName(i.paidBy) || 'Unknown';
+    personTotals[n] = (personTotals[n]||0) + Number(i.amount||0);
+  });
+  const byPerson = Object.entries(personTotals).map(([person,amt])=>({person,amt})).filter(p=>p.amt>0).sort((a,b)=>b.amt-a.amt);
+
+  // Unique staff names (normalised) for dropdown
+  const staffOptions = [...new Set(items.map(i=>normName(i.paidBy)).filter(Boolean))].sort();
+
+  const thisMonth = new Date().toISOString().slice(0,7);
+  const thisMonthTotal = items.filter(i=>(i.date||'').startsWith(thisMonth)).reduce((s,i)=>s+Number(i.amount||0),0);
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Petty Cash</div>
+          <div className="section-sub">{loading?'Loading…':`${items.length} entries · all time`}</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" style={{background:'var(--secondary)'}} onClick={()=>setShowNew(true)}>+ Add Entry</button>
+          <ClearCollectionButton label="Clear All" count={items.length} onClear={clearAllPettyCash} />
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+        <div className="stat-card">
+          <div className="stat-label">This Month</div>
+          <div className="stat-value red">{inr(thisMonthTotal)}</div>
+          <div className="stat-sub">{new Date().toLocaleString('en-IN',{month:'long',year:'numeric'})}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Filtered Total</div>
+          <div className="stat-value">{inr(total)}</div>
+          <div className="stat-sub">{filtered.length} entries</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Top Category</div>
+          <div className="stat-value blue" style={{fontSize:14}}>{byCategory[0]?.cat||'—'}</div>
+          <div className="stat-sub">{byCategory[0]?inr(byCategory[0].amt):''}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">All-Time Total</div>
+          <div className="stat-value">{inr(totalAll)}</div>
+        </div>
+      </div>
+
+      {/* Category + Person breakdown */}
+      {filtered.length > 0 && (
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
+          <div className="card">
+            <div className="card-header"><span className="card-title">By Category</span></div>
+            <div className="card-body">
+              {byCategory.map(c=>(
+                <div key={c.cat} style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                  <span style={{fontSize:12,color:'var(--text-secondary)',width:150,flexShrink:0}}>{c.cat}</span>
+                  <div className="progress-wrap" style={{flex:1}}>
+                    <div className="progress-fill blue" style={{width:`${total>0?Math.round((c.amt/total)*100):0}%`}} />
+                  </div>
+                  <span className="amount text-sm" style={{width:80,textAlign:'right'}}>{inr(c.amt)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="card">
+            <div className="card-header"><span className="card-title">By Staff</span></div>
+            <div className="card-body">
+              {byPerson.map(p=>(
+                <div key={p.person} style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                  <div style={{width:28,height:28,borderRadius:'50%',background:'var(--primary)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,flexShrink:0}}>
+                    {p.person[0]}
+                  </div>
+                  <span style={{fontSize:12,color:'var(--text-secondary)',flex:1}}>{p.person}</span>
+                  <div className="progress-wrap" style={{width:100}}>
+                    <div className="progress-fill teal" style={{width:`${total>0?Math.round((p.amt/total)*100):0}%`,background:'var(--secondary)'}} />
+                  </div>
+                  <span className="amount text-sm" style={{width:80,textAlign:'right'}}>{inr(p.amt)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filters + table */}
+      <div className="card">
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
+            <select className="form-input form-select" style={{width:160}} onChange={e=>setCatFilter(e.target.value)}>
+              <option value="all">All Categories</option>
+              {activePettyCategories.map(c=><option key={c}>{c}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:140}} onChange={e=>setPaidByFilter(e.target.value)}>
+              <option value="all">All Staff</option>
+              {staffOptions.map(p=><option key={p}>{p}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:150}} onChange={e=>setMonthFilter(e.target.value)}>
+              <option value="all">All Months</option>
+              {months.map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:130}} onChange={e=>setPettyProjectFilter(e.target.value)}>
+              <option value="all">All Projects</option>
+              {PROJECTS.map(p=><option key={p}>{p}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:180}} value={pettySortBy} onChange={e=>setPettySortBy(e.target.value)}>
+              <option value="date_desc">↓ Date (Newest)</option>
+              <option value="date_asc">↑ Date (Oldest)</option>
+              <option value="amount_desc">↓ Amount (Highest)</option>
+              <option value="amount_asc">↑ Amount (Lowest)</option>
+              <option value="desc_asc">A→Z Description</option>
+            </select>
+          </div>
+        </div>
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+        ) : filtered.length===0 ? (
+          <div className="module-coming">
+            <div className="big-icon">💰</div>
+            <h3>No petty cash entries yet</h3>
+            <p className="text-muted">Record day-to-day small cash expenses — fuel, courier, tea, stationery, etc.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>Date</th><th>Category</th><th>Description</th><th>Paid By</th><th>Project</th><th>Amount</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(i=>(
+                <tr key={i.docId}>
+                  <td>{fmt(i.date)}</td>
+                  <td><span className="badge grey">{i.category}</span></td>
+                  <td>{i.description}</td>
+                  <td>
+                    <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <div style={{width:22,height:22,borderRadius:'50%',background:'var(--primary)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700}}>
+                        {(i.paidBy||'?')[0].toUpperCase()}
+                      </div>
+                      {i.paidBy?.includes('@') ? i.paidBy.split('@')[0].charAt(0).toUpperCase()+i.paidBy.split('@')[0].slice(1) : (i.paidBy||'—')}
+                    </div>
+                  </td>
+                  <td>{i.project?<span className={`badge ${PROJECT_COLOR[i.project]||'grey'}`}>{i.project}</span>:<span className="text-muted">—</span>}</td>
+                  <td className="amount fw-600" style={{color:'var(--red)'}}>{inr(i.amount||0)}</td>
+                  <td>
+                    <button className="btn btn-sm btn-ghost" onClick={()=>setEditEntry(i)}>Edit</button>
+                    <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this entry?'))deletePettyEntry(i.docId);}}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+              {/* Totals row */}
+              <tr style={{background:'var(--grey-50)',fontWeight:700}}>
+                <td colSpan={5} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Total ({filtered.length} entries)</td>
+                <td className="amount" style={{color:'var(--red)',fontWeight:700}}>{inr(total)}</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {showNew && <NewPettyModal onClose={()=>setShowNew(false)} currentUser={currentUser} />}
+      {editEntry && <NewPettyModal onClose={()=>setEditEntry(null)} currentUser={currentUser} existing={editEntry} />}
+    </div>
+  );
+}
+// ════════════════════════════════════════════════════
+// EXPENSES — bank-paid direct expenses (not petty cash)
+// ════════════════════════════════════════════════════
+const EXPENSE_COLLECTION = 'expenses';
+
+function useExpenses() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { query, orderBy, onSnapshot } = window.fb;
+      const unsub = onSnapshot(
+        query(userCol(EXPENSE_COLLECTION), orderBy('createdAt','desc')),
+        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
+        err  => { console.error('Expenses listener',err); setLoading(false); }
+      );
+      return unsub;
+    }
+    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+    let u;
+    const h=()=>{ if(getUserUID()) u=start(); };
+    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
+    window.addEventListener('firebase-ready',h,{once:true});
+    window.addEventListener('user-ready',hu,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u) u(); };
+  },[]);
+  return {items,loading};
+}
+async function addExpenseEntry(data) {
+  const { addDoc } = window.fb;
+  await addDoc(userCol(EXPENSE_COLLECTION), {...data, createdAt:Date.now()});
+}
+async function deleteExpenseEntry(docId) {
+  const { deleteDoc } = window.fb;
+  await deleteDoc(userDoc(EXPENSE_COLLECTION, docId));
+}
+async function updateExpenseEntry(docId, data) {
+  const { updateDoc } = window.fb;
+  await updateDoc(userDoc(EXPENSE_COLLECTION, docId), data);
+}
+async function clearAllExpenses() {
+  const { getDocs, writeBatch, db } = window.fb;
+  const snap = await getDocs(userCol(EXPENSE_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d=>batch.delete(d.ref));
+  await batch.commit();
+}
+
+function NewExpenseModal({ onClose, currentUser, existing }) {
+  const isEdit = !!existing;
+  const lists = useLists();
+  const knownNames = useKnownNames();
+  const { items: pos } = usePurchaseOrders();
+  const { items: wos } = useWorkOrders();
+  const [form, setForm] = useState(isEdit ? {
+    date: existing.date||'',
+    amount: existing.amount ? String(existing.amount) : '',
+    category: existing.category||'',
+    vendor: existing.vendor||'',
+    paidBy: existing.paidBy||'',
+    paymentMode: existing.paymentMode||'NEFT',
+    refNumber: existing.refNumber||'',
+    description: existing.description||'',
+    linkedPO: existing.linkedPO||'',
+    linkedWO: existing.linkedWO||'',
+    project: existing.project||'',
+    split: existing.split||{pontoon:50,wtp:50},
+  } : {
+    date: new Date().toISOString().slice(0,10),
+    amount: '', category: '', vendor: '',
+    paidBy: currentUser?.name||'', paymentMode: 'NEFT',
+    refNumber: '', description: '', linkedPO: '', linkedWO: '',
+    project: '', split: {pontoon:50,wtp:50},
+  });
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  async function handleSave() {
+    if (!form.amount||!form.description.trim()||!form.date) return;
+    setSaving(true);
+    try {
+      const data = {...form, amount: Number(form.amount)};
+      if (isEdit) await updateExpenseEntry(existing.docId, data);
+      else await addExpenseEntry(data);
+      onClose();
+    } catch(e){ console.error(e); alert('Could not save.'); }
+    finally{ setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:500,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--red)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit?'✏ Edit Expense':'+ New General Expense'}</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Date</label>
+              <input className="form-input" type="date" value={form.date} onChange={e=>set('date',e.target.value)} autoFocus />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Amount (₹)</label>
+              <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount',e.target.value)} placeholder="0" />
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Category</label>
+              <select className="form-input form-select" value={form.category} onChange={e=>set('category',e.target.value)}>
+                <option value="">Select category…</option>
+                {(lists.expenseCategories||DEFAULT_LISTS.expenseCategories).map(c=><option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Paid By</label>
+              <select className="form-input form-select" value={form.paidBy} onChange={e=>set('paidBy',e.target.value)}>
+                <option value="">Select…</option>
+                {(lists.employees||DEFAULT_LISTS.employees).map(n=><option key={n}>{n}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Payment Mode</label>
+              <select className="form-input form-select" value={form.paymentMode} onChange={e=>set('paymentMode',e.target.value)}>
+                {(lists.paymentModes||DEFAULT_LISTS.paymentModes).map(m=><option key={m}>{m}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Ref / UTR Number</label>
+              <input className="form-input font-mono" value={form.refNumber} onChange={e=>set('refNumber',e.target.value)} placeholder="Optional" />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Description</label>
+            <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. Office rent — July 2026" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Vendor / Paid To <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional)</span></label>
+            <AutocompleteInput value={form.vendor} onChange={v=>set('vendor',v)} suggestions={[...knownNames.vendors,...knownNames.payees]} placeholder="Vendor or payee name" />
+          </div>
+          <div style={{borderTop:'1px solid var(--border)',paddingTop:12,marginTop:4}}>
+            <div style={{fontSize:11,fontWeight:600,color:'var(--text-muted)',marginBottom:8,textTransform:'uppercase',letterSpacing:.4}}>Link to PO / WO (optional)</div>
+            <div className="form-grid">
+              <div className="form-group">
+                <label className="form-label">Purchase Order</label>
+                <select className="form-input form-select" value={form.linkedPO} onChange={e=>set('linkedPO',e.target.value)}>
+                  <option value="">None</option>
+                  {pos.map(p=><option key={p.docId} value={p.po}>{p.po} — {p.vendorName}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Work Order</label>
+                <select className="form-input form-select" value={form.linkedWO} onChange={e=>set('linkedWO',e.target.value)}>
+                  <option value="">None</option>
+                  {wos.map(w=><option key={w.docId} value={w.wo}>{w.wo} — {w.vendorName}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.amount||!form.description.trim()}
+            className="btn btn-primary" style={{background:'var(--red)',opacity:saving||!form.amount||!form.description.trim()?0.6:1}}>
+            {saving?'Saving…':isEdit?'Save Changes':'Save Expense'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Expenses({ currentUser }) {
+  const { items, loading } = useExpenses();
+  const [showNew, setShowNew] = useState(false);
+  const [editEntry, setEditEntry] = useState(null);
+  const [catFilter, setCatFilter] = useState('all');
+  const [modeFilter, setModeFilter] = useState('all');
+  const [monthFilter, setMonthFilter] = useState('all');
+  const [expVendorFilter, setExpVendorFilter] = useState('all');
+  const [expProjectFilter, setExpProjectFilter] = useState('all');
+  const [expSortBy, setExpSortBy] = useState('date_desc');
+
+  const months = [...new Set(items.map(i=>i.date?.slice(0,7)).filter(Boolean))].sort().reverse();
+
+  function sortExp(arr) {
+    const s = [...arr];
+    if (expSortBy==='date_asc')    return s.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    if (expSortBy==='date_desc')   return s.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    if (expSortBy==='amount_desc') return s.sort((a,b)=>Number(b.amount||0)-Number(a.amount||0));
+    if (expSortBy==='amount_asc')  return s.sort((a,b)=>Number(a.amount||0)-Number(b.amount||0));
+    if (expSortBy==='desc_asc')    return s.sort((a,b)=>(a.description||'').localeCompare(b.description||''));
+    return s;
+  }
+
+  const expVendors = [...new Set(items.map(i=>i.vendor).filter(Boolean))].sort();
+  const filtered = sortExp(items.filter(i=>
+    (catFilter==='all'||i.category===catFilter) &&
+    (modeFilter==='all'||i.paymentMode===modeFilter) &&
+    (monthFilter==='all'||(i.date||'').startsWith(monthFilter)) &&
+    (expVendorFilter==='all'||i.vendor===expVendorFilter) &&
+    (expProjectFilter==='all'||i.project===expProjectFilter)
+  ));
+
+  const total    = filtered.reduce((s,i)=>s+Number(i.amount||0),0);
+  const thisMonth = new Date().toISOString().slice(0,7);
+  const thisMonthTotal = items.filter(i=>(i.date||'').startsWith(thisMonth)).reduce((s,i)=>s+Number(i.amount||0),0);
+
+  const byCategory = Object.entries(
+    filtered.reduce((acc,i)=>{ const c=i.category||'Other'; acc[c]=(acc[c]||0)+Number(i.amount||0); return acc; },{})
+  ).sort((a,b)=>b[1]-a[1]);
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">General Expenses</div>
+          <div className="section-sub">{loading?'Loading…':`${items.length} entries · Direct bank payments (not petty cash)`}</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" style={{background:'var(--red)'}} onClick={()=>setShowNew(true)}>+ Add Expense</button>
+          <ClearCollectionButton label="Clear All" count={items.length} onClear={clearAllExpenses} />
+        </div>
+      </div>
+
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Total (filtered)</div><div className="stat-value red">{inr(total)}</div></div>
+        <div className="stat-card"><div className="stat-label">This Month</div><div className="stat-value amber">{inr(thisMonthTotal)}</div></div>
+        <div className="stat-card"><div className="stat-label">Total Entries</div><div className="stat-value">{items.length}</div></div>
+        <div className="stat-card"><div className="stat-label">Categories Used</div><div className="stat-value">{new Set(items.map(i=>i.category).filter(Boolean)).size}</div></div>
+      </div>
+
+      {byCategory.length > 0 && (
+        <div className="card" style={{marginBottom:14}}>
+          <div className="card-header"><span className="card-title">By Category</span></div>
+          <div className="card-body">
+            {byCategory.map(([cat,amt])=>(
+              <div key={cat} style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                <span style={{fontSize:12,color:'var(--text-secondary)',width:160,flexShrink:0}}>{cat}</span>
+                <div className="progress-wrap" style={{flex:1}}>
+                  <div className="progress-fill" style={{width:`${total>0?Math.round((amt/total)*100):0}%`,background:'var(--red)'}} />
+                </div>
+                <span className="amount text-sm" style={{width:80,textAlign:'right'}}>{inr(amt)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
+            <select className="form-input form-select" style={{width:160}} value={catFilter} onChange={e=>setCatFilter(e.target.value)}>
+              <option value="all">All Categories</option>
+              {[...new Set(items.map(i=>i.category).filter(Boolean))].map(c=><option key={c}>{c}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:140}} value={modeFilter} onChange={e=>setModeFilter(e.target.value)}>
+              <option value="all">All Payment Modes</option>
+              {[...new Set(items.map(i=>i.paymentMode).filter(Boolean))].map(m=><option key={m}>{m}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:150}} value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}>
+              <option value="all">All Months</option>
+              {months.map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:150}} value={expVendorFilter} onChange={e=>setExpVendorFilter(e.target.value)}>
+              <option value="all">All Vendors</option>
+              {expVendors.map(v=><option key={v}>{v}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:130}} value={expProjectFilter} onChange={e=>setExpProjectFilter(e.target.value)}>
+              <option value="all">All Projects</option>
+              {PROJECTS.map(p=><option key={p}>{p}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:180}} value={expSortBy} onChange={e=>setExpSortBy(e.target.value)}>
+              <option value="date_desc">↓ Date (Newest)</option>
+              <option value="date_asc">↑ Date (Oldest)</option>
+              <option value="amount_desc">↓ Amount (Highest)</option>
+              <option value="amount_asc">↑ Amount (Lowest)</option>
+              <option value="desc_asc">A→Z Description</option>
+            </select>
+          </div>
+        </div>
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting…</p></div>
+        ) : filtered.length===0 ? (
+          <div className="module-coming">
+            <div className="big-icon">🏦</div>
+            <h3>No general expenses yet</h3>
+            <p className="text-muted">Record direct bank payments — rent, salaries, vendor payments, professional fees, etc.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>Date</th><th>Description</th><th>Vendor</th><th>Category</th><th>Mode</th><th>Ref #</th><th>Paid By</th><th>Project</th><th>Linked To</th><th>Amount</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(i=>(
+                <tr key={i.docId}>
+                  <td>{fmt(i.date)}</td>
+                  <td className="fw-600">{i.description}</td>
+                  <td style={{fontSize:12}}>{i.vendor||<span className="text-muted">—</span>}</td>
+                  <td><span className="badge grey">{i.category||'—'}</span></td>
+                  <td><span className="badge blue">{i.paymentMode||'—'}</span></td>
+                  <td className="mono" style={{fontSize:11}}>{i.refNumber||'—'}</td>
+                  <td>{i.paidBy?.includes('@') ? i.paidBy.split('@')[0].charAt(0).toUpperCase()+i.paidBy.split('@')[0].slice(1) : (i.paidBy||'—')}</td>
+                  <td>{i.project?<span className={`badge ${PROJECT_COLOR[i.project]||'grey'}`}>{i.project}</span>:<span className="text-muted">—</span>}</td>
+                  <td><XRefBadge po={i.linkedPO} wo={i.linkedWO} /></td>
+                  <td className="amount fw-600" style={{color:'var(--red)'}}>{inr(i.amount||0)}</td>
+                  <td>
+                    <div className="flex gap-2">
+                      <button className="btn btn-sm btn-ghost" onClick={()=>setEditEntry(i)}>Edit</button>
+                      <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this expense?'))deleteExpenseEntry(i.docId);}}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              <tr style={{background:'var(--grey-50)',fontWeight:700}}>
+                <td colSpan={7} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Total ({filtered.length} entries)</td>
+                <td className="amount" style={{color:'var(--red)',fontWeight:700}}>{inr(total)}</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {showNew && <NewExpenseModal onClose={()=>setShowNew(false)} currentUser={currentUser} />}
+      {editEntry && <NewExpenseModal onClose={()=>setEditEntry(null)} currentUser={currentUser} existing={editEntry} />}
+    </div>
+  );
+}
+
+const CAPITAL_COLLECTION = 'capital_loans';
+const CAPITAL_TYPES = ['Investor Fund','Bank Loan','Overdraft','Owner Capital Injection','Grant','Other'];
+
+function useCapitalLoans() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const q = query(userCol(CAPITAL_COLLECTION), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, snap => {
+        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
+        setLoading(false);
+      }, err => { console.error('Capital listener', err); setLoading(false); });
+      return unsub;
+    }
+    if (window.fb && getUserUID()) { const u = start(); return () => u && u(); }
+    let u;
+    const h = () => { if(getUserUID()) u = start(); };
+    const hu = () => { if(u) u(); if(window.fb) u = start(); };
+    window.addEventListener('firebase-ready', h, { once: true });
+    window.addEventListener('user-ready', hu, { once: true });
+    return () => { window.removeEventListener('firebase-ready', h); window.removeEventListener('user-ready', hu); if (u) u(); };
+  }, []);
+  return { items, loading };
+}
+async function addCapitalEntry(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(userCol(CAPITAL_COLLECTION), { ...data, createdAt: Date.now() });
+}
+async function deleteCapitalEntry(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(userDoc(CAPITAL_COLLECTION, docId));
+}
+async function clearAllCapital() {
+  const { db, collection, getDocs, writeBatch } = window.fb;
+  const snap = await getDocs(userCol(CAPITAL_COLLECTION));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+function NewCapitalModal({ onClose, existing }) {
+  const isEdit = !!existing;
+  const knownNames = useKnownNames();
+  const [form, setForm] = useState(isEdit ? {
+    type: existing.type||'Bank Loan', source: existing.source||'',
+    amount: existing.amount ? String(existing.amount) : '',
+    dateReceived: existing.dateReceived||'', paymentMode: existing.paymentMode||'NEFT',
+    refNumber: existing.refNumber||'', notes: existing.notes||'',
+    isLoan: existing.isLoan||false, emiAmount: existing.emiAmount ? String(existing.emiAmount) : '',
+    tenureMonths: existing.tenureMonths ? String(existing.tenureMonths) : '',
+    emiStartDate: existing.emiStartDate||'', interestRate: existing.interestRate ? String(existing.interestRate) : '', project: existing.project||''
+  } : {
+    type: 'Bank Loan', source: '', amount: '', dateReceived: new Date().toISOString().slice(0,10),
+    paymentMode: 'NEFT', refNumber: '', notes: '',
+    isLoan: true, emiAmount: '', tenureMonths: '', emiStartDate: '', interestRate: '', project: '', split:{pontoon:50,wtp:50}
+  });
+  const [saving, setSaving] = useState(false);
+  function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
+
+  const isLoanType = ['Bank Loan','Overdraft'].includes(form.type);
+
+  async function handleSave() {
+    if (!form.source.trim() || !form.amount || !form.dateReceived) return;
+    setSaving(true);
+    try {
+      const saveData = {
+        ...form,
+        amount: Number(form.amount),
+        emiAmount: Number(form.emiAmount) || 0,
+        tenureMonths: Number(form.tenureMonths) || 0,
+        interestRate: Number(form.interestRate) || 0,
+        isRepayable: isLoanType
+      };
+      if (isEdit) {
+        const { db, doc, updateDoc } = window.fb;
+        await updateDoc(userDoc(CAPITAL_COLLECTION, existing.docId), saveData);
+      } else {
+        await addCapitalEntry(saveData);
+      }
+      onClose();
+    } catch(e) { console.error(e); alert('Could not save entry.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:520,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'#1B5E20',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Entry' : '+ Capital / Loan Inflow'}</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Type</label>
+              <select className="form-input form-select" value={form.type} onChange={e=>set('type',e.target.value)}>
+                {(window.appLists?.capitalTypes||DEFAULT_LISTS.capitalTypes).map(t=><option key={t}>{t}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Source / Lender Name</label>
+              <AutocompleteInput value={form.source} onChange={v=>set('source',v)} suggestions={knownNames.capital||[]} placeholder="e.g. HDFC Bank, Mr. Ramesh" />
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Amount Received (₹)</label>
+              <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount',e.target.value)} placeholder="0" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Date Received</label>
+              <input className="form-input" type="date" value={form.dateReceived} onChange={e=>set('dateReceived',e.target.value)} />
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Payment Mode</label>
+              <select className="form-input form-select" value={form.paymentMode} onChange={e=>set('paymentMode',e.target.value)}>
+                {PAYMENT_MODES.map(m=><option key={m}>{m}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Reference / Transaction ID</label>
+              <input className="form-input font-mono" value={form.refNumber} onChange={e=>set('refNumber',e.target.value)} placeholder="UTR / Ref no." />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Notes</label>
+            <input className="form-input" value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Purpose, terms, etc." />
+          </div>
+
+          {/* Repayment section for loans */}
+          {isLoanType && (
+            <div style={{borderTop:'1px solid var(--border)',paddingTop:14,marginTop:4}}>
+              <div style={{fontSize:11.5,fontWeight:600,color:'var(--text-muted)',marginBottom:12,textTransform:'uppercase',letterSpacing:.4}}>Repayment Terms (for Cash Flow)</div>
+              <div className="form-grid">
+                <div className="form-group">
+                  <label className="form-label">Monthly EMI (₹)</label>
+                  <input className="form-input font-mono" value={form.emiAmount} onChange={e=>set('emiAmount',e.target.value)} placeholder="0" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Tenure (months)</label>
+                  <input className="form-input font-mono" value={form.tenureMonths} onChange={e=>set('tenureMonths',e.target.value)} placeholder="e.g. 36" />
+                </div>
+              </div>
+              <div className="form-grid">
+                <div className="form-group">
+                  <label className="form-label">EMI Start Date</label>
+                  <input className="form-input" type="date" value={form.emiStartDate} onChange={e=>set('emiStartDate',e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Interest Rate (% p.a.)</label>
+                  <input className="form-input font-mono" value={form.interestRate} onChange={e=>set('interestRate',e.target.value)} placeholder="e.g. 12.5" />
+                </div>
+              </div>
+              {form.emiAmount && form.tenureMonths && (
+                <div style={{background:'var(--primary-50)',borderRadius:6,padding:'8px 12px',fontSize:12,color:'var(--primary)'}}>
+                  Total repayment: <strong className="amount">{inr(Number(form.emiAmount)*Number(form.tenureMonths))}</strong>
+                  {form.amount && <> · Interest burden: <strong className="amount">{inr(Math.max(0,Number(form.emiAmount)*Number(form.tenureMonths)-Number(form.amount)))}</strong></>}
+                </div>
+              )}
+            </div>
+          )}
+          <ProjectSelect value={form.project||''} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.source.trim()||!form.amount||!form.dateReceived} className="btn btn-primary"
+style={{background:'#1B5E20',opacity:saving||!form.source.trim()||!form.amount||!form.dateReceived?0.6:1}}>
+            {saving?'Saving…': isEdit ? 'Save Changes' : 'Save Entry'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CapitalLoans() {
+  const { items, loading } = useCapitalLoans();
+  const [showNew, setShowNew] = useState(false);
+  const [editCapital, setEditCapital] = useState(null);
+  const [sortBy, setSortBy] = useState('date_desc');
+  const [capTypeFilter, setCapTypeFilter] = useState('all');
+  const [capProjectFilter, setCapProjectFilter] = useState('all');
+  const [capMonthFilter, setCapMonthFilter] = useState('all');
+
+  const totalInflow = items.reduce((s,i) => s + Number(i.amount||0), 0);
+  const totalRepayable = items.filter(i=>i.isRepayable).reduce((s,i) => s + Number(i.emiAmount||0)*Number(i.tenureMonths||0), 0);
+  const investorFunds = items.filter(i=>!i.isRepayable).reduce((s,i) => s + Number(i.amount||0), 0);
+
+  const TYPE_COLOR = {
+    'Bank Loan':'blue','Overdraft':'amber','Investor Fund':'green',
+    'Owner Capital Injection':'teal','Grant':'green','Other':'grey'
+  };
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Capital & Loans</div>
+          <div className="section-sub">Financing inflows — investor funds, bank loans, owner capital</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-primary" style={{background:'#1B5E20'}} onClick={()=>setShowNew(true)}>+ Add Inflow</button>
+          <ClearCollectionButton label="Clear All" count={items.length} onClear={clearAllCapital} />
+        </div>
+      </div>
+
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Total Capital Received</div><div className="stat-value green">{inr(totalInflow)}</div></div>
+        <div className="stat-card"><div className="stat-label">Non-Repayable (Equity)</div><div className="stat-value teal" style={{color:'var(--secondary)'}}>{inr(investorFunds)}</div></div>
+        <div className="stat-card"><div className="stat-label">Total Loan Repayment</div><div className="stat-value red">{inr(totalRepayable)}</div><div className="stat-sub">Total EMIs over tenure</div></div>
+      </div>
+
+      <div className="card">
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+        ) : items.length===0 ? (
+          <div className="module-coming">
+            <div className="big-icon">🏦</div>
+            <h3>No capital entries yet</h3>
+            <p className="text-muted">Record investor funds, bank loans, owner capital injections, or any other financing inflow.</p>
+          </div>
+        ) : (
+          <>
+          <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+            <div className="flex gap-2" style={{flexWrap:'wrap'}}>
+              <select className="form-input form-select" style={{width:160}} value={capTypeFilter} onChange={e=>setCapTypeFilter(e.target.value)}>
+                <option value="all">All Types</option>
+                {(window.appLists?.capitalTypes||DEFAULT_LISTS.capitalTypes).map(t=><option key={t}>{t}</option>)}
+              </select>
+              <select className="form-input form-select" style={{width:130}} value={capProjectFilter} onChange={e=>setCapProjectFilter(e.target.value)}>
+                <option value="all">All Projects</option>
+                {PROJECTS.map(p=><option key={p}>{p}</option>)}
+              </select>
+              <select className="form-input form-select" style={{width:140}} value={capMonthFilter} onChange={e=>setCapMonthFilter(e.target.value)}>
+                <option value="all">All Months</option>
+                {[...new Set(items.map(i=>i.dateReceived?.slice(0,7)).filter(Boolean))].sort().reverse().map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}</option>)}
+              </select>
+              <select className="form-input form-select" style={{width:190}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
+                <option value="date_desc">↓ Date Received (Newest)</option>
+                <option value="date_asc">↑ Date Received (Oldest)</option>
+                <option value="amount_desc">↓ Amount (Highest)</option>
+                <option value="amount_asc">↑ Amount (Lowest)</option>
+                <option value="vendor_asc">A→Z Source</option>
+              </select>
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr><th>Type</th><th>Source</th><th>Project</th><th>Date</th><th>Amount</th><th>Mode</th><th>Ref #</th><th>EMI</th><th>Tenure</th><th>Total Repayment</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {[...items].filter(item=>
+                  (capTypeFilter==='all'||item.type===capTypeFilter) &&
+                  (capProjectFilter==='all'||item.project===capProjectFilter) &&
+                  (capMonthFilter==='all'||(item.dateReceived||'').startsWith(capMonthFilter))
+                ).sort((a,b)=>sortBy==='date_asc'?(a.dateReceived||'').localeCompare(b.dateReceived||''):sortBy==='amount_desc'?Number(b.amount||0)-Number(a.amount||0):sortBy==='amount_asc'?Number(a.amount||0)-Number(b.amount||0):sortBy==='vendor_asc'?(a.source||'').localeCompare(b.source||''):(b.dateReceived||'').localeCompare(a.dateReceived||'')).map(item => (
+                <tr key={item.docId}>
+                  <td><span className={`badge ${TYPE_COLOR[item.type]||'grey'}`}>{item.type}</span></td>
+                  <td className="fw-600">{item.source}</td>
+                  <td>{item.project?<span className={`badge ${PROJECT_COLOR[item.project]||'grey'}`}>{item.project}</span>:<span className="text-muted">—</span>}</td>
+                  <td>{fmt(item.dateReceived)}</td>
+                  <td className="amount fw-600" style={{color:'var(--green)'}}>{inr(item.amount||0)}</td>
+                  <td><span className="badge grey">{item.paymentMode}</span></td>
+                  <td className="mono" style={{fontSize:11}}>{item.refNumber||'—'}</td>
+                  <td className="amount">{item.emiAmount > 0 ? inr(item.emiAmount) : '—'}</td>
+                  <td>{item.tenureMonths > 0 ? `${item.tenureMonths}m` : '—'}</td>
+                  <td className="amount" style={{color:'var(--red)'}}>{item.isRepayable && item.emiAmount > 0 ? inr(Number(item.emiAmount)*Number(item.tenureMonths)) : '—'}</td>
+                  <td>
+                    <button className="btn btn-sm btn-ghost" onClick={()=>setEditCapital(item)}>Edit</button>
+                    <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this entry?'))deleteCapitalEntry(item.docId);}}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          </>
+        )}
+      </div>
+      {showNew && <NewCapitalModal onClose={()=>setShowNew(false)} />}
+      {editCapital && <NewCapitalModal onClose={()=>setEditCapital(null)} existing={editCapital} />}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// PROJECT P&L — Pontoon vs WTP side by side
+// ════════════════════════════════════════════════════
+function ProjectPnL() {
+  const { items: bills }     = useBills();
+  const { items: advances }  = useAdvances();
+  const { items: pos }       = usePurchaseOrders();
+  const { items: wos }       = useWorkOrders();
+  const { items: milestones }= useMilestones();
+  const { items: receipts }  = useReceipts();
+  const { items: petty }     = usePettyCash();
+  const { items: expenseItems } = useExpenses();
+  const { items: capital }   = useCapitalLoans();
+
+  function calcProject(proj) {
+    const projKey = proj === 'Pontoon' ? 'pontoon' : 'wtp';
+
+    function matchAmt(item, amtField) {
+      const amt = Number(item[amtField]||0);
+      if (item.project === proj) return amt;
+      if (item.project === 'Both') {
+        const pct = (item.split?.[projKey] ?? 50) / 100;
+        return amt * pct;
+      }
+      return 0;
+    }
+
+    // ── INCOME ──────────────────────────────────────
+    const receiptIncome = receipts.filter(r => r.project===proj || r.project==='Both')
+      .reduce((s,r) => s + matchAmt(r,'amountReceived'), 0);
+    const milestoneIncome = milestones.filter(m => m.paid && (m.project===proj || m.project==='Both'))
+      .reduce((s,m) => s + matchAmt(m,'amount'), 0);
+    const capitalIncome = 0;
+    const totalIncome = receiptIncome + milestoneIncome;
+
+    // ── EXPENSES (Paid / Incurred) ────────────────────
+    const billExp    = bills.filter(b => b.project===proj || b.project==='Both').reduce((s,b) => s + matchAmt(b,'amount'), 0);
+    const advanceExp = advances.filter(a => a.project===proj || a.project==='Both').reduce((s,a) => s + matchAmt(a,'amount'), 0);
+    const pettyExp   = petty.filter(p => p.project===proj || p.project==='Both').reduce((s,p) => s + matchAmt(p,'amount'), 0);
+    const bankExp    = expenseItems.filter(e => e.project===proj || e.project==='Both').reduce((s,e) => s + matchAmt(e,'amount'), 0);
+    const totalExpenses = billExp + advanceExp + pettyExp + bankExp;
+
+    // ── COMMITMENTS (Not yet paid) ────────────────────
+    const poExp = pos.filter(p => p.project===proj || p.project==='Both').reduce((s,p) => s + matchAmt(p,'value'), 0);
+    const woExp = wos.filter(w => w.project===proj || w.project==='Both').reduce((s,w) => s + matchAmt(w,'value'), 0);
+    const totalCommitted = poExp + woExp;
+
+    const margin    = totalIncome - totalExpenses;
+    const marginPct = totalIncome > 0 ? Math.round((margin/totalIncome)*100) : 0;
+
+    return {
+      receiptIncome, milestoneIncome, capitalIncome, totalIncome,
+      billExp, advanceExp, poExp, woExp, pettyExp,
+      totalExpenses, totalCommitted, margin, marginPct,
+      billCount:  bills.filter(b=>b.project===proj||b.project==='Both').length,
+      poCount:    pos.filter(p=>p.project===proj||p.project==='Both').length,
+      woCount:    wos.filter(w=>w.project===proj||w.project==='Both').length,
+      pettyCount: petty.filter(p=>p.project===proj||p.project==='Both').length,
+      bankExp, bankCount: expenseItems.filter(e=>e.project===proj||e.project==='Both').length,
+    };
+  }
+
+  const pontoon = calcProject('Pontoon');
+  const wtp     = calcProject('WTP');
+  const combined = {
+    totalIncome:    pontoon.totalIncome + wtp.totalIncome,
+    totalExpenses:  pontoon.totalExpenses + wtp.totalExpenses,
+    totalCommitted: pontoon.totalCommitted + wtp.totalCommitted,
+    margin:         pontoon.margin + wtp.margin,
+  };
+
+  function PnLCard({ label, pData, color }) {
+    const isPositive = pData.margin >= 0;
+    return (
+      <div style={{flex:1,border:`2px solid ${color}`,borderRadius:10,overflow:'hidden'}}>
+        {/* Header */}
+        <div style={{background:color,padding:'12px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <span style={{fontWeight:800,fontSize:15,color:'#fff'}}>{label}</span>
+          <span style={{fontSize:11,color:'rgba(255,255,255,.75)',fontWeight:500}}>Project P&L</span>
+        </div>
+
+        {/* Margin highlight */}
+        <div style={{background: isPositive ? 'var(--green-50)' : 'var(--red-50)', padding:'12px 16px',borderBottom:`1px solid ${color}20`}}>
+          <div style={{fontSize:11,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.5,marginBottom:2}}>Net Margin</div>
+          <div style={{fontFamily:'var(--font-mono)',fontSize:24,fontWeight:800,color:isPositive?'var(--green)':'var(--red)'}}>
+            {inr(pData.margin)}
+          </div>
+          <div style={{fontSize:11.5,color:'var(--text-muted)',marginTop:2}}>{pData.marginPct}% of income</div>
+        </div>
+
+        {/* Income breakdown */}
+        <div style={{padding:'12px 16px',borderBottom:'1px solid var(--border)'}}>
+          <div style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:.5,color:'var(--green)',marginBottom:8}}>Income</div>
+          <div className="flex justify-between" style={{marginBottom:4}}>
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Client Receipts</span>
+            <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--green)'}}>{inr(pData.receiptIncome)}</span>
+          </div>
+          <div className="flex justify-between" style={{marginBottom:4}}>
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Payment Milestones</span>
+            <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--green)'}}>{inr(pData.milestoneIncome)}</span>
+          </div>
+          <div className="flex justify-between" style={{paddingTop:6,borderTop:'1px solid var(--grey-50)'}}>
+            <span style={{fontSize:12.5,fontWeight:700}}>Total Income</span>
+            <span className="amount" style={{fontSize:12.5,fontWeight:700,color:'var(--green)'}}>{inr(pData.totalIncome)}</span>
+          </div>
+        </div>
+
+        {/* Expenses breakdown */}
+        <div style={{padding:'12px 16px',borderBottom:'1px solid var(--border)'}}>
+          <div style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:.5,color:'var(--red)',marginBottom:8}}>Expenses (Paid)</div>
+          <div className="flex justify-between" style={{marginBottom:4}}>
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Bills ({pData.billCount})</span>
+            <span className="amount" style={{fontSize:12,color:'var(--red)'}}>{inr(pData.billExp)}</span>
+          </div>
+          <div className="flex justify-between" style={{marginBottom:4}}>
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Advance Payments</span>
+            <span className="amount" style={{fontSize:12,color:'var(--red)'}}>{inr(pData.advanceExp)}</span>
+          </div>
+          <div className="flex justify-between" style={{marginBottom:4}}>
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Petty Cash ({pData.pettyCount})</span>
+            <span className="amount" style={{fontSize:12,color:'var(--red)'}}>{inr(pData.pettyExp)}</span>
+          </div>
+          <div className="flex justify-between" style={{paddingTop:6,borderTop:'1px solid var(--grey-50)'}}>
+            <span style={{fontSize:12.5,fontWeight:700}}>Total Expenses</span>
+            <span className="amount" style={{fontSize:12.5,fontWeight:700,color:'var(--red)'}}>{inr(pData.totalExpenses)}</span>
+          </div>
+        </div>
+
+        {/* Commitments */}
+        <div style={{padding:'12px 16px',background:'var(--grey-50)'}}>
+          <div style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:.5,color:'var(--amber)',marginBottom:8}}>Committed (Not Yet Paid)</div>
+          <div className="flex justify-between" style={{marginBottom:4}}>
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Purchase Orders ({pData.poCount})</span>
+            <span className="amount" style={{fontSize:12,color:'var(--amber)'}}>{inr(pData.poExp)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Work Orders ({pData.woCount})</span>
+            <span className="amount" style={{fontSize:12,color:'var(--amber)'}}>{inr(pData.woExp)}</span>
+          </div>
+          <div className="flex justify-between" style={{paddingTop:6,borderTop:'1px solid var(--border)',marginTop:6}}>
+            <span style={{fontSize:12.5,fontWeight:700}}>Total Committed</span>
+            <span className="amount" style={{fontSize:12.5,fontWeight:700,color:'var(--amber)'}}>{inr(pData.totalCommitted)}</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Project P&L</div>
+          <div className="section-sub">Pontoon vs WTP — income, expenses, commitments</div>
+        </div>
+      </div>
+
+      {/* Combined summary */}
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginBottom:20}}>
+        <div className="stat-card"><div className="stat-label">Combined Income</div><div className="stat-value green">{inr(combined.totalIncome)}</div></div>
+        <div className="stat-card"><div className="stat-label">Combined Expenses</div><div className="stat-value red">{inr(combined.totalExpenses)}</div></div>
+        <div className="stat-card"><div className="stat-label">Combined Committed</div><div className="stat-value amber">{inr(combined.totalCommitted)}</div></div>
+        <div className="stat-card">
+          <div className="stat-label">Combined Net Margin</div>
+          <div className={`stat-value ${combined.margin>=0?'green':'red'}`}>{inr(combined.margin)}</div>
+        </div>
+      </div>
+
+      {/* Side-by-side P&L cards */}
+      <div style={{display:'flex',gap:16,alignItems:'flex-start'}}>
+        <PnLCard label="Pontoon" pData={pontoon} color="var(--primary)" />
+        <PnLCard label="WTP" pData={wtp} color="var(--secondary)" />
+      </div>
+
+      <div style={{marginTop:14,padding:'10px 14px',background:'var(--grey-50)',borderRadius:8,fontSize:11.5,color:'var(--text-muted)'}}>
+        💡 Data reflects all entries tagged Pontoon, WTP, or Both. Entries tagged Both are counted in full for each project — they are not split. To see only this project's portion of shared expenses, adjust manually.
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// REMINDERS — auto-generated from live Firestore data
+// ════════════════════════════════════════════════════
+const REMINDERS_COLLECTION = 'reminders';
+
+function useReminders() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { db, collection, query, orderBy, onSnapshot } = window.fb;
+      const unsub = onSnapshot(
+        query(userCol(REMINDERS_COLLECTION), orderBy('createdAt','desc')),
+        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
+        err  => { console.error('Reminders listener',err); setLoading(false); }
+      );
+      return unsub;
+    }
+    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+    let u;
+    const hFb=()=>{ if(getUserUID()) u=start(); };
+    const hUser=()=>{ if(u) u(); u=start(); };
+    window.addEventListener('firebase-ready',hFb,{once:true});
+    window.addEventListener('user-ready',hUser,{once:true});
+    return ()=>{
+      window.removeEventListener('firebase-ready',hFb);
+      window.removeEventListener('user-ready',hUser);
+      if(u) u();
+    };
+  },[]);
+  return {items,loading};
+}
+async function addReminder(data) {
+  const { db, collection, addDoc } = window.fb;
+  await addDoc(userCol(REMINDERS_COLLECTION), {...data, createdAt:Date.now(), done:false});
+}
+async function toggleReminderDone(docId, done) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(userDoc(REMINDERS_COLLECTION, docId), {done:!done, doneAt:!done?Date.now():null});
+}
+async function deleteReminder(docId) {
+  const { db, doc, deleteDoc } = window.fb;
+  await deleteDoc(userDoc(REMINDERS_COLLECTION, docId));
+}
+
+function NewReminderModal({ onClose }) {
+  const [form, setForm] = useState({
+    title:'', dueDate:'', priority:'Normal', project:'', notes:''
+  });
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  async function handleSave() {
+    if (!form.title.trim()||!form.dueDate) return;
+    setSaving(true);
+    try { await addReminder(form); onClose(); }
+    catch(e){ console.error(e); alert('Could not save.'); }
+    finally{ setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:460,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--amber)',padding:'14px 18px'}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Reminder</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-group">
+            <label className="form-label">Reminder Title</label>
+            <input className="form-input" value={form.title} onChange={e=>set('title',e.target.value)} placeholder="e.g. Follow up with client on RA Bill payment" autoFocus />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Due Date</label>
+              <input className="form-input" type="date" value={form.dueDate} onChange={e=>set('dueDate',e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Priority</label>
+              <select className="form-input form-select" value={form.priority} onChange={e=>set('priority',e.target.value)}>
+                <option>Urgent</option><option>Normal</option><option>Low</option>
+              </select>
+            </div>
+          </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
+          <div className="form-group">
+            <label className="form-label">Notes</label>
+            <input className="form-input" value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Optional details" />
+          </div>
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.title.trim()||!form.dueDate} className="btn btn-primary"
+            style={{background:'var(--amber)',opacity:saving||!form.title.trim()||!form.dueDate?0.6:1}}>
+            {saving?'Saving…':'Save Reminder'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Reminders() {
+  const { items: manualReminders, loading: remLoading } = useReminders();
+  const { items: bills }     = useBills();
+  const { tasks }            = useTasks();
+  const { items: wos }       = useWorkOrders();
+  const { items: raBills }   = useRABills();
+  const [showNew, setShowNew] = useState(false);
+  const [filter, setFilter] = useState('all'); // all | pending | done | overdue
+
+  const today = new Date().toISOString().slice(0,10);
+  const in7   = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
+
+  // Auto-generated reminders from live data
+  const autoReminders = [
+    // Overdue bills
+    ...bills.filter(b=>!b.paid&&b.due&&b.due<today).map(b=>({
+      docId: `auto-bill-${b.docId}`, auto:true,
+      title: `Overdue bill — ${b.payee}`,
+      notes: `${inr(b.amount||0)} · Due ${fmt(b.due)}`,
+      dueDate: b.due, priority:'Urgent', project:b.project||'',
+      done:false, category:'Bill'
+    })),
+    // Bills due in 7 days
+    ...bills.filter(b=>!b.paid&&b.due&&b.due>=today&&b.due<=in7).map(b=>({
+      docId: `auto-billdue-${b.docId}`, auto:true,
+      title: `Bill due soon — ${b.payee}`,
+      notes: `${inr(b.amount||0)} · Due ${fmt(b.due)}`,
+      dueDate: b.due, priority:'Normal', project:b.project||'',
+      done:false, category:'Bill'
+    })),
+    // Overdue tasks
+    ...tasks.filter(t=>t.status!=='Completed'&&t.due&&t.due<today).map(t=>({
+      docId: `auto-task-${t.docId}`, auto:true,
+      title: `Overdue task — ${t.name}`,
+      notes: `Assigned: ${t.assigned} · Due ${fmt(t.due)}`,
+      dueDate: t.due, priority:'Urgent', project:t.project||'',
+      done:false, category:'Task'
+    })),
+    // Overdue WOs
+    ...wos.filter(w=>w.stage!=='Completed'&&w.stage!=='Cancelled'&&w.due&&w.due<today).map(w=>({
+      docId: `auto-wo-${w.docId}`, auto:true,
+      title: `Work order overdue — ${w.wo}`,
+      notes: `${w.vendorName} · ${w.stage}`,
+      dueDate: w.due, priority:'Urgent', project:w.project||'',
+      done:false, category:'Work Order'
+    })),
+    // RA Bills with pending balance
+    ...raBills.filter(b=>b.status!=='Fully Received'&&b.balancePending>0).map(b=>({
+      docId: `auto-ra-${b.docId}`, auto:true,
+      title: `RA Bill payment pending — ${b.raBillNo}`,
+      notes: `${b.client} · Balance: ${inr(b.balancePending||0)}`,
+      dueDate: today, priority:'Normal', project:b.project||'',
+      done:false, category:'Receipt'
+    })),
+  ];
+
+  const allItems = [
+    ...autoReminders,
+    ...manualReminders.map(r=>({...r, auto:false, category:'Manual'}))
+  ].sort((a,b)=>(a.dueDate||'').localeCompare(b.dueDate||''));
+
+  const filtered = allItems.filter(r=>{
+    if (filter==='pending') return !r.done;
+    if (filter==='done')    return r.done;
+    if (filter==='overdue') return !r.done && r.dueDate < today;
+    return true;
+  });
+
+  const overdueCount = allItems.filter(r=>!r.done&&r.dueDate<today).length;
+  const pendingCount = allItems.filter(r=>!r.done).length;
+
+  const PRIO_BADGE = {Urgent:'red',Normal:'amber',Low:'grey'};
+  const CAT_BADGE  = {Bill:'red',Task:'blue','Work Order':'teal',Receipt:'green',Manual:'grey'};
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Reminders</div>
+          <div className="section-sub">{pendingCount} pending · {overdueCount} overdue · auto-generated from live data</div>
+        </div>
+        <button className="btn btn-primary" style={{background:'var(--amber)'}} onClick={()=>setShowNew(true)}>+ Add Reminder</button>
+      </div>
+
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Total</div><div className="stat-value">{allItems.length}</div></div>
+        <div className="stat-card"><div className="stat-label">Overdue</div><div className="stat-value red">{overdueCount}</div></div>
+        <div className="stat-card"><div className="stat-label">Pending</div><div className="stat-value amber">{pendingCount}</div></div>
+        <div className="stat-card"><div className="stat-label">Done</div><div className="stat-value green">{allItems.filter(r=>r.done).length}</div></div>
+      </div>
+
+      <div className="tabs">
+        {[['all','All'],['pending','Pending'],['overdue','Overdue'],['done','Done']].map(([v,l])=>(
+          <div key={v} className={`tab ${filter===v?'active':''}`} onClick={()=>setFilter(v)}>{l}</div>
+        ))}
+      </div>
+
+      <div className="card">
+        {filtered.length === 0 ? (
+          <div className="module-coming">
+            <div className="big-icon">🔔</div>
+            <h3>No reminders</h3>
+            <p className="text-muted">All clear! Add a manual reminder or they'll auto-generate from overdue bills, tasks and work orders.</p>
+          </div>
+        ) : filtered.map(r=>(
+          <div key={r.docId} style={{
+            display:'flex',alignItems:'flex-start',gap:12,padding:'12px 16px',
+            borderBottom:'1px solid var(--border)',
+            background: r.done?'var(--grey-50)': r.dueDate<today?'#FFF3F3':'',
+            opacity: r.done?0.6:1
+          }}>
+            {/* Done toggle — only for manual reminders */}
+            <div style={{paddingTop:2,flexShrink:0}}>
+              {r.auto ? (
+                <div style={{width:18,height:18,borderRadius:'50%',background:PRIO_BADGE[r.priority]==='red'?'var(--red)':PRIO_BADGE[r.priority]==='amber'?'var(--amber)':'var(--grey)',opacity:.8}} />
+              ) : (
+                <div onClick={()=>toggleReminderDone(r.docId,r.done)}
+                  style={{width:18,height:18,borderRadius:4,border:`2px solid ${r.done?'var(--green)':'var(--border)'}`,
+                    background:r.done?'var(--green)':'transparent',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  {r.done&&<span style={{color:'#fff',fontSize:11,fontWeight:700}}>✓</span>}
+                </div>
+              )}
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:600,fontSize:13,textDecoration:r.done?'line-through':'none'}}>{r.title}</div>
+              {r.notes && <div style={{fontSize:12,color:'var(--text-muted)',marginTop:2}}>{r.notes}</div>}
+              <div style={{display:'flex',gap:6,marginTop:5,flexWrap:'wrap'}}>
+                <span className={`badge ${PRIO_BADGE[r.priority]||'grey'}`}>{r.priority}</span>
+                <span className={`badge ${CAT_BADGE[r.category]||'grey'}`}>{r.category}</span>
+                {r.project&&<span className={`badge ${PROJECT_COLOR[r.project]||'grey'}`}>{r.project}</span>}
+                {r.auto&&<span className="badge grey" style={{fontSize:9}}>AUTO</span>}
+              </div>
+            </div>
+            <div style={{textAlign:'right',flexShrink:0}}>
+              <div style={{fontSize:11.5,color:r.dueDate<today&&!r.done?'var(--red)':'var(--text-muted)',fontWeight:r.dueDate<today&&!r.done?600:400}}>
+                {r.dueDate<today&&!r.done?'⚠ ':''}{fmt(r.dueDate)}
+              </div>
+              {!r.auto && (
+                <button className="btn btn-sm btn-ghost" style={{marginTop:4,fontSize:10}} onClick={()=>deleteReminder(r.docId)}>Delete</button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {showNew && <NewReminderModal onClose={()=>setShowNew(false)} />}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+// REPORTS — summary reports from live Firestore data
+// ════════════════════════════════════════════════════
+function Reports() {
+  const { tasks }            = useTasks();
+  const { items: bills }     = useBills();
+  const { items: advances }  = useAdvances();
+  const { items: wos }       = useWorkOrders();
+  const { items: pos }       = usePurchaseOrders();
+  const { items: petty }     = usePettyCash();
+  const { items: receipts }  = useReceipts();
+  const { items: raBills }   = useRABills();
+  const { items: vendors }   = useVendors();
+  const [tab, setTab] = useState('finance');
+
+  const today = new Date().toISOString().slice(0,10);
+  const thisMonth = today.slice(0,7);
+  const thisYear  = today.slice(0,4);
+
+  // ── Finance Summary ──
+  const totalBillsAmt    = bills.reduce((s,b)=>s+Number(b.amount||0),0);
+  const paidBillsAmt     = bills.filter(b=>b.paid).reduce((s,b)=>s+Number(b.amount||0),0);
+  const unpaidBillsAmt   = totalBillsAmt - paidBillsAmt;
+  const overdueBillsAmt  = bills.filter(b=>!b.paid&&b.due&&b.due<today).reduce((s,b)=>s+Number(b.amount||0),0);
+  const totalAdvances    = advances.reduce((s,a)=>s+Number(a.amount||0),0);
+  const unadjAdvances    = advances.filter(a=>a.status!=='Fully Adjusted').reduce((s,a)=>s+Number(a.balanceAmount||0),0);
+  const totalReceipts    = receipts.reduce((s,r)=>s+Number(r.amountReceived||0),0);
+  const totalPetty       = petty.reduce((s,p)=>s+Number(p.amount||0),0);
+  const thisMonthPetty   = petty.filter(p=>(p.date||'').startsWith(thisMonth)).reduce((s,p)=>s+Number(p.amount||0),0);
+  const totalPOValue     = pos.reduce((s,p)=>s+Number(p.value||0),0);
+  const totalWOValue     = wos.reduce((s,w)=>s+Number(w.value||0),0);
+  const totalRABilled    = raBills.reduce((s,b)=>s+Number(b.amountClaimed||0),0);
+  const totalRAPending   = raBills.reduce((s,b)=>s+Number(b.balancePending||0),0);
+
+  // ── Bill breakdown by category ──
+  const billsByCat = {};
+  bills.forEach(b=>{ const c=b.category||'Other'; billsByCat[c]=(billsByCat[c]||0)+Number(b.amount||0); });
+
+  // ── Petty by category ──
+  const pettyByCat = {};
+  petty.forEach(p=>{ const c=p.category||'Other'; pettyByCat[c]=(pettyByCat[c]||0)+Number(p.amount||0); });
+
+  // ── Petty by person ──
+  const pettyByPerson = {};
+  petty.forEach(p=>{ const n=p.paidBy||'Unknown'; pettyByPerson[n]=(pettyByPerson[n]||0)+Number(p.amount||0); });
+
+  // ── Tasks summary ──
+  const tasksByStatus  = {Pending:0,'In Progress':0,Completed:0,Overdue:0};
+  tasks.forEach(t=>{ tasksByStatus[t.effectiveStatus||t.status]=(tasksByStatus[t.effectiveStatus||t.status]||0)+1; });
+  const tasksByAssigned = {};
+  tasks.forEach(t=>{ const n=t.assigned||'Unassigned'; tasksByAssigned[n]=(tasksByAssigned[n]||0)+1; });
+
+  // ── WO summary ──
+  const wosByStage = {};
+  wos.forEach(w=>{ wosByStage[w.stage]=(wosByStage[w.stage]||0)+1; });
+
+  // ── Vendor spend ──
+  const vendorSpend = {};
+  bills.forEach(b=>{ const v=b.payee||'Unknown'; vendorSpend[v]=(vendorSpend[v]||0)+Number(b.amount||0); });
+  const vendorSpendSorted = Object.entries(vendorSpend).sort((a,b)=>b[1]-a[1]).slice(0,8);
+
+  function SectionHeader({title}) {
+    return <div style={{fontWeight:700,fontSize:12,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.5,padding:'14px 0 6px',borderBottom:'2px solid var(--primary)',marginBottom:12}}>{title}</div>;
+  }
+  function StatRow({label,value,color}) {
+    return (
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'7px 0',borderBottom:'1px solid var(--grey-50)'}}>
+        <span style={{fontSize:12.5,color:'var(--text-secondary)'}}>{label}</span>
+        <span className="amount" style={{fontWeight:700,color:color||'var(--text)',fontSize:13}}>{value}</span>
+      </div>
+    );
+  }
+  function BarRow({label,value,total,color}) {
+    const pct = total>0 ? Math.round((value/total)*100) : 0;
+    return (
+      <div style={{marginBottom:8}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
+          <span style={{fontSize:12}}>{label}</span>
+          <span className="amount" style={{fontSize:12,fontWeight:600}}>{inr(value)} <span style={{color:'var(--text-muted)',fontWeight:400}}>({pct}%)</span></span>
+        </div>
+        <div className="progress-wrap" style={{height:6}}>
+          <div className="progress-fill" style={{width:`${pct}%`,background:color||'var(--primary)'}} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="section-header">
+        <div className="section-title">Reports</div>
+      </div>
+
+      <div className="tabs">
+        {[['finance','💰 Finance'],['operations','🔧 Operations'],['🏭 Vendors']].map(([v,l])=>(
+          <div key={v} className={`tab ${tab===v?'active':''}`} onClick={()=>setTab(v)}>{l}</div>
+        ))}
+      </div>
+
+      {/* ── FINANCE REPORT ── */}
+      {tab==='finance' && (
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+          {/* Bills */}
+          <div className="card">
+            <div className="card-header"><span className="card-title">Bills & Payments</span></div>
+            <div className="card-body">
+              <SectionHeader title="Summary" />
+              <StatRow label="Total Bills" value={inr(totalBillsAmt)} />
+              <StatRow label="Paid" value={inr(paidBillsAmt)} color="var(--green)" />
+              <StatRow label="Unpaid" value={inr(unpaidBillsAmt)} color="var(--amber)" />
+              <StatRow label="Overdue" value={inr(overdueBillsAmt)} color="var(--red)" />
+              <StatRow label="Total Advances Paid" value={inr(totalAdvances)} />
+              <StatRow label="Unadjusted Advances" value={inr(unadjAdvances)} color="var(--amber)" />
+              <SectionHeader title="By Category" />
+              {Object.entries(billsByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
+                <BarRow key={cat} label={cat} value={amt} total={totalBillsAmt} />
+              ))}
+            </div>
+          </div>
+
+          {/* Receipts & Petty Cash */}
+          <div className="card">
+            <div className="card-header"><span className="card-title">Income & Petty Cash</span></div>
+            <div className="card-body">
+              <SectionHeader title="Client Income" />
+              <StatRow label="Total RA Bills Submitted" value={inr(totalRABilled)} />
+              <StatRow label="Total Received" value={inr(totalReceipts)} color="var(--green)" />
+              <StatRow label="Pending Collection" value={inr(totalRAPending)} color="var(--red)" />
+              <StatRow label="Collection Rate" value={totalRABilled>0?`${Math.round((totalReceipts/totalRABilled)*100)}%`:'—'} />
+              <SectionHeader title="Petty Cash" />
+              <StatRow label="Total Petty Cash" value={inr(totalPetty)} />
+              <StatRow label="This Month" value={inr(thisMonthPetty)} color="var(--amber)" />
+              {Object.entries(pettyByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
+                <BarRow key={cat} label={cat} value={amt} total={totalPetty} color="var(--secondary)" />
+              ))}
+              <SectionHeader title="Petty Cash by Staff" />
+              {Object.entries(pettyByPerson).sort((a,b)=>b[1]-a[1]).map(([name,amt])=>(
+                <BarRow key={name} label={name} value={amt} total={totalPetty} color="var(--amber)" />
+              ))}
+            </div>
+          </div>
+
+          {/* PO / WO Commitments */}
+          <div className="card" style={{gridColumn:'span 2'}}>
+            <div className="card-header"><span className="card-title">Commitments</span></div>
+            <div className="card-body" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+              <div>
+                <SectionHeader title="Purchase Orders" />
+                <StatRow label="Total POs" value={pos.length} />
+                <StatRow label="Total PO Value" value={inr(totalPOValue)} />
+                <StatRow label="Open POs" value={pos.filter(p=>p.stage!=='Closed').length} />
+              </div>
+              <div>
+                <SectionHeader title="Work Orders" />
+                <StatRow label="Total WOs" value={wos.length} />
+                <StatRow label="Total WO Value" value={inr(totalWOValue)} />
+                <StatRow label="Active WOs" value={wos.filter(w=>w.stage!=='Completed'&&w.stage!=='Cancelled').length} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── OPERATIONS REPORT ── */}
+      {tab==='operations' && (
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+          <div className="card">
+            <div className="card-header"><span className="card-title">Tasks</span></div>
+            <div className="card-body">
+              <SectionHeader title="By Status" />
+              {Object.entries(tasksByStatus).map(([s,c])=>(
+                <BarRow key={s} label={s} value={c} total={tasks.length} color={s==='Completed'?'var(--green)':s==='Overdue'?'var(--red)':s==='In Progress'?'var(--primary)':'var(--grey)'} />
+              ))}
+              <SectionHeader title="By Assigned Staff" />
+              {Object.entries(tasksByAssigned).sort((a,b)=>b[1]-a[1]).map(([n,c])=>(
+                <BarRow key={n} label={n} value={c} total={tasks.length} color="var(--secondary)" />
+              ))}
+            </div>
+          </div>
+          <div className="card">
+            <div className="card-header"><span className="card-title">Work Orders</span></div>
+            <div className="card-body">
+              <SectionHeader title="By Stage" />
+              {Object.entries(wosByStage).sort((a,b)=>b[1]-a[1]).map(([s,c])=>(
+                <BarRow key={s} label={s} value={c} total={wos.length} color={s==='Completed'?'var(--green)':s==='In Progress'?'var(--primary)':'var(--grey)'} />
+              ))}
+              <SectionHeader title="By Project" />
+              {['Pontoon','WTP','Both'].map(proj=>{
+                const c = wos.filter(w=>w.project===proj).length;
+                return <BarRow key={proj} label={proj} value={c} total={wos.length} color={PROJECT_COLOR[proj]==='blue'?'var(--primary)':PROJECT_COLOR[proj]==='teal'?'var(--secondary)':'var(--grey)'} />;
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── VENDOR REPORT ── */}
+      {tab==='vendors' && (
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+          <div className="card">
+            <div className="card-header"><span className="card-title">Top Vendors by Spend</span></div>
+            <div className="card-body">
+              <SectionHeader title="Bills + Advances" />
+              {vendorSpendSorted.length===0
+                ? <div style={{fontSize:12.5,color:'var(--text-muted)'}}>No data yet</div>
+                : vendorSpendSorted.map(([name,amt])=>(
+                  <BarRow key={name} label={name} value={amt} total={totalBillsAmt} />
+                ))
+              }
+            </div>
+          </div>
+          <div className="card">
+            <div className="card-header"><span className="card-title">Vendor Master Summary</span></div>
+            <div className="card-body">
+              <StatRow label="Total Vendors" value={vendors.length} />
+              <StatRow label="Vendors with Bills" value={Object.keys(vendorSpend).length} />
+              <SectionHeader title="Vendor Categories" />
+              {(() => {
+                const cats = {};
+                vendors.forEach(v=>{ const c=v.category||'Other'; cats[c]=(cats[c]||0)+1; });
+                return Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>(
+                  <BarRow key={c} label={c} value={n} total={vendors.length} color="var(--secondary)" />
+                ));
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuotationApprovalAction({ quotation, currentUser, onApproved, onRejected }) {
+  const [working, setWorking] = useState(false);
+
+  async function handleApprove() {
+    if (!can(currentUser, 'approve_quotation')) { alert('You do not have permission to approve quotations.'); return; }
+    setWorking(true);
+    try {
+      await updateQuotation(quotation.docId, {
+        approved: true,
+        approvedBy: currentUser.name,
+        approvedByUid: currentUser.uid,
+        approvedAt: Date.now(),
+        stage: 'Finalized'
+      });
+      onApproved && onApproved();
+    } catch(e) { console.error(e); alert('Could not approve.'); }
+    finally { setWorking(false); }
+  }
+
+  async function handleReject() {
+    setWorking(true);
+    try {
+      await updateQuotation(quotation.docId, { approved: false, rejectedBy: currentUser.name, rejectedAt: Date.now() });
+      onRejected && onRejected();
+    } catch(e) { console.error(e); alert('Could not update.'); }
+    finally { setWorking(false); }
+  }
+
+  if (quotation.approved) {
+    return (
+      <div style={{display:'flex',alignItems:'center',gap:6}}>
+        <span className="badge green">✓ Approved</span>
+        <span style={{fontSize:10.5,color:'var(--text-muted)'}}>by {quotation.approvedBy}</span>
+        <button className="btn btn-sm btn-ghost" style={{fontSize:10}} onClick={handleReject} disabled={working}>Revoke</button>
+      </div>
+    );
+  }
+
+  return (
+    <PermGate user={currentUser} action="approve_quotation" fallback={
+      <span style={{fontSize:11,color:'var(--text-muted)'}}>Pending approval</span>
+    }>
+      <button className="btn btn-sm btn-primary" style={{background:'var(--green)'}} onClick={handleApprove} disabled={working}>
+        {working?'…':'✓ Approve'}
+      </button>
+    </PermGate>
+  );
+}
+
+// ─── Nav Config ──────────────────────────────────────
+const NAV = [
+  { section: 'Operations' },
+  { id:'dashboard',      label:'Dashboard',       icon:'⊞' },
+  { section: 'Procurement' },
+  { id:'quotations',     label:'Quotations',       icon:'📋' },
+  { id:'workorders',     label:'Work Orders',      icon:'🔧' },
+  { id:'purchaseorders', label:'Purchase Orders',  icon:'📦' },
+  { section: 'Finance' },
+  { id:'projectpnl',     label:'Project P&L',      icon:'📊' },
+  { id:'receipts',       label:'Receipts',         icon:'📥' },
+  { id:'capital',        label:'Capital & Loans',  icon:'🏦' },
+  { id:'paymenttracker', label:'Payment Tracker',  icon:'💳' },
+  { id:'billpayments',   label:'Bill Payments',    icon:'📑' },
+  { id:'cashflow',       label:'Cash Flow',        icon:'📈' },
+  { id:'pettycash',      label:'Petty Cash',       icon:'💰' },
+  { id:'expenses',       label:'General Expenses',     icon:'🏦' },
+  { section: 'Team' },
+  { id:'reminders',      label:'Reminders',        icon:'🔔' },
+  { id:'reports',        label:'Reports',          icon:'📊' },
+  { id:'settings',       label:'Settings',         icon:'⚙' },
+];
+
+// ─── Module router ─────────────────────────────────────
+function Module({ id, setActive, currentUser }) {
+  switch(id) {
+    case 'dashboard':      return <Dashboard setActive={setActive} />;
+    case 'quotations':     return <QuotationsWithUser currentUser={currentUser} />;
+    case 'workorders':     return <WorkOrders />;
+    case 'purchaseorders': return <PurchaseOrders />;
+    case 'projectpnl':     return <ProjectPnL />;
+    case 'receipts':       return <Receipts />;
+    case 'capital':        return <CapitalLoans />;
+    case 'cashflow':       return <CashFlow />;
+    case 'paymenttracker': return <PaymentTracker />;
+    case 'billpayments':   return <BillPayments />;
+    case 'settings':       return <SettingsWithUser currentUser={currentUser} />;
+    case 'pettycash':      return <PettyCash currentUser={currentUser} />;
+    case 'expenses':       return <Expenses currentUser={currentUser} />;
+    case 'reminders':      return <Reminders />;
+    case 'reports':        return <Reports />;
+    default:               return <Dashboard setActive={setActive} />;
+  }
+}
+
+// ─── Wrapper: Quotations with currentUser for approval ─
+function QuotationsWithUser({ currentUser }) {
+  const { items, loading } = useQuotations();
+  const { items: reqs } = useRequisitions();
+  const [showNew, setShowNew] = useState(false);
+  const [stageFilter, setStageFilter] = useState('all');
+  const [approvedFilter, setApprovedFilter] = useState('all');
+  const [vendorFilter, setQVendorFilter] = useState('all');
+  const [projectFilter, setQProjectFilter] = useState('all');
+  const [qSortBy, setQSortBy] = useState('date_desc');
+  const [issuingFor, setIssuingFor] = useState(null);
+  const [viewSchedule, setViewSchedule] = useState(null);
+  const [editQuote, setEditQuote] = useState(null);
+
+  const qVendors = [...new Set(items.map(q=>q.vendorName).filter(Boolean))].sort();
+  const filtered = [...items].sort((a,b)=>
+    qSortBy==='date_asc'?(a.receivedDate||'').localeCompare(b.receivedDate||''):
+    qSortBy==='amount_desc'?Number(b.value||0)-Number(a.value||0):
+    qSortBy==='amount_asc'?Number(a.value||0)-Number(b.value||0):
+    qSortBy==='vendor_asc'?(a.vendorName||'').localeCompare(b.vendorName||''):
+    (b.receivedDate||'').localeCompare(a.receivedDate||'')
+  ).filter(q =>
+    (stageFilter==='all' || q.stage===stageFilter) &&
+    (approvedFilter==='all' || (approvedFilter==='approved'&&q.approved) || (approvedFilter==='pending'&&!q.approved)) &&
+    (vendorFilter==='all' || q.vendorName===vendorFilter) &&
+    (projectFilter==='all' || q.project===projectFilter)
+  );
+  const pipelineValue = items.filter(q=>!q.approved).reduce((s,q)=>s+Number(q.value||0),0);
+
+  async function advanceStage(q) {
+    if (q.stage === 'Receipt of Quotation') {
+      try { await updateQuotation(q.docId, { stage: 'Finalized' }); }
+      catch(e) { console.error(e); alert('Could not update stage.'); }
+    } else if (q.stage === 'Finalized') {
+      setIssuingFor(q);
+    }
+  }
+
+  function reqLabel(id) {
+    const r = reqs.find(r=>r.docId===id||r.req===id);
+    return r ? `${r.req} — ${r.description?.slice(0,30)}` : (id||'—');
+  }
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Quotations</div>
+          <div className="section-sub">{loading?'Loading…':`${items.length} quotation${items.length===1?'':'s'} · pipeline ${inr(pipelineValue)}`}</div>
+        </div>
+        <div className="flex gap-2">
+          <PermGate user={currentUser} action="enter_quotation" fallback={null}>
+            <button className="btn btn-primary" onClick={()=>setShowNew(true)}>+ New Quotation</button>
+          </PermGate>
+          <ClearCollectionButton label="Clear All" count={items.length} onClear={clearAllQuotations} />
+        </div>
+      </div>
+
+      <div className="card" style={{marginBottom:14}}>
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
+            <select className="form-input form-select" style={{width:200}} value={stageFilter} onChange={e=>setStageFilter(e.target.value)}>
+              <option value="all">All Stages</option>
+              {QUOTE_STAGES.map(s=><option key={s}>{s}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:160}} value={approvedFilter} onChange={e=>setApprovedFilter(e.target.value)}>
+              <option value="all">All</option>
+              <option value="approved">Approved only</option>
+              <option value="pending">Pending approval</option>
+            </select>
+            <select className="form-input form-select" style={{width:160}} value={vendorFilter} onChange={e=>setQVendorFilter(e.target.value)}>
+              <option value="all">All Vendors</option>
+              {qVendors.map(v=><option key={v}>{v}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:130}} value={projectFilter} onChange={e=>setQProjectFilter(e.target.value)}>
+              <option value="all">All Projects</option>
+              {PROJECTS.map(p=><option key={p}>{p}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:190}} value={qSortBy} onChange={e=>setQSortBy(e.target.value)}>
+              <option value="date_desc">↓ Received Date (Newest)</option>
+              <option value="date_asc">↑ Received Date (Oldest)</option>
+              <option value="amount_desc">↓ Value (Highest)</option>
+              <option value="amount_asc">↑ Value (Lowest)</option>
+              <option value="vendor_asc">A→Z Vendor</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        {loading ? (
+          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
+        ) : filtered.length===0 ? (
+          <div className="module-coming">
+            <div className="big-icon">📋</div>
+            <h3>No quotations yet</h3>
+            <p className="text-muted">Add vendor quotations. Link to a requisition. Approve the best one to issue a PO or WO.</p>
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>Quot #</th><th>Vendor</th><th>Project</th><th>REQ Ref</th><th>Value</th><th>Payment Schedule</th><th>Stage</th><th>Approval</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map(q=>(
+                <tr key={q.docId} style={{background:q.approved?'#F0FFF4':''}}>
+                  <td className="mono" style={{whiteSpace:'nowrap'}}>{q.quotNo||'—'}</td>
+                  <td className="fw-600">{q.vendorName}</td>
+                  <td>{q.project?<span className={`badge ${PROJECT_COLOR[q.project]||'grey'}`}>{q.project}</span>:<span className="text-muted">—</span>}</td>
+                  <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{reqLabel(q.linkedReq)}</td>
+                  <td className="amount fw-600">{inr(q.value||0)}</td>
+                  <td>
+                    {q.paymentSchedule&&q.paymentSchedule.length>0
+                      ? <span className="btn btn-sm btn-ghost" style={{cursor:'pointer'}} onClick={()=>setViewSchedule(q)}>{q.paymentSchedule.length} stage{q.paymentSchedule.length===1?'':'s'}</span>
+                      : <span className="text-muted text-sm">—</span>}
+                  </td>
+                  <td><span className={`badge ${STAGE_COLOR[q.stage]||'grey'}`}>{q.stage}</span></td>
+                  <td>
+                    <QuotationApprovalAction quotation={q} currentUser={currentUser} />
+                  </td>
+                  <td>
+                    <div className="flex gap-2">
+                      {q.approved && q.stage==='Finalized' && (
+                        <PermGate user={currentUser} action="issue_po">
+                          <button className="btn btn-sm btn-primary" style={{background:'var(--green)'}} onClick={()=>setIssuingFor(q)}>Issue PO →</button>
+                        </PermGate>
+                      )}
+                      <button className="btn btn-sm btn-ghost" onClick={()=>setEditQuote(q)}>Edit</button>
+                      {q.stage==='Receipt of Quotation' && (
+                        <button className="btn btn-sm btn-ghost" onClick={()=>advanceStage(q)}>→ Finalize</button>
+                      )}
+                      <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteQuotation(q.docId);}}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {showNew && <NewQuotationWithREQ onClose={()=>setShowNew(false)} reqs={reqs} />}
+      {editQuote && <NewQuotationWithREQ onClose={()=>setEditQuote(null)} reqs={reqs} existing={editQuote} />}
+      {issuingFor && <IssuePOModal quotation={issuingFor} onClose={()=>setIssuingFor(null)} onIssued={()=>setIssuingFor(null)} />}
+      {viewSchedule && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setViewSchedule(null)}>
+          <div style={{background:'var(--surface)',borderRadius:10,width:420,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+            <div style={{background:'var(--primary)',padding:'14px 18px'}}>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payment Schedule — {viewSchedule.vendorName}</span>
+            </div>
+            <div style={{padding:'16px 20px'}}>
+              <table style={{width:'100%'}}>
+                <thead><tr>
+                  {['Stage','%','Amount','Date'].map(h=><th key={h} style={{fontSize:10,textAlign:'left',color:'var(--text-muted)',padding:'4px 0'}}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {(viewSchedule.paymentSchedule||[]).map((r,i)=>(
+                    <tr key={i} style={{borderTop:'1px solid var(--grey-50)'}}>
+                      <td style={{padding:'6px 0',fontSize:12.5}}>{r.name}</td>
+                      <td style={{fontSize:12.5}}>{r.pct}%</td>
+                      <td className="amount" style={{fontSize:12.5}}>{inr(r.amount||0)}</td>
+                      <td style={{fontSize:12.5}}>{r.date||'—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{padding:'0 20px 16px',display:'flex',justifyContent:'flex-end'}}>
+              <button onClick={()=>setViewSchedule(null)} className="btn btn-ghost">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── New Quotation with REQ dropdown and Quot Number ─
+function NewQuotationWithREQ({ onClose, reqs, existing }) {
+  const isEdit = !!existing;
+  const knownNames = useKnownNames();
+  const [form, setForm] = useState(isEdit ? {
+    quotNo: existing.quotNo||'', vendorName: existing.vendorName||'',
+    description: existing.description||'', value: existing.value ? String(existing.value) : '',
+    receivedDate: existing.receivedDate||'',
+    stage: existing.stage||'Receipt of Quotation', notes: existing.notes||'', project: existing.project||''
+  } : {
+    quotNo:'', vendorName:'', description:'', value:'',
+    receivedDate: new Date().toISOString().slice(0,10),
+    stage:'Receipt of Quotation', notes:'', project:''
+  });
+  const [schedule, setSchedule] = useState(isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) : []);
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  async function handleSave(){
+    if(!form.vendorName.trim()||!form.value) return;
+    setSaving(true);
+    try{
+      if (isEdit) {
+        await updateQuotation(existing.docId, {...form, value:Number(form.value), paymentSchedule:schedule});
+      } else {
+        await addQuotation({...form,value:Number(form.value),paymentSchedule:schedule});
+      }
+      onClose();
+    }catch(e){console.error(e);alert('Could not save quotation.');}
+    finally{setSaving(false);}
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:580,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Quotation' : '+ New Quotation'}</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Quotation Number</label>
+              <input className="form-input font-mono" value={form.quotNo} onChange={e=>set('quotNo',e.target.value)} placeholder="e.g. QUOT/2026-27/001" autoFocus />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Received Date</label>
+              <input className="form-input" type="date" value={form.receivedDate} onChange={e=>set('receivedDate',e.target.value)} />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Vendor Name</label>
+            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={knownNames.vendors} placeholder="Vendor / supplier name" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Description</label>
+            <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. RO membranes — 5 units, 4040 size" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Total Value (₹)</label>
+            <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} placeholder="0" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Stage</label>
+            <select className="form-input form-select" value={form.stage} onChange={e=>set('stage',e.target.value)}>
+              {QUOTE_STAGES.map(s=><option key={s}>{s}</option>)}
+            </select>
+          </div>
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
+          <div className="form-group">
+            <label className="form-label">Notes</label>
+            <textarea className="form-input" rows="2" value={form.notes} onChange={e=>set('notes',e.target.value)} style={{resize:'vertical'}} />
+          </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.vendorName.trim()||!form.value} className="btn btn-primary"
+            style={{opacity: (saving||!form.vendorName.trim()||!form.value) ? 0.6 : 1}}>
+            {saving?'Saving…': isEdit ? 'Save Changes' : 'Save Quotation'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Settings wrapper with currentUser ─────────────
+// ─── Permission Matrix ────────────────────────────────
+const ACTIONS_LIST = [
+  { key:'enter_quotation',    label:'Enter Quotation' },
+  { key:'approve_quotation',  label:'Approve Quotation' },
+  { key:'issue_po',           label:'Issue Purchase Order' },
+  { key:'issue_wo',           label:'Issue Work Order' },
+  { key:'mark_payment',       label:'Mark Payment Received' },
+  { key:'view_cashflow',      label:'View Cash Flow' },
+  { key:'edit_settings',      label:'Edit Settings' },
+];
+const ROLES_LIST = [
+  { key:'owner', label:'Owner' }, { key:'manager', label:'Manager' },
+  { key:'accounts', label:'Accounts' }, { key:'field_staff', label:'Field Staff' }, { key:'viewer', label:'Viewer' },
+];
+
+function usePermSettings() {
+  const [perms, setPerms] = useState(DEFAULT_PERMISSIONS);
+  useEffect(() => {
+    function start() {
+      const { db, doc, onSnapshot } = window.fb;
+      const unsub = onSnapshot(doc(db, 'settings', 'permissions'), snap => {
+        if (snap.exists()) setPerms(s => ({ ...DEFAULT_PERMISSIONS, ...snap.data() }));
+      }, err => console.error('Perms listener', err));
+      return unsub;
+    }
+    if (window.fb) { const u=start(); return ()=>u&&u(); }
+    let u; const h=()=>{u=start();};
+    window.addEventListener('firebase-ready',h,{once:true});
+    return ()=>{ window.removeEventListener('firebase-ready',h); if(u)u(); };
+  }, []);
+  async function savePerms(newPerms) {
+    const { db, doc, setDoc } = window.fb;
+    await setDoc(doc(db, 'settings', 'permissions'), newPerms, { merge: true });
+  }
+  return { perms, setPerms, savePerms };
+}
+
+function PermissionMatrix({ currentUser }) {
+  const { perms, setPerms, savePerms } = usePermSettings();
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  function toggle(role, action) {
+    if (role==='owner') return;
+    setPerms(p => ({ ...p, [role]: { ...(p[role]||{}), [action]: !(p[role]||{})[action] } }));
+  }
+  async function handleSave() {
+    setSaving(true);
+    try { await savePerms(perms); setSaved(true); setTimeout(()=>setSaved(false),2000); }
+    catch(e) { console.error(e); alert('Could not save.'); }
+    finally { setSaving(false); }
+  }
+  return (
+    <div className="card">
+      <div className="card-header" style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <span className="card-title">Role & Permission Matrix</span>
+        <button className="btn btn-sm btn-primary" onClick={handleSave} disabled={saving}>
+          {saving?'Saving…':saved?'✓ Saved':'Save Permissions'}
+        </button>
+      </div>
+      <div className="card-body" style={{overflowX:'auto'}}>
+        <table style={{width:'100%',minWidth:500}}>
+          <thead>
+            <tr>
+              <th style={{textAlign:'left',fontSize:11,color:'var(--text-muted)',padding:'6px 10px',width:180}}>Action</th>
+              {ROLES_LIST.map(r=><th key={r.key} style={{textAlign:'center',fontSize:11,color:'var(--text-muted)',padding:'6px 10px'}}>{r.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {ACTIONS_LIST.map(a=>(
+              <tr key={a.key} style={{borderTop:'1px solid var(--grey-50)'}}>
+                <td style={{fontSize:12.5,padding:'8px 10px'}}>{a.label}</td>
+                {ROLES_LIST.map(r=>{
+                  const granted = r.key==='owner' ? true : !!(perms[r.key]||{})[a.key];
+                  return (
+                    <td key={r.key} style={{textAlign:'center',padding:'8px 10px'}}>
+                      <div onClick={()=>toggle(r.key,a.key)} style={{width:36,height:20,borderRadius:10,margin:'0 auto',
+                        cursor:r.key==='owner'?'not-allowed':'pointer',
+                        background:granted?'var(--green)':'var(--border)',position:'relative',transition:'background .15s'}}>
+                        <div style={{position:'absolute',top:2,left:granted?18:2,width:16,height:16,borderRadius:'50%',
+                          background:'#fff',transition:'left .15s',boxShadow:'0 1px 3px rgba(0,0,0,.2)'}} />
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{fontSize:11,color:'var(--text-muted)',marginTop:10}}>Owner always has full access.</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Settings ─────────────────────────────────────────
+function Settings() {
+  return (
+    <div>
+      <div className="card">
+        <div className="card-header"><span className="card-title">Danger Zone</span></div>
+        <div className="card-body">
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>
+            {[
+              { label:'Clear All Tasks', desc:'Removes all tasks permanently.', scope:'tasks' },
+              { label:'Clear Work Orders', desc:'Deletes all WOs and data.', scope:'workorders' },
+              { label:'Clear Cash Flow Data', desc:'Wipes forecast entries.', scope:'cashflow' },
+              { label:'Clear Bill Payments', desc:'Removes all bills and advances.', scope:'bills' },
+              { label:'Clear Milestones', desc:'Deletes all payment milestones.', scope:'milestones' },
+              { label:'Clear Quotations', desc:'Removes all quotations.', scope:'quotations' },
+              { label:'Clear Purchase Orders', desc:'Removes all POs.', scope:'purchaseorders' },
+              { label:'Clear Petty Cash', desc:'Removes all petty cash entries.', scope:'pettycash' },
+              { label:'Clear General Expenses', desc:'Removes all general expense entries.', scope:'expenses' },
+              { label:'Reset All Data', desc:'Wipes everything. Cannot be undone.', scope:'all' },
+            ].map(item => <ClearDataCard key={item.scope} item={item} />)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsWithUser({ currentUser }) {
+  return (
+    <div>
+      <div className="section-header">
+        <div className="section-title">Settings</div>
+      </div>
+      <div style={{marginBottom:20}}>
+        <PermissionMatrix currentUser={currentUser} />
+      </div>
+      <div style={{marginBottom:20}}>
+        <ListsManager />
+      </div>
+      <Settings currentUser={currentUser} />
+    </div>
+  );
+}
+
+// ─── Topbar titles ─────────────────────────────────────
+const TITLES = {
+  dashboard:'Dashboard',
+  quotations:'Quotations', workorders:'Work Orders', purchaseorders:'Purchase Orders',
+  projectpnl:'Project P&L', receipts:'Receipts', capital:'Capital & Loans',
+  paymenttracker:'Payment Tracker', billpayments:'Bill Payments',
+  cashflow:'Cash Flow', pettycash:'Petty Cash', projects:'Projects',
+  reminders:'Reminders', reports:'Reports', settings:'Settings',
+};
+
+// ─── App ──────────────────────────────────────────────
+// ─── Login Screen ─────────────────────────────────────
+function LoginScreen({ onLogin }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function handleLogin() {
+    if (!email.trim() || !password) return;
+    setLoading(true); setError('');
+    try {
+      const { auth, signInWithEmailAndPassword, db, doc, onSnapshot } = window.fb;
+      const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const uid = cred.user.uid;
+      // Fetch profile from Firestore
+      const userRef = doc(db, uid, uid);
+      const snap = await new Promise((res,rej) => {
+        const unsub = onSnapshot(userRef, s => { unsub(); res(s); }, rej);
+      });
+      let profile;
+      if (snap.exists()) {
+        const d = snap.data();
+        const name = d.name || d.Name || cred.user.email;
+        const role = d.role || d.Role || 'viewer';
+        profile = { uid, name, email: cred.user.email, initials: d.initials||(name[0]||'U').toUpperCase(), role };
+      } else {
+        profile = { uid, name: cred.user.email, email: cred.user.email, initials: cred.user.email[0].toUpperCase(), role: 'owner' };
+      }
+      window.currentUser = profile;
+      onLogin(profile);
+    } catch(e) {
+      console.error('Login error:', e);
+      if (e.code==='auth/invalid-credential'||e.code==='auth/wrong-password'||e.code==='auth/user-not-found') setError('Incorrect email or password.');
+      else if (e.code==='auth/invalid-email') setError('Please enter a valid email address.');
+      else if (e.code==='auth/too-many-requests') setError('Too many attempts. Please wait and try again.');
+      else setError('Sign in failed. Check your connection and try again.');
+    } finally { setLoading(false); }
+  }
+
+  return (
+    <div style={{minHeight:'100vh',background:'var(--primary-dark)',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'var(--font-sans)'}}>
+      <div style={{background:'var(--surface)',borderRadius:12,width:380,boxShadow:'0 8px 40px rgba(0,0,0,.3)',overflow:'hidden'}}>
+        <div style={{background:'var(--primary)',padding:'32px 28px 28px',textAlign:'center'}}>
+          <div style={{fontSize:36,marginBottom:10}}>💧</div>
+          <div style={{fontWeight:800,fontSize:18,color:'#fff',letterSpacing:.3}}>Nirmaan Watertech</div>
+          <div style={{fontSize:12,color:'rgba(255,255,255,.65)',marginTop:4}}>Internal Workflow Platform</div>
+        </div>
+        <div style={{padding:'28px 28px 24px'}}>
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:11.5,fontWeight:600,color:'var(--text-secondary)',display:'block',marginBottom:5}}>Email Address</label>
+            <input type="email" value={email} onChange={e=>{setEmail(e.target.value);setError('');}}
+              onKeyDown={e=>e.key==='Enter'&&handleLogin()} placeholder="you@nirmaanwatertech.com" autoFocus
+              style={{width:'100%',padding:'10px 12px',border:`1px solid ${error?'var(--red)':'var(--border)'}`,borderRadius:6,fontSize:13,outline:'none',boxSizing:'border-box'}} />
+          </div>
+          <div style={{marginBottom:20}}>
+            <label style={{fontSize:11.5,fontWeight:600,color:'var(--text-secondary)',display:'block',marginBottom:5}}>Password</label>
+            <input type="password" value={password} onChange={e=>{setPassword(e.target.value);setError('');}}
+              onKeyDown={e=>e.key==='Enter'&&handleLogin()} placeholder="Your password"
+              style={{width:'100%',padding:'10px 12px',border:`1px solid ${error?'var(--red)':'var(--border)'}`,borderRadius:6,fontSize:13,outline:'none',boxSizing:'border-box'}} />
+          </div>
+          {error && <div style={{background:'#FFEBEE',border:'1px solid #FFCDD2',borderRadius:6,padding:'8px 12px',fontSize:12,color:'var(--red)',marginBottom:16}}>{error}</div>}
+          <button onClick={handleLogin} disabled={loading||!email.trim()||!password}
+            style={{width:'100%',background:loading||!email.trim()||!password?'#90CAF9':'var(--primary)',color:'#fff',border:'none',borderRadius:6,padding:'11px',fontWeight:700,fontSize:13,cursor:'pointer'}}>
+            {loading?'Signing in…':'Sign In'}
+          </button>
+          <div style={{fontSize:11,color:'var(--text-muted)',textAlign:'center',marginTop:16}}>Nirmaan Watertech Solutions · Mulund West, Mumbai</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true); // true while checking session
+  const [active, setActiveState] = useState(() => sessionStorage.getItem('nw_active') || 'dashboard');
+  function setActive(page) {
+    sessionStorage.setItem('nw_active', page);
+    setActiveState(page);
+  }
+  const today = new Date().toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' });
+
+  // Listen for Firebase Auth state — persists across page reloads
+  useEffect(() => {
+    function startAuthListener() {
+      const { auth, onAuthStateChanged, db, doc, getDoc, onSnapshot } = window.fb;
+      const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
+        if (firebaseUser) {
+          const uid = firebaseUser.uid;
+
+          function buildProfile(data, fallbackName) {
+            const name = data?.name || data?.Name || fallbackName || firebaseUser.email;
+            const role = data?.role || data?.Role || 'owner';
+            return {
+              uid, name, email: firebaseUser.email,
+              initials: data?.initials || name[0].toUpperCase(),
+              role
+            };
+          }
+
+          function applyProfile(profile) {
+            window.currentUser = profile;
+            setCurrentUser(profile);
+            setAuthLoading(false);
+            window.dispatchEvent(new CustomEvent('user-ready', { detail: { uid } }));
+          }
+
+          // Try path 1: doc(db, uid, uid) — collection named UID, doc named UID
+          const userRef = doc(db, uid, uid);
+          const profileUnsub = onSnapshot(userRef, (snap) => {
+            if (snap.exists()) {
+              applyProfile(buildProfile(snap.data()));
+            } else {
+              // Try path 2: doc(db, 'users', uid)
+              getDoc(doc(db, 'users', uid)).then(snap2 => {
+                if (snap2.exists()) {
+                  applyProfile(buildProfile(snap2.data()));
+                } else {
+                  // No profile found — use email but default role to owner
+                  applyProfile(buildProfile(null));
+                }
+              }).catch(() => applyProfile(buildProfile(null)));
+            }
+          }, () => applyProfile(buildProfile(null)));
+          return profileUnsub;
+        } else {
+          // Not signed in
+          window.currentUser = null;
+          setCurrentUser(null);
+          setAuthLoading(false);
+        }
+      });
+      return unsub;
+    }
+
+    if (window.fb) {
+      const unsub = startAuthListener();
+      return () => unsub && unsub();
+    } else {
+      let unsub;
+      const handler = () => { unsub = startAuthListener(); };
+      window.addEventListener('firebase-ready', handler, { once: true });
+      return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
+    }
+  }, []);
+
+  async function handleLogout() {
+    try {
+      const { auth, signOut } = window.fb;
+      await signOut(auth);
+      window.currentUser = null;
+      setCurrentUser(null);
+      setActive('dashboard');
+    } catch(e) {
+      console.error('Logout error:', e);
+    }
+  }
+
+  // Show loading spinner while checking auth state
+  if (authLoading) {
+    return (
+      <div style={{minHeight:'100vh',background:'var(--primary-dark)',display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:16}}>
+        <div style={{fontSize:36}}>💧</div>
+        <div style={{color:'rgba(255,255,255,.7)',fontSize:13}}>Loading Nirmaan Watertech…</div>
+      </div>
+    );
+  }
+
+  // Show login screen if not authenticated
+  if (!currentUser) {
+    return <LoginScreen onLogin={(user) => { setCurrentUser(user); }} />;
+  }
+
+  return (
+    <div className="app">
+      {/* Sidebar */}
+      <div className="sidebar">
+        <div className="sidebar-header">
+          <div className="sidebar-logo">💧 Nirman Watertech</div>
+          <div className="sidebar-sub">Internal Workflow Platform</div>
+        </div>
+        {NAV.map((item, i) => {
+          if (item.section) return <div className="sidebar-section" key={i}>{item.section}</div>;
+          return (
+            <div className={`nav-item ${active===item.id?'active':''}`} key={item.id} onClick={()=>setActive(item.id)}>
+              <span className="icon">{item.icon}</span>
+              <span>{item.label}</span>
+              {item.badge && <span className="nav-badge">{item.badge}</span>}
+            </div>
+          );
+        })}
+
+        {/* User info at bottom of sidebar */}
+        <div style={{marginTop:'auto',padding:'12px 10px',borderTop:'1px solid rgba(255,255,255,.10)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 6px',borderRadius:8,cursor:'pointer'}} onClick={handleLogout} title="Click to sign out">
+            <div style={{width:30,height:30,borderRadius:'50%',background:'rgba(255,255,255,.15)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,flexShrink:0}}>
+              {currentUser.initials}
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:12,fontWeight:600,color:'#fff',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                {currentUser.name.includes('@')
+                  ? currentUser.name.split('@')[0].charAt(0).toUpperCase()+currentUser.name.split('@')[0].slice(1)
+                  : currentUser.name.charAt(0).toUpperCase()+currentUser.name.slice(1)}
+              </div>
+              <div style={{fontSize:10,color:'rgba(255,255,255,.5)',textTransform:'capitalize'}}>{currentUser.role.replace('_',' ')} · Sign out</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main area */}
+      <div className="main">
+        <div className="topbar">
+          <div className="topbar-title">{TITLES[active]||'Dashboard'}</div>
+          <div className="topbar-right">
+            <span style={{fontSize:11,color:'var(--text-muted)'}}>{today}</span>
+            <button className="icon-btn" title="Notifications">🔔</button>
+            <div className="avatar" title={`${currentUser.name} — ${currentUser.role}`} onClick={handleLogout} style={{cursor:'pointer',title:'Sign out'}}>
+              {currentUser.initials}
+            </div>
+          </div>
+        </div>
+        <div className="content">
+          <ErrorBoundary key={active}>
+            <Module id={active} setActive={setActive} currentUser={currentUser} />
+          </ErrorBoundary>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
