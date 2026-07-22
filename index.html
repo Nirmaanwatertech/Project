@@ -2798,11 +2798,13 @@ function CashFlow() {
   const { items: capital,  loading: capitalLoading  } = useCapitalLoans();
   const { items: expenses, loading: expLoading      } = useExpenses();
   const { items: petty,    loading: pettyLoading    } = usePettyCash();
+  const { items: pos,      loading: posLoading      } = usePurchaseOrders();
+  const { items: wos,      loading: wosLoading       } = useWorkOrders();
   const { settings, loading: settingsLoading } = useCashSettings();
   const [editingBalance, setEditingBalance] = useState(false);
   const [balanceInput, setBalanceInput] = useState('');
 
-  const loading = billsLoading || settingsLoading || receiptsLoading || capitalLoading || advLoading || expLoading || pettyLoading;
+  const loading = billsLoading || settingsLoading || receiptsLoading || capitalLoading || advLoading || expLoading || pettyLoading || posLoading || wosLoading;
   const todayStr = new Date().toISOString().slice(0,10);
 
   // ── Build all rows from every money movement ──
@@ -2831,6 +2833,64 @@ function CashFlow() {
         type: 'out', amt: Number(b.amount||0), project: b.project||'',
         ref: b.invoiceNo||'', isPast: (b.due||'') < todayStr,
       }];
+    }),
+    // Purchase Order payment schedules — these are the committed vendor
+    // payment terms before any invoice/Bill has actually been raised.
+    // Bills linked to a PO (Bill Payments → "Link to PO") are netted off the
+    // PO's schedule (earliest stage first) rather than dropping the whole PO,
+    // so a PO billed across several partial bills still shows only the
+    // genuinely un-billed remainder — never both, and never double-counted.
+    // Draft POs aren't counted since they aren't a confirmed commitment yet.
+    ...pos.flatMap(p => {
+      if (p.stage === 'Draft') return [];
+      if (!p.paymentSchedule || p.paymentSchedule.length === 0) return [];
+      let billedRemaining = bills.filter(b => b.linkedPO === p.po).reduce((s,b) => s + Number(b.amount||0), 0);
+      const orderedStages = [...p.paymentSchedule].sort((a,b) => (a.date||'').localeCompare(b.date||''));
+      const rows = [];
+      for (const stage of orderedStages) {
+        const stageAmt = Number(stage.amount||0);
+        const consumed = Math.min(billedRemaining, stageAmt);
+        billedRemaining -= consumed;
+        const unbilled = stageAmt - consumed;
+        if (unbilled <= 0) continue; // this stage is fully covered by bill(s) already raised
+        rows.push({
+          date: stage.date||'',
+          label: `${p.vendorName} — ${stage.name||'Payment'} (PO ${p.po})`,
+          cat: 'Purchase Order',
+          subcat: consumed > 0
+            ? `${inr(unbilled)} of ${inr(stageAmt)} remaining · partly billed`
+            : `${stage.pct||''}% of ${inr(p.value||0)} · not yet billed`,
+          type: 'out', amt: unbilled, project: p.project||'',
+          ref: p.po||'', isPast: (stage.date||'') < todayStr,
+        });
+      }
+      return rows;
+    }),
+    // Work Order payment schedules — same netting logic as Purchase Orders above.
+    ...wos.flatMap(w => {
+      if (w.stage === 'Draft' || w.stage === 'Cancelled') return [];
+      if (!w.paymentSchedule || w.paymentSchedule.length === 0) return [];
+      let billedRemaining = bills.filter(b => b.linkedWO === w.wo).reduce((s,b) => s + Number(b.amount||0), 0);
+      const orderedStages = [...w.paymentSchedule].sort((a,b) => (a.date||'').localeCompare(b.date||''));
+      const rows = [];
+      for (const stage of orderedStages) {
+        const stageAmt = Number(stage.amount||0);
+        const consumed = Math.min(billedRemaining, stageAmt);
+        billedRemaining -= consumed;
+        const unbilled = stageAmt - consumed;
+        if (unbilled <= 0) continue;
+        rows.push({
+          date: stage.date||'',
+          label: `${w.vendorName} — ${stage.name||'Payment'} (WO ${w.wo})`,
+          cat: 'Work Order',
+          subcat: consumed > 0
+            ? `${inr(unbilled)} of ${inr(stageAmt)} remaining · partly billed`
+            : `${stage.pct||''}% of ${inr(w.value||0)} · not yet billed`,
+          type: 'out', amt: unbilled, project: w.project||'',
+          ref: w.wo||'', isPast: (stage.date||'') < todayStr,
+        });
+      }
+      return rows;
     }),
     ...advances.map(a => ({
       date: a.datePaid||'', label: `Advance — ${a.vendor}`,
@@ -2905,14 +2965,14 @@ function CashFlow() {
     } catch(e) { console.error(e); alert('Could not save balance.'); }
   }
 
-  const TYPE_BADGE = { 'Bill':'red', 'Advance':'amber', 'General Expense':'red', 'Client Receipt':'green', 'Capital Inflow':'blue' };
+  const TYPE_BADGE = { 'Bill':'red', 'Advance':'amber', 'General Expense':'red', 'Client Receipt':'green', 'Capital Inflow':'blue', 'Purchase Order':'teal', 'Work Order':'teal' };
 
   return (
     <div>
       <div className="section-header">
         <div>
           <div className="section-title">Cash Flow</div>
-          <div className="section-sub">{loading?'Loading…':`${allRows.length} transactions — Bills · Advances · Expenses · Petty Cash · Receipts · Capital`}</div>
+          <div className="section-sub">{loading?'Loading…':`${allRows.length} transactions — Bills · POs · WOs · Advances · Expenses · Petty Cash · Receipts · Capital`}</div>
         </div>
       </div>
 
