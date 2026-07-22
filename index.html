@@ -689,7 +689,7 @@ function useKnownNames() {
 
 
 const STATUS_COLOR = { 'In Progress':'blue','Scheduled':'teal','Overdue':'red','Completed':'green','Pending':'grey' };
-const BILL_STATUS_COLOR = { 'Overdue':'red','Due Today':'amber','Upcoming':'blue','Paid':'green' };
+const BILL_STATUS_COLOR = { 'Overdue':'red','Due Today':'amber','Upcoming':'blue','Paid':'green','Partially Paid':'teal' };
 
 
 // ─── Reusable Components ──────────────────────────────
@@ -2696,15 +2696,20 @@ function CashFlow() {
   const allRows = [
     // OUTFLOWS
     ...bills.flatMap(b => {
-      // If bill has a payment schedule, use each stage as a separate outflow
+      // If bill has a payment schedule, use each stage as a separate outflow.
+      // Every stage is listed whether paid or not, so an unpaid stage always
+      // still shows up as a pending outflow — it just carries an "Unpaid" tag.
       if (b.paymentSchedule && b.paymentSchedule.length > 0) {
-        return b.paymentSchedule.map(stage => ({
-          date: stage.date||b.due||'',
-          label: `${b.payee} — ${stage.name||'Payment'}`,
-          cat: b.category||'Bill', subcat: `${stage.pct||''}% of ${inr(b.amount||0)}`,
-          type: 'out', amt: Number(stage.amount||0), project: b.project||'',
-          ref: b.invoiceNo||'', isPast: (stage.date||b.due||'') < todayStr,
-        }));
+        return b.paymentSchedule.map(stage => {
+          const paid = isStagePaid(b, stage);
+          return {
+            date: stage.date||b.due||'',
+            label: `${b.payee} — ${stage.name||'Payment'}`,
+            cat: b.category||'Bill', subcat: `${paid?'Paid':'Unpaid'} · ${stage.pct||''}% of ${inr(b.amount||0)}`,
+            type: 'out', amt: Number(stage.amount||0), project: b.project||'',
+            ref: b.invoiceNo||'', isPast: (stage.date||b.due||'') < todayStr,
+          };
+        });
       }
       // No schedule — single outflow on due date
       return [{
@@ -2939,6 +2944,24 @@ const BILLS_COLLECTION = 'bills';
 const ADVANCES_COLLECTION = 'advances';
 const PAYMENT_MODES = ['NEFT','RTGS','Cheque','Cash','UPI','Other'];
 
+// A schedule stage (or a whole no-schedule bill) counts as paid if it's
+// individually marked paid, OR the bill itself was marked fully paid
+// (covers bills created before per-stage tracking existed).
+function isStagePaid(bill, stage) { return !!(bill.paid || (stage && stage.paid)); }
+
+// Auto-derive the bill's "due" date from its payment schedule so the rest
+// of the app (Dashboard alerts, Reminders, Reports) keeps working without
+// the user having to type a separate Due Date. Priority: earliest unpaid
+// stage date → earliest stage date (all paid) → invoice date → ''.
+function computeEffectiveDue(schedule, invoiceDate) {
+  const stages = schedule || [];
+  const unpaidDates = stages.filter(s => !s.paid).map(s => s.date).filter(Boolean).sort();
+  if (unpaidDates.length) return unpaidDates[0];
+  const anyDates = stages.map(s => s.date).filter(Boolean).sort();
+  if (anyDates.length) return anyDates[0];
+  return invoiceDate || '';
+}
+
 // ─── Bills hooks and helpers ───────────────────────
 function useBills() {
   const [items, setItems] = useState([]);
@@ -2974,6 +2997,32 @@ async function addBill(data) {
 async function markBillPaid(docId) {
   const { db, doc, updateDoc } = window.fb;
   await updateDoc(userDoc(BILLS_COLLECTION, docId), { paid: true, paidAt: Date.now() });
+}
+// Mark a single payment-schedule stage as paid (for bills with a schedule).
+// Only marks the bill as fully "paid" once every stage is paid — this is
+// the fix for a bill wrongly showing fully paid after only one stage was settled.
+async function markBillStagePaid(bill, stageId) {
+  const { doc, updateDoc } = window.fb;
+  const updatedSchedule = (bill.paymentSchedule||[]).map(s =>
+    s.id === stageId ? { ...s, paid: true, paidAt: Date.now() } : s
+  );
+  const allPaid = updatedSchedule.length > 0 && updatedSchedule.every(s => s.paid);
+  await updateDoc(userDoc(BILLS_COLLECTION, bill.docId), {
+    paymentSchedule: updatedSchedule,
+    paid: allPaid,
+    due: computeEffectiveDue(updatedSchedule, bill.invoiceDate),
+  });
+}
+async function unmarkBillStagePaid(bill, stageId) {
+  const { doc, updateDoc } = window.fb;
+  const updatedSchedule = (bill.paymentSchedule||[]).map(s =>
+    s.id === stageId ? { ...s, paid: false, paidAt: null } : s
+  );
+  await updateDoc(userDoc(BILLS_COLLECTION, bill.docId), {
+    paymentSchedule: updatedSchedule,
+    paid: false,
+    due: computeEffectiveDue(updatedSchedule, bill.invoiceDate),
+  });
 }
 async function deleteBill(docId) {
   const { db, doc, deleteDoc } = window.fb;
@@ -3061,14 +3110,15 @@ function NewBillModal({ onClose, existing }) {
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
 
   async function handleSave() {
-    if (!form.payee.trim() || !form.amount || !form.due) return;
+    if (!form.payee.trim() || !form.amount) return;
     setSaving(true);
     try {
+      const due = computeEffectiveDue(schedule, form.invoiceDate);
       if (isEdit) {
         const { db, doc, updateDoc } = window.fb;
-        await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...form, amount: Number(form.amount), paymentSchedule: schedule });
+        await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...form, due, amount: Number(form.amount), paymentSchedule: schedule });
       } else {
-        await addBill({ ...form, amount: Number(form.amount), entryType: 'invoice', paymentSchedule: schedule });
+        await addBill({ ...form, due, amount: Number(form.amount), entryType: 'invoice', paymentSchedule: schedule });
       }
       onClose();
     } catch (e) { console.error(e); alert('Could not save bill.'); }
@@ -3104,13 +3154,12 @@ function NewBillModal({ onClose, existing }) {
               <input className="form-input" type="date" value={form.invoiceDate} onChange={e=>set('invoiceDate', e.target.value)} />
             </div>
             <div className="form-group">
-              <label className="form-label">Due Date</label>
-              <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
+              <label className="form-label">Amount (₹)</label>
+              <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount', e.target.value)} placeholder="0" />
             </div>
           </div>
-          <div className="form-group">
-            <label className="form-label">Amount (₹)</label>
-            <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount', e.target.value)} placeholder="0" />
+          <div style={{fontSize:11,color:'var(--text-muted)',margin:'-6px 0 10px'}}>
+            No separate due date needed — add payment stages below with their own dates, and the app tracks what's next due automatically.
           </div>
           <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.amount} />
           <div className="form-grid">
@@ -3137,8 +3186,8 @@ function NewBillModal({ onClose, existing }) {
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleSave} disabled={saving || !form.payee.trim() || !form.amount || !form.due} className="btn btn-primary"
-            style={{opacity: saving || !form.payee.trim() || !form.amount || !form.due ? 0.6 : 1}}>
+          <button onClick={handleSave} disabled={saving || !form.payee.trim() || !form.amount} className="btn btn-primary"
+            style={{opacity: saving || !form.payee.trim() || !form.amount ? 0.6 : 1}}>
             {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Save Bill'}
           </button>
         </div>
@@ -3353,18 +3402,35 @@ function BillPayments() {
 
   const todayStr = new Date().toISOString().slice(0,10);
 
-  // Bills with computed status
+  // Bills with computed status — schedule-aware, so a bill with multiple
+  // payment stages can be "Partially Paid" instead of jumping straight to "Paid".
   const withStatus = items.map(b => {
+    const stages = b.paymentSchedule || [];
+    const stagesTotal = stages.length;
+    const stagesPaidCount = stages.filter(s => isStagePaid(b, s)).length;
+    const paidAmt = stagesTotal > 0
+      ? stages.filter(s => isStagePaid(b, s)).reduce((s,r) => s + Number(r.amount||0), 0)
+      : (b.paid ? Number(b.amount||0) : 0);
+    const effectiveDue = stagesTotal > 0 ? computeEffectiveDue(stages, b.invoiceDate) : b.due;
+
     let status;
-    if (b.paid) status = 'Paid';
-    else if (b.due === todayStr) status = 'Due Today';
-    else if (b.due < todayStr) status = 'Overdue';
-    else status = 'Upcoming';
-    const days = (status === 'Overdue' && b.due) ? Math.floor((new Date(todayStr) - new Date(b.due)) / 86400000) : 0;
+    if (stagesTotal > 0) {
+      if (stagesPaidCount === stagesTotal) status = 'Paid';
+      else if (stagesPaidCount > 0) status = 'Partially Paid';
+      else if (effectiveDue === todayStr) status = 'Due Today';
+      else if (effectiveDue && effectiveDue < todayStr) status = 'Overdue';
+      else status = 'Upcoming';
+    } else {
+      if (b.paid) status = 'Paid';
+      else if (b.due === todayStr) status = 'Due Today';
+      else if (b.due < todayStr) status = 'Overdue';
+      else status = 'Upcoming';
+    }
+    const days = ((status === 'Overdue') && effectiveDue) ? Math.floor((new Date(todayStr) - new Date(effectiveDue)) / 86400000) : 0;
     const linkedAdv = advances.filter(a => a.linkedBill === b.docId);
     const advanceDeducted = linkedAdv.reduce((s,a) => s + Number(a.adjustedAmount||0), 0);
-    const netPayable = Math.max(0, Number(b.amount||0) - advanceDeducted);
-    return { ...b, computedStatus: status, days, advanceDeducted, netPayable };
+    const netPayable = Math.max(0, Number(b.amount||0) - advanceDeducted - paidAmt);
+    return { ...b, computedStatus: status, days, effectiveDue, advanceDeducted, netPayable, stagesTotal, stagesPaidCount, paidAmt };
   });
 
   function applySort(arr, key, dateField='due', amtField='amount', nameField='payee') {
@@ -3377,8 +3443,8 @@ function BillPayments() {
       case 'payee_asc':   return sorted.sort((a,b)=>(a[nameField]||'').localeCompare(b[nameField]||''));
       case 'vendor_asc':  return sorted.sort((a,b)=>(a.vendorName||a.vendor||a.source||'').localeCompare(b.vendorName||b.vendor||b.source||''));
       case 'status':      return sorted.sort((a,b)=>{
-        const order = {Overdue:0,'Due Today':1,Upcoming:2,Paid:3,Unadjusted:0,'Partially Adjusted':1,'Fully Adjusted':2};
-        return (order[a.computedStatus||a.status]??4)-(order[b.computedStatus||b.status]??4);
+        const order = {Overdue:0,'Due Today':1,'Partially Paid':2,Upcoming:3,Paid:4,Unadjusted:0,'Partially Adjusted':1,'Fully Adjusted':2};
+        return (order[a.computedStatus||a.status]??5)-(order[b.computedStatus||b.status]??5);
       });
       default: return sorted;
     }
@@ -3393,7 +3459,7 @@ function BillPayments() {
       (projectFilter === 'all' || b.project === projectFilter) &&
       (vendorFilter === 'all' || b.payee === vendorFilter) &&
       (monthFilter === 'all' || (b.due||'').startsWith(monthFilter))
-    ), sortBy
+    ), sortBy, 'effectiveDue'
   );
 
   // Stats
@@ -3401,8 +3467,8 @@ function BillPayments() {
   const overdueCount = withStatus.filter(b=>b.computedStatus==='Overdue').length;
   const dueTodayTotal = withStatus.filter(b=>b.computedStatus==='Due Today').reduce((s,b)=>s+b.netPayable,0);
   const next7 = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
-  const dueWeekTotal = withStatus.filter(b=>!b.paid&&b.due>=todayStr&&b.due<=next7).reduce((s,b)=>s+b.netPayable,0);
-  const paidTotal = withStatus.filter(b=>b.paid).reduce((s,b)=>s+Number(b.amount||0),0);
+  const dueWeekTotal = withStatus.filter(b=>b.computedStatus!=='Paid'&&b.effectiveDue>=todayStr&&b.effectiveDue<=next7).reduce((s,b)=>s+b.netPayable,0);
+  const paidTotal = withStatus.reduce((s,b)=>s+b.paidAmt,0);
 
   // Advance stats
   const totalAdvances = advances.reduce((s,a)=>s+Number(a.amount||0),0);
@@ -3476,7 +3542,7 @@ function BillPayments() {
                 </select>
                 <select className="form-input form-select" style={{width:140}} onChange={e=>setStatusFilter(e.target.value)}>
                   <option value="all">All Status</option>
-                  <option>Overdue</option><option>Due Today</option><option>Upcoming</option><option>Paid</option>
+                  <option>Overdue</option><option>Due Today</option><option>Partially Paid</option><option>Upcoming</option><option>Paid</option>
                 </select>
                 <select className="form-input form-select" style={{width:130}} value={projectFilter} onChange={e=>setBillProjectFilter(e.target.value)}>
                   <option value="all">All Projects</option>
@@ -3491,8 +3557,8 @@ function BillPayments() {
                   {billMonths.map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}</option>)}
                 </select>
                 <select className="form-input form-select" style={{width:180}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
-                  <option value="date_desc">↓ Due Date (Newest)</option>
-                  <option value="date_asc">↑ Due Date (Oldest)</option>
+                  <option value="date_desc">↓ Next Payment (Newest)</option>
+                  <option value="date_asc">↑ Next Payment (Oldest)</option>
                   <option value="amount_desc">↓ Amount (Highest)</option>
                   <option value="amount_asc">↑ Amount (Lowest)</option>
                   <option value="payee_asc">A→Z Payee</option>
@@ -3507,7 +3573,7 @@ function BillPayments() {
             ) : (
               <table>
                 <thead>
-                  <tr><th>Payee</th><th>Project</th><th>Category</th><th>Invoice #</th><th>Due Date</th><th>Bill Amount</th><th>Advance Deducted</th><th>Net Payable</th><th>Linked To</th><th>Status</th><th>Actions</th></tr>
+                  <tr><th>Payee</th><th>Project</th><th>Category</th><th>Invoice #</th><th>Bill Amount</th><th>Paid</th><th>Advance Deducted</th><th>Net Payable</th><th>Linked To</th><th>Status</th><th>Actions</th></tr>
                 </thead>
                 <tbody>
                   {filtered.map(b => (
@@ -3516,8 +3582,19 @@ function BillPayments() {
                       <td>{b.project?<span className={`badge ${PROJECT_COLOR[b.project]||'grey'}`}>{b.project}</span>:<span className="text-muted">—</span>}</td>
                       <td><span className="badge grey">{b.category}</span></td>
                       <td className="mono">{b.invoiceNo||'—'}</td>
-                      <td>{fmt(b.due)}{b.days>0&&<span style={{color:'var(--red)',fontWeight:600,marginLeft:4}}>+{b.days}d</span>}</td>
                       <td className="amount">{inr(b.amount||0)}</td>
+                      <td>
+                        {b.stagesTotal > 0 ? (
+                          <div style={{fontSize:11.5}}>
+                            <div className="fw-600" style={{color: b.stagesPaidCount===b.stagesTotal?'var(--green)':b.stagesPaidCount>0?'var(--secondary)':'var(--text-muted)'}}>
+                              {b.stagesPaidCount}/{b.stagesTotal} stages
+                            </div>
+                            <div className="text-muted" style={{fontSize:10.5}}>{inr(b.paidAmt)} paid</div>
+                          </div>
+                        ) : (
+                          <span className={`badge ${b.paid?'green':'grey'}`}>{b.paid?'Paid':'Unpaid'}</span>
+                        )}
+                      </td>
                       <td className="amount" style={{color:'var(--green)'}}>
                         {b.advanceDeducted > 0 ? <>− {inr(b.advanceDeducted)}</> : <span className="text-muted">—</span>}
                       </td>
@@ -3525,12 +3602,16 @@ function BillPayments() {
                         {inr(b.netPayable)}
                       </td>
                       <td><XRefBadge po={b.linkedPO} wo={b.linkedWO} /></td>
-                      <td><span className={`badge ${BILL_STATUS_COLOR[b.computedStatus]}`}>{b.computedStatus}</span></td>
+                      <td>
+                        <span className={`badge ${BILL_STATUS_COLOR[b.computedStatus]}`}>{b.computedStatus}</span>
+                        {b.days>0&&<span style={{color:'var(--red)',fontWeight:600,marginLeft:4,fontSize:11}}>+{b.days}d</span>}
+                      </td>
                       <td>
                         <div className="flex gap-2">
                           <button className="btn btn-sm btn-ghost" onClick={()=>setEditBill(b)}>Edit</button>
-                          {b.paymentSchedule&&b.paymentSchedule.length>0&&<button className="btn btn-sm btn-outline" onClick={()=>setViewBillSchedule(b)}>Schedule</button>}
-                          {!b.paid && <button className="btn btn-sm btn-primary" onClick={()=>markBillPaid(b.docId)}>Mark Paid</button>}
+                          {b.stagesTotal>0
+                            ? <button className="btn btn-sm btn-outline" onClick={()=>setViewBillSchedule(b)}>Payments</button>
+                            : (!b.paid && <button className="btn btn-sm btn-primary" onClick={()=>markBillPaid(b.docId)}>Mark Paid</button>)}
                           <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteBill(b.docId);}}>Delete</button>
                         </div>
                       </td>
@@ -3632,30 +3713,53 @@ function BillPayments() {
       {editBill && <NewBillModal onClose={()=>setEditBill(null)} existing={editBill} />}
       {showNewAdvance && <NewAdvanceModal onClose={()=>setShowNewAdvance(false)} pos={pos} wos={wos} bills={items} />}
       {editAdvance && <NewAdvanceModal onClose={()=>setEditAdvance(null)} pos={pos} wos={wos} bills={items} existing={editAdvance} />}
-      {viewBillSchedule && (
+      {viewBillSchedule && (() => {
+        // Always read the live bill from Firestore data (not the stale snapshot
+        // captured when "Payments" was clicked) so paid-status updates show instantly.
+        const liveBill = items.find(x => x.docId === viewBillSchedule.docId) || viewBillSchedule;
+        const stages = liveBill.paymentSchedule || [];
+        const paidAmt = stages.filter(s => isStagePaid(liveBill, s)).reduce((s,r) => s + Number(r.amount||0), 0);
+        const totalAmt = Number(liveBill.amount||0);
+        return (
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{background:'var(--surface)',borderRadius:10,width:500,maxHeight:'80vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:'var(--surface)',borderRadius:10,width:540,maxHeight:'80vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
             <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
-              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payment Schedule — {viewBillSchedule.payee}</span>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payments — {liveBill.payee}</span>
             </div>
             <div style={{padding:'16px 20px'}}>
-              <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:12}}>Total: {inr(viewBillSchedule.amount||0)}</div>
+              <div className="flex gap-2" style={{marginBottom:12,flexWrap:'wrap'}}>
+                <span style={{fontSize:12,color:'var(--text-muted)'}}>Bill Total: <strong style={{color:'var(--text)'}}>{inr(totalAmt)}</strong></span>
+                <span style={{fontSize:12,color:'var(--text-muted)'}}>· Paid: <strong style={{color:'var(--green)'}}>{inr(paidAmt)}</strong></span>
+                <span style={{fontSize:12,color:'var(--text-muted)'}}>· Remaining: <strong style={{color: totalAmt-paidAmt>0?'var(--red)':'var(--green)'}}>{inr(Math.max(0,totalAmt-paidAmt))}</strong></span>
+              </div>
               <table style={{width:'100%'}}>
                 <thead><tr style={{background:'var(--grey-50)'}}>
                   <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Stage</th>
                   <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>%</th>
                   <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Amount</th>
-                  <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Due Date</th>
+                  <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Date</th>
+                  <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Status</th>
                 </tr></thead>
                 <tbody>
-                  {(viewBillSchedule.paymentSchedule||[]).map((s,i)=>(
-                    <tr key={i} style={{borderTop:'1px solid var(--grey-50)'}}>
+                  {stages.map((s,i)=>{
+                    const paid = isStagePaid(liveBill, s);
+                    return (
+                    <tr key={s.id||i} style={{borderTop:'1px solid var(--grey-50)'}}>
                       <td style={{padding:'8px 10px',fontSize:12.5,fontWeight:600}}>{s.name||`Stage ${i+1}`}</td>
                       <td style={{padding:'8px 10px',fontSize:12}}>{s.pct||'—'}%</td>
                       <td style={{padding:'8px 10px',fontSize:12,fontWeight:600,color:'var(--red)'}}>{inr(s.amount||0)}</td>
                       <td style={{padding:'8px 10px',fontSize:12}}>{fmt(s.date)||'—'}</td>
+                      <td style={{padding:'8px 10px',fontSize:12}}>
+                        {paid
+                          ? <div className="flex gap-2" style={{alignItems:'center'}}>
+                              <span className="badge green">✓ Paid</span>
+                              <span style={{fontSize:10.5,color:'var(--text-muted)',cursor:'pointer',textDecoration:'underline'}}
+                                onClick={()=>unmarkBillStagePaid(liveBill, s.id)}>undo</span>
+                            </div>
+                          : <button className="btn btn-sm btn-primary" onClick={()=>markBillStagePaid(liveBill, s.id)}>Mark Paid</button>}
+                      </td>
                     </tr>
-                  ))}
+                  );})}
                 </tbody>
               </table>
             </div>
@@ -3664,7 +3768,8 @@ function BillPayments() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
       {linkingAdvance && <LinkAdvanceModal advance={linkingAdvance} onClose={()=>setLinkingAdvance(null)} pos={pos} bills={items} />}
     </div>
   );
