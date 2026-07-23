@@ -282,6 +282,24 @@ function fmt(dateStr) {
   return dateStr;
 }
 
+// ─── GST helpers ────────────────────────────────────────
+// Every value/amount field across Quotations, Work Orders, Purchase Orders,
+// Bills and RA Bills is the BASE value (before GST). These helpers gross it
+// up consistently everywhere GST needs to be added back in — for display,
+// and for real cash-flow amounts, which must include GST since that's the
+// actual money that changes hands.
+const DEFAULT_GST_RATE = 18;
+function gstMultiplier(rate) { return 1 + (Number(rate)||0)/100; }
+function gstPortionOf(base, rate) { return Number(base||0) * (Number(rate)||0)/100; }
+function totalWithGST(base, rate) { return Number(base||0) * gstMultiplier(rate); }
+// Next GSTR-3B-style filing due date (20th of the month after the given YYYY-MM period)
+function gstDueDateFor(period) {
+  const [y, m] = period.split('-').map(Number);
+  const nm = m === 12 ? 1 : m + 1;
+  const ny = m === 12 ? y + 1 : y;
+  return `${ny}-${String(nm).padStart(2,'0')}-20`;
+}
+
 // ─── Firestore path helpers ────────────────────────────
 // All data lives under users/{uid}/{collection} — matches where
 // Firestore Console placed it when collections were created inside the user doc.
@@ -2107,11 +2125,12 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
   const [form, setForm] = useState(isEdit ? {
     wo: existing.wo||nextNumber, vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
+    gstRate: existing.gstRate!=null ? String(existing.gstRate) : String(DEFAULT_GST_RATE),
     linkedQuotation: existing.linkedQuotation||'', stage: existing.stage||'Draft',
     due: existing.due||'', notes: existing.notes||'',
     project: existing.project||'', split: existing.split||{pontoon:50,wtp:50}
   } : {
-    wo: nextNumber, vendorName: '', description: '', value: '',
+    wo: nextNumber, vendorName: '', description: '', value: '', gstRate: String(DEFAULT_GST_RATE),
     linkedQuotation: '', stage: 'Draft', due: '', notes: '',
     project: '', split:{pontoon:50,wtp:50}
   });
@@ -2130,6 +2149,7 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
         vendorName: q.vendorName || s.vendorName,
         description: s.description || q.description || '',
         value: s.value || (q.value ? String(q.value) : ''),
+        gstRate: (s.gstRate && s.gstRate !== String(DEFAULT_GST_RATE)) ? s.gstRate : (q.gstRate!=null ? String(q.gstRate) : s.gstRate),
       }));
       if ((!schedule || schedule.length === 0) && q.paymentSchedule && q.paymentSchedule.length > 0) {
         setSchedule(q.paymentSchedule.map(r => ({ ...r, id: genRowId() })));
@@ -2141,8 +2161,8 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
     if (!form.vendorName.trim() || !form.description.trim()) return;
     setSaving(true);
     try {
-      if (isEdit) await updateWorkOrder(existing.docId, { ...form, value: Number(form.value)||0, paymentSchedule: schedule });
-      else await addWorkOrder({ ...form, value: Number(form.value) || 0, paymentSchedule: schedule });
+      if (isEdit) await updateWorkOrder(existing.docId, { ...form, value: Number(form.value)||0, gstRate: Number(form.gstRate)||0, paymentSchedule: schedule });
+      else await addWorkOrder({ ...form, value: Number(form.value) || 0, gstRate: Number(form.gstRate)||0, paymentSchedule: schedule });
       onClose();
     } catch (e) { console.error(e); alert('Could not save work order.'); }
     finally { setSaving(false); }
@@ -2183,13 +2203,22 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
           </div>
           <div className="form-grid">
             <div className="form-group">
-              <label className="form-label">Total Value (₹)</label>
+              <label className="form-label">Total Value — Base (₹)</label>
               <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
             </div>
             <div className="form-group">
-              <label className="form-label">Expected Completion Date</label>
-              <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
+              <label className="form-label">GST Rate (%)</label>
+              <input className="form-input font-mono" type="number" value={form.gstRate} onChange={e=>set('gstRate', e.target.value)} placeholder="18" />
             </div>
+          </div>
+          {form.value && (
+            <div style={{fontSize:11.5,color:'var(--text-muted)',margin:'-6px 0 12px'}}>
+              GST: {inr(gstPortionOf(form.value, form.gstRate))} · Total incl. GST: <strong style={{color:'var(--text)'}}>{inr(totalWithGST(form.value, form.gstRate))}</strong>
+            </div>
+          )}
+          <div className="form-group">
+            <label className="form-label">Expected Completion Date</label>
+            <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
           </div>
           <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
           <div className="form-group">
@@ -2333,7 +2362,10 @@ function WorkOrders() {
                   <td className="fw-600">{w.vendorName}</td>
                   <td>{w.project?<span className={`badge ${PROJECT_COLOR[w.project]||'grey'}`}>{w.project}</span>:<span className="text-muted">—</span>}</td>
                   <td style={{maxWidth:180}}>{w.description}</td>
-                  <td className="amount fw-600">{inr(w.value||0)}</td>
+                  <td className="amount fw-600">
+                    {inr(totalWithGST(w.value,w.gstRate)||0)}
+                    <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:400}}>{inr(w.value||0)} + {w.gstRate||0}% GST</div>
+                  </td>
                   <td>{w.due || '—'}</td>
                   <td>
                     {w.paymentSchedule && w.paymentSchedule.length > 0 ? (
@@ -2457,11 +2489,12 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
   const [form, setForm] = useState(isEdit ? {
     po: existing.po||nextNumber, vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
+    gstRate: existing.gstRate!=null ? String(existing.gstRate) : String(DEFAULT_GST_RATE),
     linkedQuotation: existing.linkedQuotation||'', stage: existing.stage||'Draft',
     project: existing.project||''
   } : {
     po: nextNumber, vendorName: prefill?.party || '', description: prefill?.description || '',
-    value: prefill?.value ? String(prefill.value) : '',
+    value: prefill?.value ? String(prefill.value) : '', gstRate: String(DEFAULT_GST_RATE),
     linkedQuotation: prefill?.fromQuotation || '',
     stage: 'Draft', project: '', split:{pontoon:50,wtp:50}
   });
@@ -2482,6 +2515,7 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
         vendorName: s.vendorName || q.vendorName || '',
         description: s.description || q.description || '',
         value: s.value || (q.value ? String(q.value) : ''),
+        gstRate: (s.gstRate && s.gstRate !== String(DEFAULT_GST_RATE)) ? s.gstRate : (q.gstRate!=null ? String(q.gstRate) : s.gstRate),
       }));
       if ((!schedule || schedule.length === 0) && q.paymentSchedule && q.paymentSchedule.length > 0) {
         setSchedule(q.paymentSchedule.map(r => ({ ...r, id: genRowId() })));
@@ -2493,8 +2527,8 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
     if (!form.vendorName.trim() || !form.value) return;
     setSaving(true);
     try {
-      if (isEdit) await updatePO(existing.docId, { ...form, value: Number(form.value), paymentSchedule: schedule });
-      else await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule });
+      if (isEdit) await updatePO(existing.docId, { ...form, value: Number(form.value), gstRate: Number(form.gstRate)||0, paymentSchedule: schedule });
+      else await addPO({ ...form, value: Number(form.value), gstRate: Number(form.gstRate)||0, paymentSchedule: schedule });
       onClose();
     } catch (e) { console.error(e); alert('Could not save purchase order.'); }
     finally { setSaving(false); }
@@ -2543,10 +2577,21 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
             <label className="form-label">Description of Goods / Materials</label>
             <input className="form-input" value={form.description} onChange={e=>set('description', e.target.value)} placeholder="e.g. RO membranes 4040 — 10 units" />
           </div>
-          <div className="form-group">
-            <label className="form-label">Total Value (₹)</label>
-            <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Total Value — Base (₹)</label>
+              <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">GST Rate (%)</label>
+              <input className="form-input font-mono" type="number" value={form.gstRate} onChange={e=>set('gstRate', e.target.value)} placeholder="18" />
+            </div>
           </div>
+          {form.value && (
+            <div style={{fontSize:11.5,color:'var(--text-muted)',margin:'-6px 0 12px'}}>
+              GST: {inr(gstPortionOf(form.value, form.gstRate))} · Total incl. GST: <strong style={{color:'var(--text)'}}>{inr(totalWithGST(form.value, form.gstRate))}</strong>
+            </div>
+          )}
           <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
           <div className="form-group">
             <label className="form-label">Stage</label>
@@ -2681,7 +2726,10 @@ function PurchaseOrders() {
                   <td className="fw-600">{p.vendorName}</td>
                   <td>{p.project?<span className={`badge ${PROJECT_COLOR[p.project]||'grey'}`}>{p.project}</span>:<span className="text-muted">—</span>}</td>
                   <td style={{maxWidth:180}}>{p.description || '—'}</td>
-                  <td className="amount fw-600">{inr(p.value||0)}</td>
+                  <td className="amount fw-600">
+                    {inr(totalWithGST(p.value,p.gstRate)||0)}
+                    <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:400}}>{inr(p.value||0)} + {p.gstRate||0}% GST</div>
+                  </td>
                   <td>
                     {p.paymentSchedule && p.paymentSchedule.length > 0 ? (
                       <span className="btn btn-sm btn-ghost" style={{cursor:'pointer',whiteSpace:'nowrap'}} onClick={() => setViewSchedule({...p, label:p.po})}>
@@ -2800,12 +2848,44 @@ function CashFlow() {
   const { items: petty,    loading: pettyLoading    } = usePettyCash();
   const { items: pos,      loading: posLoading      } = usePurchaseOrders();
   const { items: wos,      loading: wosLoading       } = useWorkOrders();
+  const { items: raBills,  loading: raBillsLoading   } = useRABills();
   const { settings, loading: settingsLoading } = useCashSettings();
   const [editingBalance, setEditingBalance] = useState(false);
   const [balanceInput, setBalanceInput] = useState('');
 
-  const loading = billsLoading || settingsLoading || receiptsLoading || capitalLoading || advLoading || expLoading || pettyLoading || posLoading || wosLoading;
+  const loading = billsLoading || settingsLoading || receiptsLoading || capitalLoading || advLoading || expLoading || pettyLoading || posLoading || wosLoading || raBillsLoading;
   const todayStr = new Date().toISOString().slice(0,10);
+
+  // ── Net GST payable schedule ──
+  // Output GST: GST on RA Bills raised to clients (liability arises on invoice
+  // date, not on receipt date — standard invoice-based GST treatment).
+  // Input GST / ITC: GST on vendor Bills booked (reclaimable against output
+  // GST). PO/WO schedules are commitments only — GST from them isn't ITC-
+  // eligible until an actual Bill is booked, so they're intentionally excluded.
+  // Net liability per month carries forward as credit if negative, and falls
+  // due ~20th of the following month (GSTR-3B style) if positive.
+  const gstMonths = {};
+  raBills.forEach(rb => {
+    const m = (rb.dateSubmitted||'').slice(0,7);
+    if (!m) return;
+    gstMonths[m] = gstMonths[m] || { output: 0, input: 0 };
+    gstMonths[m].output += gstPortionOf(rb.amountClaimed, rb.gstRate);
+  });
+  bills.forEach(b => {
+    const m = (b.invoiceDate||'').slice(0,7);
+    if (!m) return;
+    gstMonths[m] = gstMonths[m] || { output: 0, input: 0 };
+    gstMonths[m].input += gstPortionOf(b.amount, b.gstRate);
+  });
+  let gstCreditCarry = 0;
+  const gstSchedule = Object.keys(gstMonths).sort().map(m => {
+    const { output, input } = gstMonths[m];
+    const availableITC = input + gstCreditCarry;
+    const net = output - availableITC;
+    if (net > 0) { gstCreditCarry = 0; return { month: m, due: gstDueDateFor(m), amount: net }; }
+    gstCreditCarry = -net;
+    return null;
+  }).filter(Boolean);
 
   // ── Build all rows from every money movement ──
   const allRows = [
@@ -2814,14 +2894,16 @@ function CashFlow() {
       // If bill has a payment schedule, use each stage as a separate outflow.
       // Every stage is listed whether paid or not, so an unpaid stage always
       // still shows up as a pending outflow — it just carries an "Unpaid" tag.
+      // Stage amounts are % of the BASE value, so each is grossed up by the
+      // bill's GST rate to get the real cash amount that actually goes out.
       if (b.paymentSchedule && b.paymentSchedule.length > 0) {
         return b.paymentSchedule.map(stage => {
           const paid = isStagePaid(b, stage);
           return {
             date: stage.date||b.due||'',
             label: `${b.payee} — ${stage.name||'Payment'}`,
-            cat: b.category||'Bill', subcat: `${paid?'Paid':'Unpaid'} · ${stage.pct||''}% of ${inr(b.amount||0)}`,
-            type: 'out', amt: Number(stage.amount||0), project: b.project||'',
+            cat: b.category||'Bill', subcat: `${paid?'Paid':'Unpaid'} · ${stage.pct||''}% of ${inr(totalWithGST(b.amount,b.gstRate)||0)} incl. GST`,
+            type: 'out', amt: totalWithGST(stage.amount, b.gstRate), project: b.project||'',
             ref: b.invoiceNo||'', isPast: (stage.date||b.due||'') < todayStr,
           };
         });
@@ -2829,8 +2911,8 @@ function CashFlow() {
       // No schedule — single outflow on due date
       return [{
         date: b.due||b.invoiceDate||'', label: b.payee,
-        cat: b.category||'Bill', subcat: b.paid?'Paid':'Unpaid',
-        type: 'out', amt: Number(b.amount||0), project: b.project||'',
+        cat: b.category||'Bill', subcat: `${b.paid?'Paid':'Unpaid'} · incl. ${b.gstRate||0}% GST`,
+        type: 'out', amt: totalWithGST(b.amount, b.gstRate), project: b.project||'',
         ref: b.invoiceNo||'', isPast: (b.due||'') < todayStr,
       }];
     }),
@@ -2857,10 +2939,10 @@ function CashFlow() {
           date: stage.date||'',
           label: `${p.vendorName} — ${stage.name||'Payment'} (PO ${p.po})`,
           cat: 'Purchase Order',
-          subcat: consumed > 0
-            ? `${inr(unbilled)} of ${inr(stageAmt)} remaining · partly billed`
-            : `${stage.pct||''}% of ${inr(p.value||0)} · not yet billed`,
-          type: 'out', amt: unbilled, project: p.project||'',
+          subcat: (consumed > 0
+            ? `${inr(totalWithGST(unbilled,p.gstRate))} of ${inr(totalWithGST(stageAmt,p.gstRate))} remaining · partly billed`
+            : `${stage.pct||''}% of ${inr(totalWithGST(p.value,p.gstRate)||0)} · not yet billed`) + ` · incl. ${p.gstRate||0}% GST`,
+          type: 'out', amt: totalWithGST(unbilled, p.gstRate), project: p.project||'',
           ref: p.po||'', isPast: (stage.date||'') < todayStr,
         });
       }
@@ -2883,15 +2965,23 @@ function CashFlow() {
           date: stage.date||'',
           label: `${w.vendorName} — ${stage.name||'Payment'} (WO ${w.wo})`,
           cat: 'Work Order',
-          subcat: consumed > 0
-            ? `${inr(unbilled)} of ${inr(stageAmt)} remaining · partly billed`
-            : `${stage.pct||''}% of ${inr(w.value||0)} · not yet billed`,
-          type: 'out', amt: unbilled, project: w.project||'',
+          subcat: (consumed > 0
+            ? `${inr(totalWithGST(unbilled,w.gstRate))} of ${inr(totalWithGST(stageAmt,w.gstRate))} remaining · partly billed`
+            : `${stage.pct||''}% of ${inr(totalWithGST(w.value,w.gstRate)||0)} · not yet billed`) + ` · incl. ${w.gstRate||0}% GST`,
+          type: 'out', amt: totalWithGST(unbilled, w.gstRate), project: w.project||'',
           ref: w.wo||'', isPast: (stage.date||'') < todayStr,
         });
       }
       return rows;
     }),
+    // Net GST Payable — output GST (client invoices) minus input GST/ITC
+    // (vendor bills), due around the 20th of the following month.
+    ...gstSchedule.map(g => ({
+      date: g.due, label: `GST Payment — ${new Date(g.month+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}`,
+      cat: 'GST Payable', subcat: 'Net of output GST vs input tax credit (GSTR-3B)',
+      type: 'out', amt: g.amount, project: '',
+      ref: '', isPast: g.due < todayStr,
+    })),
     ...advances.map(a => ({
       date: a.datePaid||'', label: `Advance — ${a.vendor}`,
       cat: 'Advance', subcat: a.status||'',
@@ -2965,7 +3055,7 @@ function CashFlow() {
     } catch(e) { console.error(e); alert('Could not save balance.'); }
   }
 
-  const TYPE_BADGE = { 'Bill':'red', 'Advance':'amber', 'General Expense':'red', 'Client Receipt':'green', 'Capital Inflow':'blue', 'Purchase Order':'teal', 'Work Order':'teal' };
+  const TYPE_BADGE = { 'Bill':'red', 'Advance':'amber', 'General Expense':'red', 'Client Receipt':'green', 'Capital Inflow':'blue', 'Purchase Order':'teal', 'Work Order':'teal', 'GST Payable':'red' };
 
   return (
     <div>
@@ -3268,10 +3358,11 @@ function NewBillModal({ onClose, existing }) {
     payee: existing.payee||'', category: existing.category||'Vendor',
     invoiceNo: existing.invoiceNo||'', invoiceDate: existing.invoiceDate||'',
     due: existing.due||'', amount: existing.amount ? String(existing.amount) : '',
+    gstRate: existing.gstRate!=null ? String(existing.gstRate) : String(DEFAULT_GST_RATE),
     notes: existing.notes||'', project: existing.project||'', split: existing.split||{pontoon:50,wtp:50},
     linkedPO: existing.linkedPO||'', linkedWO: existing.linkedWO||'',
   } : {
-    payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '',
+    payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '', gstRate: String(DEFAULT_GST_RATE),
     notes: '', project: '', split:{pontoon:50,wtp:50}, linkedPO: '', linkedWO: '',
   });
   const [schedule, setSchedule] = useState(
@@ -3289,9 +3380,9 @@ function NewBillModal({ onClose, existing }) {
       const due = computeEffectiveDue(schedule, form.invoiceDate);
       if (isEdit) {
         const { db, doc, updateDoc } = window.fb;
-        await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...form, due, amount: Number(form.amount), paymentSchedule: schedule });
+        await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...form, due, amount: Number(form.amount), gstRate: Number(form.gstRate)||0, paymentSchedule: schedule });
       } else {
-        await addBill({ ...form, due, amount: Number(form.amount), entryType: 'invoice', paymentSchedule: schedule });
+        await addBill({ ...form, due, amount: Number(form.amount), gstRate: Number(form.gstRate)||0, entryType: 'invoice', paymentSchedule: schedule });
       }
       onClose();
     } catch (e) { console.error(e); alert('Could not save bill.'); }
@@ -3327,10 +3418,19 @@ function NewBillModal({ onClose, existing }) {
               <input className="form-input" type="date" value={form.invoiceDate} onChange={e=>set('invoiceDate', e.target.value)} />
             </div>
             <div className="form-group">
-              <label className="form-label">Amount (₹)</label>
+              <label className="form-label">Amount — Base (₹)</label>
               <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount', e.target.value)} placeholder="0" />
             </div>
           </div>
+          <div className="form-group">
+            <label className="form-label">GST Rate (%)</label>
+            <input className="form-input font-mono" type="number" style={{maxWidth:140}} value={form.gstRate} onChange={e=>set('gstRate', e.target.value)} placeholder="18" />
+          </div>
+          {form.amount && (
+            <div style={{fontSize:11.5,color:'var(--text-muted)',margin:'-6px 0 12px'}}>
+              GST: {inr(gstPortionOf(form.amount, form.gstRate))} · Total incl. GST: <strong style={{color:'var(--text)'}}>{inr(totalWithGST(form.amount, form.gstRate))}</strong>
+            </div>
+          )}
           <div style={{fontSize:11,color:'var(--text-muted)',margin:'-6px 0 10px'}}>
             No separate due date needed — add payment stages below with their own dates, and the app tracks what's next due automatically.
           </div>
@@ -3755,7 +3855,10 @@ function BillPayments() {
                       <td>{b.project?<span className={`badge ${PROJECT_COLOR[b.project]||'grey'}`}>{b.project}</span>:<span className="text-muted">—</span>}</td>
                       <td><span className="badge grey">{b.category}</span></td>
                       <td className="mono">{b.invoiceNo||'—'}</td>
-                      <td className="amount">{inr(b.amount||0)}</td>
+                      <td className="amount">
+                        {inr(totalWithGST(b.amount,b.gstRate)||0)}
+                        <div style={{fontSize:10,color:'var(--text-muted)'}}>{inr(b.amount||0)} + {b.gstRate||0}% GST</div>
+                      </td>
                       <td>
                         {b.stagesTotal > 0 ? (
                           <div style={{fontSize:11.5}}>
@@ -4215,7 +4318,7 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
   const [form, setForm] = useState({
     raBillNo: nextRABillNumber(existingCount),
     scheduleId: '', client:'', projectRef:'', milestoneIndex: '',
-    amountClaimed: '', dateSubmitted: new Date().toISOString().slice(0,10),
+    amountClaimed: '', gstRate: String(DEFAULT_GST_RATE), dateSubmitted: new Date().toISOString().slice(0,10),
     notes: ''
   });
   const [saving, setSaving] = useState(false);
@@ -4247,8 +4350,9 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
       await addRABill({
         ...form,
         amountClaimed: Number(form.amountClaimed),
+        gstRate: Number(form.gstRate)||0,
         amountReceived: 0,
-        balancePending: Number(form.amountClaimed),
+        balancePending: totalWithGST(form.amountClaimed, form.gstRate),
         status: 'Submitted',
         milestoneName: selectedMilestone?.name||'',
         project: selectedSchedule?.project||'',
@@ -4310,10 +4414,21 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
             </div>
           )}
 
-          <div className="form-group">
-            <label className="form-label">Amount Claimed (₹)</label>
-            <input className="form-input font-mono" value={form.amountClaimed} onChange={e=>set('amountClaimed',e.target.value)} placeholder="0" />
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Amount Claimed — Base (₹)</label>
+              <input className="form-input font-mono" value={form.amountClaimed} onChange={e=>set('amountClaimed',e.target.value)} placeholder="0" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">GST Rate (%)</label>
+              <input className="form-input font-mono" type="number" value={form.gstRate} onChange={e=>set('gstRate',e.target.value)} placeholder="18" />
+            </div>
           </div>
+          {form.amountClaimed && (
+            <div style={{fontSize:11.5,color:'var(--text-muted)',margin:'-6px 0 12px'}}>
+              GST: {inr(gstPortionOf(form.amountClaimed, form.gstRate))} · Total invoice (incl. GST): <strong style={{color:'var(--text)'}}>{inr(totalWithGST(form.amountClaimed, form.gstRate))}</strong>
+            </div>
+          )}
           <div className="form-group">
             <label className="form-label">Notes</label>
             <input className="form-input" value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Optional — scope, period, etc." />
@@ -4336,7 +4451,8 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
 // ════════════════════════════════════════════════════
 function RecordReceiptModal({ raBill, onClose, allReceipts }) {
   const alreadyReceived = allReceipts.filter(r=>r.raBillId===raBill.docId).reduce((s,r)=>s+Number(r.amountReceived||0),0);
-  const pendingBalance = Math.max(0, Number(raBill.amountClaimed||0) - alreadyReceived);
+  const invoiceTotal = totalWithGST(raBill.amountClaimed, raBill.gstRate);
+  const pendingBalance = Math.max(0, invoiceTotal - alreadyReceived);
 
   const [form, setForm] = useState({
     amountReceived: String(pendingBalance),
@@ -4372,7 +4488,7 @@ function RecordReceiptModal({ raBill, onClose, allReceipts }) {
       });
       // Update RA Bill received total and status
       const totalReceived = alreadyReceived + amt;
-      const newPending = Math.max(0, Number(raBill.amountClaimed||0) - totalReceived);
+      const newPending = Math.max(0, totalWithGST(raBill.amountClaimed, raBill.gstRate) - totalReceived);
       const status = newPending <= 0 ? 'Fully Received' : 'Partially Received';
       await updateRABill(raBill.docId, {
         amountReceived: totalReceived,
@@ -4399,7 +4515,9 @@ function RecordReceiptModal({ raBill, onClose, allReceipts }) {
             <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Billing Milestone</span><span>{raBill.milestoneName||'—'}</span></div>
             <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>RA Bill No.</span><span className="mono">{raBill.raBillNo}</span></div>
             <div style={{borderTop:'1px solid #C8E6C9',marginTop:8,paddingTop:8}}>
-              <div className="flex justify-between"><span style={{color:'var(--text-muted)'}}>Total Claimed</span><span className="amount fw-600">{inr(raBill.amountClaimed||0)}</span></div>
+              <div className="flex justify-between"><span style={{color:'var(--text-muted)'}}>Base Value</span><span className="amount">{inr(raBill.amountClaimed||0)}</span></div>
+              <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>GST ({raBill.gstRate||0}%)</span><span className="amount">{inr(gstPortionOf(raBill.amountClaimed, raBill.gstRate))}</span></div>
+              <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Total Invoice (incl. GST)</span><span className="amount fw-600">{inr(invoiceTotal)}</span></div>
               <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Already Received</span><span className="amount" style={{color:'var(--green)'}}>{inr(alreadyReceived)}</span></div>
               <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Balance Pending</span><span className="amount fw-600" style={{color:'var(--red)'}}>{inr(pendingBalance)}</span></div>
             </div>
@@ -4673,7 +4791,10 @@ function Receipts() {
                     <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{b.projectRef||'—'}</td>
                     <td>{b.milestoneName||'—'}</td>
                     <td>{b.dateSubmitted}</td>
-                    <td className="amount fw-600">{inr(b.amountClaimed||0)}</td>
+                    <td className="amount fw-600">
+                      {inr(totalWithGST(b.amountClaimed,b.gstRate)||0)}
+                      <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:400}}>{inr(b.amountClaimed||0)} + {b.gstRate||0}% GST</div>
+                    </td>
                     <td className="amount" style={{color:'var(--green)',fontWeight:600}}>{inr(b.amountReceived||0)}</td>
                     <td className="amount" style={{color:Number(b.balancePending||0)>0?'var(--red)':'var(--green)',fontWeight:600}}>{inr(b.balancePending||0)}</td>
                     <td><span className={`badge ${RA_STATUS_COLOR[b.status]||'grey'}`}>{b.status}</span></td>
@@ -6584,7 +6705,10 @@ function QuotationsWithUser({ currentUser }) {
                   <td className="fw-600">{q.vendorName}</td>
                   <td>{q.project?<span className={`badge ${PROJECT_COLOR[q.project]||'grey'}`}>{q.project}</span>:<span className="text-muted">—</span>}</td>
                   <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{reqLabel(q.linkedReq)}</td>
-                  <td className="amount fw-600">{inr(q.value||0)}</td>
+                  <td className="amount fw-600">
+                    {inr(totalWithGST(q.value,q.gstRate)||0)}
+                    <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:400}}>{inr(q.value||0)} + {q.gstRate||0}% GST</div>
+                  </td>
                   <td>
                     {q.paymentSchedule&&q.paymentSchedule.length>0
                       ? <span className="btn btn-sm btn-ghost" style={{cursor:'pointer'}} onClick={()=>setViewSchedule(q)}>{q.paymentSchedule.length} stage{q.paymentSchedule.length===1?'':'s'}</span>
@@ -6657,10 +6781,10 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
   const [form, setForm] = useState(isEdit ? {
     quotNo: existing.quotNo||'', vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
-    receivedDate: existing.receivedDate||'',
+    receivedDate: existing.receivedDate||'', gstRate: existing.gstRate!=null ? String(existing.gstRate) : String(DEFAULT_GST_RATE),
     stage: existing.stage||'Receipt of Quotation', notes: existing.notes||'', project: existing.project||''
   } : {
-    quotNo:'', vendorName:'', description:'', value:'',
+    quotNo:'', vendorName:'', description:'', value:'', gstRate: String(DEFAULT_GST_RATE),
     receivedDate: new Date().toISOString().slice(0,10),
     stage:'Receipt of Quotation', notes:'', project:''
   });
@@ -6673,9 +6797,9 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
     setSaving(true);
     try{
       if (isEdit) {
-        await updateQuotation(existing.docId, {...form, value:Number(form.value), paymentSchedule:schedule});
+        await updateQuotation(existing.docId, {...form, value:Number(form.value), gstRate:Number(form.gstRate)||0, paymentSchedule:schedule});
       } else {
-        await addQuotation({...form,value:Number(form.value),paymentSchedule:schedule});
+        await addQuotation({...form,value:Number(form.value), gstRate:Number(form.gstRate)||0, paymentSchedule:schedule});
       }
       onClose();
     }catch(e){console.error(e);alert('Could not save quotation.');}
@@ -6707,10 +6831,21 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
             <label className="form-label">Description</label>
             <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. RO membranes — 5 units, 4040 size" />
           </div>
-          <div className="form-group">
-            <label className="form-label">Total Value (₹)</label>
-            <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} placeholder="0" />
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Total Value — Base (₹)</label>
+              <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} placeholder="0" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">GST Rate (%)</label>
+              <input className="form-input font-mono" type="number" value={form.gstRate} onChange={e=>set('gstRate',e.target.value)} placeholder="18" />
+            </div>
           </div>
+          {form.value && (
+            <div style={{fontSize:11.5,color:'var(--text-muted)',margin:'-6px 0 12px'}}>
+              GST: {inr(gstPortionOf(form.value, form.gstRate))} · Total incl. GST: <strong style={{color:'var(--text)'}}>{inr(totalWithGST(form.value, form.gstRate))}</strong>
+            </div>
+          )}
           <div className="form-group">
             <label className="form-label">Stage</label>
             <select className="form-input form-select" value={form.stage} onChange={e=>set('stage',e.target.value)}>
