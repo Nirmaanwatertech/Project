@@ -1133,7 +1133,7 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
           </div>
           <div className="form-group">
             <label className="form-label">PO Number</label>
-            <input className="form-input font-mono" value={form.po} onChange={e=>set('po',e.target.value)} placeholder="NWTS/PO/2026-27/001" />
+            <input className="form-input font-mono" value={form.po} onChange={e=>set('po',e.target.value)} placeholder="VPRPL/PO/2026-27/001" />
           </div>
           <div className="form-group">
             <label className="form-label">Vendor Name</label>
@@ -2054,7 +2054,7 @@ async function clearAllQuotations() {
 
 // ════════════════════════════════════════════════════
 // WORK ORDERS — issued to vendors for services/labour
-// Series: NWTS/WO/2026-27/001
+// Series: VPRPL/WO/2026-27/001
 // ════════════════════════════════════════════════════
 const WO_COLLECTION = 'workorders';
 const WO_STAGES = ['Draft','Issued','In Progress','Completed','Cancelled'];
@@ -2108,10 +2108,10 @@ async function clearAllWorkOrders() {
 }
 
 function nextWONumber(count) {
-  return `NWTS/WO/${FY}/${String(count + 1).padStart(3, '0')}`;
+  return `VPRPL/WO/${FY}/${String(count + 1).padStart(3, '0')}`;
 }
 function nextPONumber(count) {
-  return `NWTS/PO/${FY}/${String(count + 1).padStart(3, '0')}`;
+  return `VPRPL/PO/${FY}/${String(count + 1).padStart(3, '0')}`;
 }
 
 // Returns quotations eligible for linking (Finalized stage)
@@ -2442,7 +2442,7 @@ function WorkOrders() {
 
 // ════════════════════════════════════════════════════
 // PURCHASE ORDERS — issued to vendors for materials/goods
-// Series: NWTS/PO/2026-27/001
+// Series: VPRPL/PO/2026-27/001
 // ════════════════════════════════════════════════════
 const PO_COLLECTION = 'purchaseorders';
 const PO_STAGES = ['Draft','Issued','Goods In Transit','Partially Received','Fully Received','Closed'];
