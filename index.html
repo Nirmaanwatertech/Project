@@ -2126,11 +2126,13 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
     wo: existing.wo||nextNumber, vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
     gstRate: existing.gstRate!=null ? String(existing.gstRate) : String(DEFAULT_GST_RATE),
+    woDate: existing.woDate || new Date().toISOString().slice(0,10),
     linkedQuotation: existing.linkedQuotation||'', stage: existing.stage||'Draft',
     due: existing.due||'', notes: existing.notes||'',
     project: existing.project||'', split: existing.split||{pontoon:50,wtp:50}
   } : {
     wo: nextNumber, vendorName: '', description: '', value: '', gstRate: String(DEFAULT_GST_RATE),
+    woDate: new Date().toISOString().slice(0,10),
     linkedQuotation: '', stage: 'Draft', due: '', notes: '',
     project: '', split:{pontoon:50,wtp:50}
   });
@@ -2192,6 +2194,10 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
                 {eligible.length === 0 && <option disabled>No finalized quotations yet</option>}
               </select>
             </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">WO Date</label>
+            <input className="form-input" type="date" value={form.woDate} onChange={e=>set('woDate', e.target.value)} style={{maxWidth:200}} />
           </div>
           <div className="form-group">
             <label className="form-label">Vendor Name</label>
@@ -2267,6 +2273,8 @@ function WorkOrders() {
     (vendorFilter==='all'||w.vendorName===vendorFilter) &&
     (monthFilter==='all'||(w.due||'').startsWith(monthFilter))
   ).sort((a,b)=>{
+    if(woSortBy==='wodate_asc')  return (a.woDate||'').localeCompare(b.woDate||'');
+    if(woSortBy==='wodate_desc') return (b.woDate||'').localeCompare(a.woDate||'');
     if(woSortBy==='date_asc')    return (a.due||'').localeCompare(b.due||'');
     if(woSortBy==='amount_desc') return Number(b.value||0)-Number(a.value||0);
     if(woSortBy==='amount_asc')  return Number(a.value||0)-Number(b.value||0);
@@ -2331,6 +2339,8 @@ function WorkOrders() {
               {months.map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}</option>)}
             </select>
             <select className="form-input form-select" style={{width:180}} value={woSortBy} onChange={e=>setWOSortBy(e.target.value)}>
+              <option value="wodate_desc">↓ WO Date (Newest)</option>
+              <option value="wodate_asc">↑ WO Date (Oldest)</option>
               <option value="date_desc">↓ Due Date (Newest)</option>
               <option value="date_asc">↑ Due Date (Oldest)</option>
               <option value="amount_desc">↓ Value (Highest)</option>
@@ -2353,12 +2363,13 @@ function WorkOrders() {
         ) : (
           <table>
             <thead>
-              <tr><th>WO Number</th><th>Vendor</th><th>Project</th><th>Scope of Work</th><th>Value</th><th>Due</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr>
+              <tr><th>WO Number</th><th>WO Date</th><th>Vendor</th><th>Project</th><th>Scope of Work</th><th>Value</th><th>Due</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {filtered.map(w => (
                 <tr key={w.docId}>
                   <td className="mono" style={{whiteSpace:'nowrap'}}>{w.wo}</td>
+                  <td style={{whiteSpace:'nowrap'}}>{fmt(w.woDate)}</td>
                   <td className="fw-600">{w.vendorName}</td>
                   <td>{w.project?<span className={`badge ${PROJECT_COLOR[w.project]||'grey'}`}>{w.project}</span>:<span className="text-muted">—</span>}</td>
                   <td style={{maxWidth:180}}>{w.description}</td>
@@ -2490,11 +2501,13 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
     po: existing.po||nextNumber, vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
     gstRate: existing.gstRate!=null ? String(existing.gstRate) : String(DEFAULT_GST_RATE),
+    poDate: existing.poDate || new Date().toISOString().slice(0,10),
     linkedQuotation: existing.linkedQuotation||'', stage: existing.stage||'Draft',
     project: existing.project||''
   } : {
     po: nextNumber, vendorName: prefill?.party || '', description: prefill?.description || '',
     value: prefill?.value ? String(prefill.value) : '', gstRate: String(DEFAULT_GST_RATE),
+    poDate: new Date().toISOString().slice(0,10),
     linkedQuotation: prefill?.fromQuotation || '',
     stage: 'Draft', project: '', split:{pontoon:50,wtp:50}
   });
@@ -2558,6 +2571,10 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
                 {eligible.length === 0 && <option disabled>No finalized quotations yet</option>}
               </select>
             </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">PO Date</label>
+            <input className="form-input" type="date" value={form.poDate} onChange={e=>set('poDate', e.target.value)} style={{maxWidth:200}} />
           </div>
           <div className="form-group">
             <label className="form-label">Vendor Name</label>
@@ -2630,18 +2647,18 @@ function PurchaseOrders() {
 
   const nextNumber = nextPONumber(items.length);
   const poVendors = [...new Set(items.map(p=>p.vendorName).filter(Boolean))].sort();
-  const poMonths = [...new Set(items.map(p=>p.createdAt?new Date(p.createdAt).toISOString().slice(0,7):null).filter(Boolean))].sort().reverse();
+  const poMonths = [...new Set(items.map(p=>(p.poDate||'').slice(0,7)).filter(Boolean))].sort().reverse();
   const filtered = [...items].filter(p=>
     (stageFilter==='all'||p.stage===stageFilter) &&
     (projectFilter==='all'||p.project===projectFilter) &&
     (vendorFilter==='all'||p.vendorName===vendorFilter) &&
-    (monthFilter==='all'||(p.createdAt?new Date(p.createdAt).toISOString().slice(0,7):'')===monthFilter)
+    (monthFilter==='all'||(p.poDate||'').startsWith(monthFilter))
   ).sort((a,b)=>{
-    if(poSortBy==='date_asc')    return (a.createdAt||0)-(b.createdAt||0);
+    if(poSortBy==='date_asc')    return (a.poDate||'').localeCompare(b.poDate||'');
     if(poSortBy==='amount_desc') return Number(b.value||0)-Number(a.value||0);
     if(poSortBy==='amount_asc')  return Number(a.value||0)-Number(b.value||0);
     if(poSortBy==='vendor_asc')  return (a.vendorName||'').localeCompare(b.vendorName||'');
-    return (b.createdAt||0)-(a.createdAt||0);
+    return (b.poDate||'').localeCompare(a.poDate||'');
   });
   const totalValue = items.reduce((s,p) => s + Number(p.value||0), 0);
   const activeCount = items.filter(p => p.stage !== 'Closed' && p.stage !== 'Draft').length;
@@ -2717,12 +2734,13 @@ function PurchaseOrders() {
         ) : (
           <table>
             <thead>
-              <tr><th>PO Number</th><th>Vendor</th><th>Project</th><th>Description</th><th>Value</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr>
+              <tr><th>PO Number</th><th>Date</th><th>Vendor</th><th>Project</th><th>Description</th><th>Value</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {filtered.map(p => (
                 <tr key={p.docId}>
                   <td className="mono" style={{whiteSpace:'nowrap'}}>{p.po}</td>
+                  <td style={{whiteSpace:'nowrap'}}>{fmt(p.poDate)}</td>
                   <td className="fw-600">{p.vendorName}</td>
                   <td>{p.project?<span className={`badge ${PROJECT_COLOR[p.project]||'grey'}`}>{p.project}</span>:<span className="text-muted">—</span>}</td>
                   <td style={{maxWidth:180}}>{p.description || '—'}</td>
