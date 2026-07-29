@@ -4430,7 +4430,6 @@ function ProjectPnL() {
   const { items: advances }  = useAdvances();
   const { items: pos }       = usePurchaseOrders();
   const { items: wos }       = useWorkOrders();
-  const { items: milestones }= useMilestones();
   const { items: receipts }  = useReceipts();
   const { items: petty }     = usePettyCash();
   const { items: expenseItems } = useExpenses();
@@ -4452,10 +4451,8 @@ function ProjectPnL() {
     // ── INCOME ──────────────────────────────────────
     const receiptIncome = receipts.filter(r => r.project===proj || r.project==='Both')
       .reduce((s,r) => s + matchAmt(r,'amountReceived'), 0);
-    const milestoneIncome = milestones.filter(m => m.paid && (m.project===proj || m.project==='Both'))
-      .reduce((s,m) => s + matchAmt(m,'amount'), 0);
     const capitalIncome = 0;
-    const totalIncome = receiptIncome + milestoneIncome;
+    const totalIncome = receiptIncome;
 
     // ── EXPENSES (Paid / Incurred) ────────────────────
     const billExp    = bills.filter(b => b.project===proj || b.project==='Both').reduce((s,b) => s + matchAmt(b,'amount'), 0);
@@ -4473,7 +4470,7 @@ function ProjectPnL() {
     const marginPct = totalIncome > 0 ? Math.round((margin/totalIncome)*100) : 0;
 
     return {
-      receiptIncome, milestoneIncome, capitalIncome, totalIncome,
+      receiptIncome, capitalIncome, totalIncome,
       billExp, advanceExp, poExp, woExp, pettyExp,
       totalExpenses, totalCommitted, margin, marginPct,
       billCount:  bills.filter(b=>b.project===proj||b.project==='Both').length,
@@ -4518,10 +4515,6 @@ function ProjectPnL() {
           <div className="flex justify-between" style={{marginBottom:4}}>
             <span style={{fontSize:12,color:'var(--text-secondary)'}}>Client Receipts</span>
             <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--green)'}}>{inr(pData.receiptIncome)}</span>
-          </div>
-          <div className="flex justify-between" style={{marginBottom:4}}>
-            <span style={{fontSize:12,color:'var(--text-secondary)'}}>Payment Milestones</span>
-            <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--green)'}}>{inr(pData.milestoneIncome)}</span>
           </div>
           <div className="flex justify-between" style={{paddingTop:6,borderTop:'1px solid var(--grey-50)'}}>
             <span style={{fontSize:12.5,fontWeight:700}}>Total Income</span>
