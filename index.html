@@ -282,24 +282,6 @@ function fmt(dateStr) {
   return dateStr;
 }
 
-// ─── GST helpers ────────────────────────────────────────
-// Every value/amount field across Quotations, Work Orders, Purchase Orders,
-// Bills and RA Bills is the BASE value (before GST). These helpers gross it
-// up consistently everywhere GST needs to be added back in — for display,
-// and for real cash-flow amounts, which must include GST since that's the
-// actual money that changes hands.
-const DEFAULT_GST_RATE = 18;
-function gstMultiplier(rate) { return 1 + (Number(rate)||0)/100; }
-function gstPortionOf(base, rate) { return Number(base||0) * (Number(rate)||0)/100; }
-function totalWithGST(base, rate) { return Number(base||0) * gstMultiplier(rate); }
-// Next GSTR-3B-style filing due date (20th of the month after the given YYYY-MM period)
-function gstDueDateFor(period) {
-  const [y, m] = period.split('-').map(Number);
-  const nm = m === 12 ? 1 : m + 1;
-  const ny = m === 12 ? y + 1 : y;
-  return `${ny}-${String(nm).padStart(2,'0')}-20`;
-}
-
 // ─── Firestore path helpers ────────────────────────────
 // All data lives under users/{uid}/{collection} — matches where
 // Firestore Console placed it when collections were created inside the user doc.
@@ -427,7 +409,6 @@ function ListsManager() {
   const [dragTarget, setDragTarget] = useState(null);
   const [editingItem, setEditingItem] = useState(null); // { listKey, idx }
   const [editValue, setEditValue] = useState('');
-  const [newItems, setNewItems] = useState({}); // { [listKey]: text of the "add new item" input }
 
   useEffect(() => { setLocalLists({ ...lists }); }, [JSON.stringify(lists)]);
 
@@ -708,7 +689,7 @@ function useKnownNames() {
 
 
 const STATUS_COLOR = { 'In Progress':'blue','Scheduled':'teal','Overdue':'red','Completed':'green','Pending':'grey' };
-const BILL_STATUS_COLOR = { 'Overdue':'red','Due Today':'amber','Upcoming':'blue','Paid':'green','Partially Paid':'teal' };
+const BILL_STATUS_COLOR = { 'Overdue':'red','Due Today':'amber','Upcoming':'blue','Paid':'green' };
 
 
 // ─── Reusable Components ──────────────────────────────
@@ -1030,59 +1011,6 @@ function PaymentScheduleEditor({ rows, setRows, totalValue }) {
   );
 }
 
-// ─── Milestones data layer ─────────────────────────────
-// (Same gap as Quotations had: useMilestones/addMilestone/markMilestonePaid/
-// deleteMilestone/clearAllMilestones/MILESTONES_COLLECTION were referenced
-// throughout Payment Tracker but never defined. Restored here, next to the
-// updateMilestone function that *was* present.)
-const MILESTONES_COLLECTION = 'milestones';
-function useMilestones() {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    function start() {
-      const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(userCol(MILESTONES_COLLECTION), orderBy('createdAt', 'desc'));
-      const unsub = onSnapshot(q, (snap) => {
-        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
-        setLoading(false);
-      }, (err) => { console.error('Milestones listener error', err); setLoading(false); });
-      return unsub;
-    }
-    if (window.fb && getUserUID()) { const unsub = start(); return () => unsub && unsub(); }
-    let unsub;
-    const handler = () => { if(getUserUID()) { unsub = start(); } };
-    const userHandler = () => { if(unsub) unsub(); if(window.fb) unsub = start(); };
-    window.addEventListener('firebase-ready', handler, { once: true });
-    window.addEventListener('user-ready', userHandler, { once: true });
-    return () => {
-      window.removeEventListener('firebase-ready', handler);
-      window.removeEventListener('user-ready', userHandler);
-      if (unsub) unsub();
-    };
-  }, []);
-  return { items, loading };
-}
-async function addMilestone(data) {
-  const { db, collection, addDoc } = window.fb;
-  await addDoc(userCol(MILESTONES_COLLECTION), { ...data, createdAt: Date.now(), paid: false });
-}
-async function markMilestonePaid(docId) {
-  const { db, doc, updateDoc } = window.fb;
-  await updateDoc(userDoc(MILESTONES_COLLECTION, docId), { paid: true, paidAt: Date.now() });
-}
-async function deleteMilestone(docId) {
-  const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(userDoc(MILESTONES_COLLECTION, docId));
-}
-async function clearAllMilestones() {
-  const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(userCol(MILESTONES_COLLECTION));
-  const batch = writeBatch(db);
-  snap.docs.forEach(d => batch.delete(d.ref));
-  await batch.commit();
-}
-
 // ─── updateMilestone ──────────────────────────────────
 async function updateMilestone(docId, data) {
   const { updateDoc } = window.fb;
@@ -1101,7 +1029,8 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
     value: quotation?.value ? String(quotation.value) : '',
     linkedQuotation: quotation?.docId||'',
     stage: 'Draft',
-    project: quotation?.project||''
+    project: quotation?.project||'',
+    split: quotation?.split||{pontoon:50,wtp:50},
   });
   const [schedule, setSchedule] = useState(quotation?.paymentSchedule ? quotation.paymentSchedule.map(r=>({...r,id:genRowId()})) : []);
   const [saving, setSaving] = useState(false);
@@ -1133,7 +1062,7 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
           </div>
           <div className="form-group">
             <label className="form-label">PO Number</label>
-            <input className="form-input font-mono" value={form.po} onChange={e=>set('po',e.target.value)} placeholder="VPRPL/PO/2026-27/001" />
+            <input className="form-input font-mono" value={form.po} onChange={e=>set('po',e.target.value)} placeholder="NWTS/PO/2026-27/001" />
           </div>
           <div className="form-group">
             <label className="form-label">Vendor Name</label>
@@ -1995,66 +1924,8 @@ function Tasks() {
 
 
 // ════════════════════════════════════════════════════
-// QUOTATIONS — vendor quotations, received → finalized → issue PO/WO
-// (Restores a data layer that was missing from this file: useQuotations,
-// addQuotation/updateQuotation/deleteQuotation/clearAllQuotations, plus
-// the QUOTATIONS_COLLECTION/QUOTE_STAGES/STAGE_COLOR constants the
-// Quotations, Purchase Orders and Work Orders modules all rely on.)
-// ════════════════════════════════════════════════════
-const QUOTATIONS_COLLECTION = 'quotations';
-const QUOTE_STAGES = ['Receipt of Quotation', 'Finalized'];
-const STAGE_COLOR = { 'Receipt of Quotation':'amber', 'Finalized':'green' };
-
-function useQuotations() {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    function start() {
-      const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(userCol(QUOTATIONS_COLLECTION), orderBy('createdAt', 'desc'));
-      const unsub = onSnapshot(q, (snap) => {
-        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
-        setLoading(false);
-      }, (err) => { console.error('Quotations listener error', err); setLoading(false); });
-      return unsub;
-    }
-    if (window.fb && getUserUID()) { const unsub = start(); return () => unsub && unsub(); }
-    let unsub;
-    const handler = () => { if(getUserUID()) { unsub = start(); } };
-    const userHandler = () => { if(unsub) unsub(); if(window.fb) unsub = start(); };
-    window.addEventListener('firebase-ready', handler, { once: true });
-    window.addEventListener('user-ready', userHandler, { once: true });
-    return () => {
-      window.removeEventListener('firebase-ready', handler);
-      window.removeEventListener('user-ready', userHandler);
-      if (unsub) unsub();
-    };
-  }, []);
-  return { items, loading };
-}
-async function addQuotation(data) {
-  const { db, collection, addDoc } = window.fb;
-  await addDoc(userCol(QUOTATIONS_COLLECTION), { ...data, createdAt: Date.now(), approved: false });
-}
-async function updateQuotation(docId, data) {
-  const { db, doc, updateDoc } = window.fb;
-  await updateDoc(userDoc(QUOTATIONS_COLLECTION, docId), data);
-}
-async function deleteQuotation(docId) {
-  const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(userDoc(QUOTATIONS_COLLECTION, docId));
-}
-async function clearAllQuotations() {
-  const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(userCol(QUOTATIONS_COLLECTION));
-  const batch = writeBatch(db);
-  snap.docs.forEach(d => batch.delete(d.ref));
-  await batch.commit();
-}
-
-// ════════════════════════════════════════════════════
 // WORK ORDERS — issued to vendors for services/labour
-// Series: VPRPL/WO/2026-27/001
+// Series: NWTS/WO/2026-27/001
 // ════════════════════════════════════════════════════
 const WO_COLLECTION = 'workorders';
 const WO_STAGES = ['Draft','Issued','In Progress','Completed','Cancelled'];
@@ -2108,10 +1979,10 @@ async function clearAllWorkOrders() {
 }
 
 function nextWONumber(count) {
-  return `VPRPL/WO/${FY}/${String(count + 1).padStart(3, '0')}`;
+  return `NWTS/WO/${FY}/${String(count + 1).padStart(3, '0')}`;
 }
 function nextPONumber(count) {
-  return `VPRPL/PO/${FY}/${String(count + 1).padStart(3, '0')}`;
+  return `NWTS/PO/${FY}/${String(count + 1).padStart(3, '0')}`;
 }
 
 // Returns quotations eligible for linking (Finalized stage)
@@ -2125,14 +1996,11 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
   const [form, setForm] = useState(isEdit ? {
     wo: existing.wo||nextNumber, vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
-    gstRate: existing.gstRate!=null ? String(existing.gstRate) : String(DEFAULT_GST_RATE),
-    woDate: existing.woDate || new Date().toISOString().slice(0,10),
     linkedQuotation: existing.linkedQuotation||'', stage: existing.stage||'Draft',
     due: existing.due||'', notes: existing.notes||'',
     project: existing.project||'', split: existing.split||{pontoon:50,wtp:50}
   } : {
-    wo: nextNumber, vendorName: '', description: '', value: '', gstRate: String(DEFAULT_GST_RATE),
-    woDate: new Date().toISOString().slice(0,10),
+    wo: nextNumber, vendorName: '', description: '', value: '',
     linkedQuotation: '', stage: 'Draft', due: '', notes: '',
     project: '', split:{pontoon:50,wtp:50}
   });
@@ -2140,7 +2008,6 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
   const [saving, setSaving] = useState(false);
   function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
 
-  // Auto-fill vendor name when quotation selected
   function handleQuotationSelect(val) {
     const q = quotations.find(q => q.docId === val);
     set('linkedQuotation', val);
@@ -2151,7 +2018,8 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
         vendorName: q.vendorName || s.vendorName,
         description: s.description || q.description || '',
         value: s.value || (q.value ? String(q.value) : ''),
-        gstRate: (s.gstRate && s.gstRate !== String(DEFAULT_GST_RATE)) ? s.gstRate : (q.gstRate!=null ? String(q.gstRate) : s.gstRate),
+        project: s.project || q.project || '',
+        split: (s.project ? s.split : null) || q.split || {pontoon:50,wtp:50},
       }));
       if ((!schedule || schedule.length === 0) && q.paymentSchedule && q.paymentSchedule.length > 0) {
         setSchedule(q.paymentSchedule.map(r => ({ ...r, id: genRowId() })));
@@ -2163,8 +2031,8 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
     if (!form.vendorName.trim() || !form.description.trim()) return;
     setSaving(true);
     try {
-      if (isEdit) await updateWorkOrder(existing.docId, { ...form, value: Number(form.value)||0, gstRate: Number(form.gstRate)||0, paymentSchedule: schedule });
-      else await addWorkOrder({ ...form, value: Number(form.value) || 0, gstRate: Number(form.gstRate)||0, paymentSchedule: schedule });
+      if (isEdit) await updateWorkOrder(existing.docId, { ...form, value: Number(form.value)||0, paymentSchedule: schedule });
+      else await addWorkOrder({ ...form, value: Number(form.value) || 0, paymentSchedule: schedule });
       onClose();
     } catch (e) { console.error(e); alert('Could not save work order.'); }
     finally { setSaving(false); }
@@ -2196,10 +2064,6 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
             </div>
           </div>
           <div className="form-group">
-            <label className="form-label">WO Date</label>
-            <input className="form-input" type="date" value={form.woDate} onChange={e=>set('woDate', e.target.value)} style={{maxWidth:200}} />
-          </div>
-          <div className="form-group">
             <label className="form-label">Vendor Name</label>
             <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={knownNames.vendors} placeholder="Vendor / contractor name" />
           </div>
@@ -2209,22 +2073,13 @@ function NewWOModal({ onClose, nextNumber, quotations, existing }) {
           </div>
           <div className="form-grid">
             <div className="form-group">
-              <label className="form-label">Total Value — Base (₹)</label>
+              <label className="form-label">Total Value (₹)</label>
               <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
             </div>
             <div className="form-group">
-              <label className="form-label">GST Rate (%)</label>
-              <input className="form-input font-mono" type="number" value={form.gstRate} onChange={e=>set('gstRate', e.target.value)} placeholder="18" />
+              <label className="form-label">Expected Completion Date</label>
+              <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
             </div>
-          </div>
-          {form.value && (
-            <div style={{fontSize:11.5,color:'var(--text-muted)',margin:'-6px 0 12px'}}>
-              GST: {inr(gstPortionOf(form.value, form.gstRate))} · Total incl. GST: <strong style={{color:'var(--text)'}}>{inr(totalWithGST(form.value, form.gstRate))}</strong>
-            </div>
-          )}
-          <div className="form-group">
-            <label className="form-label">Expected Completion Date</label>
-            <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
           </div>
           <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
           <div className="form-group">
@@ -2273,8 +2128,6 @@ function WorkOrders() {
     (vendorFilter==='all'||w.vendorName===vendorFilter) &&
     (monthFilter==='all'||(w.due||'').startsWith(monthFilter))
   ).sort((a,b)=>{
-    if(woSortBy==='wodate_asc')  return (a.woDate||'').localeCompare(b.woDate||'');
-    if(woSortBy==='wodate_desc') return (b.woDate||'').localeCompare(a.woDate||'');
     if(woSortBy==='date_asc')    return (a.due||'').localeCompare(b.due||'');
     if(woSortBy==='amount_desc') return Number(b.value||0)-Number(a.value||0);
     if(woSortBy==='amount_asc')  return Number(a.value||0)-Number(b.value||0);
@@ -2339,8 +2192,6 @@ function WorkOrders() {
               {months.map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}</option>)}
             </select>
             <select className="form-input form-select" style={{width:180}} value={woSortBy} onChange={e=>setWOSortBy(e.target.value)}>
-              <option value="wodate_desc">↓ WO Date (Newest)</option>
-              <option value="wodate_asc">↑ WO Date (Oldest)</option>
               <option value="date_desc">↓ Due Date (Newest)</option>
               <option value="date_asc">↑ Due Date (Oldest)</option>
               <option value="amount_desc">↓ Value (Highest)</option>
@@ -2363,20 +2214,16 @@ function WorkOrders() {
         ) : (
           <table>
             <thead>
-              <tr><th>WO Number</th><th>WO Date</th><th>Vendor</th><th>Project</th><th>Scope of Work</th><th>Value</th><th>Due</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr>
+              <tr><th>WO Number</th><th>Vendor</th><th>Project</th><th>Scope of Work</th><th>Value</th><th>Due</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {filtered.map(w => (
                 <tr key={w.docId}>
                   <td className="mono" style={{whiteSpace:'nowrap'}}>{w.wo}</td>
-                  <td style={{whiteSpace:'nowrap'}}>{fmt(w.woDate)}</td>
                   <td className="fw-600">{w.vendorName}</td>
                   <td>{w.project?<span className={`badge ${PROJECT_COLOR[w.project]||'grey'}`}>{w.project}</span>:<span className="text-muted">—</span>}</td>
                   <td style={{maxWidth:180}}>{w.description}</td>
-                  <td className="amount fw-600">
-                    {inr(totalWithGST(w.value,w.gstRate)||0)}
-                    <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:400}}>{inr(w.value||0)} + {w.gstRate||0}% GST</div>
-                  </td>
+                  <td className="amount fw-600">{inr(w.value||0)}</td>
                   <td>{w.due || '—'}</td>
                   <td>
                     {w.paymentSchedule && w.paymentSchedule.length > 0 ? (
@@ -2442,7 +2289,7 @@ function WorkOrders() {
 
 // ════════════════════════════════════════════════════
 // PURCHASE ORDERS — issued to vendors for materials/goods
-// Series: VPRPL/PO/2026-27/001
+// Series: NWTS/PO/2026-27/001
 // ════════════════════════════════════════════════════
 const PO_COLLECTION = 'purchaseorders';
 const PO_STAGES = ['Draft','Issued','Goods In Transit','Partially Received','Fully Received','Closed'];
@@ -2500,14 +2347,11 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
   const [form, setForm] = useState(isEdit ? {
     po: existing.po||nextNumber, vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
-    gstRate: existing.gstRate!=null ? String(existing.gstRate) : String(DEFAULT_GST_RATE),
-    poDate: existing.poDate || new Date().toISOString().slice(0,10),
     linkedQuotation: existing.linkedQuotation||'', stage: existing.stage||'Draft',
     project: existing.project||''
   } : {
     po: nextNumber, vendorName: prefill?.party || '', description: prefill?.description || '',
-    value: prefill?.value ? String(prefill.value) : '', gstRate: String(DEFAULT_GST_RATE),
-    poDate: new Date().toISOString().slice(0,10),
+    value: prefill?.value ? String(prefill.value) : '',
     linkedQuotation: prefill?.fromQuotation || '',
     stage: 'Draft', project: '', split:{pontoon:50,wtp:50}
   });
@@ -2528,7 +2372,8 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
         vendorName: s.vendorName || q.vendorName || '',
         description: s.description || q.description || '',
         value: s.value || (q.value ? String(q.value) : ''),
-        gstRate: (s.gstRate && s.gstRate !== String(DEFAULT_GST_RATE)) ? s.gstRate : (q.gstRate!=null ? String(q.gstRate) : s.gstRate),
+        project: s.project || q.project || '',
+        split: (s.project ? s.split : null) || q.split || {pontoon:50,wtp:50},
       }));
       if ((!schedule || schedule.length === 0) && q.paymentSchedule && q.paymentSchedule.length > 0) {
         setSchedule(q.paymentSchedule.map(r => ({ ...r, id: genRowId() })));
@@ -2540,8 +2385,8 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
     if (!form.vendorName.trim() || !form.value) return;
     setSaving(true);
     try {
-      if (isEdit) await updatePO(existing.docId, { ...form, value: Number(form.value), gstRate: Number(form.gstRate)||0, paymentSchedule: schedule });
-      else await addPO({ ...form, value: Number(form.value), gstRate: Number(form.gstRate)||0, paymentSchedule: schedule });
+      if (isEdit) await updatePO(existing.docId, { ...form, value: Number(form.value), paymentSchedule: schedule });
+      else await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule });
       onClose();
     } catch (e) { console.error(e); alert('Could not save purchase order.'); }
     finally { setSaving(false); }
@@ -2573,10 +2418,6 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
             </div>
           </div>
           <div className="form-group">
-            <label className="form-label">PO Date</label>
-            <input className="form-input" type="date" value={form.poDate} onChange={e=>set('poDate', e.target.value)} style={{maxWidth:200}} />
-          </div>
-          <div className="form-group">
             <label className="form-label">Vendor Name</label>
             {vendors && vendors.length > 0 ? (
               <select className="form-input form-select" value={form.vendorName} onChange={e=>set('vendorName', e.target.value)}>
@@ -2594,21 +2435,10 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
             <label className="form-label">Description of Goods / Materials</label>
             <input className="form-input" value={form.description} onChange={e=>set('description', e.target.value)} placeholder="e.g. RO membranes 4040 — 10 units" />
           </div>
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">Total Value — Base (₹)</label>
-              <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
-            </div>
-            <div className="form-group">
-              <label className="form-label">GST Rate (%)</label>
-              <input className="form-input font-mono" type="number" value={form.gstRate} onChange={e=>set('gstRate', e.target.value)} placeholder="18" />
-            </div>
+          <div className="form-group">
+            <label className="form-label">Total Value (₹)</label>
+            <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
           </div>
-          {form.value && (
-            <div style={{fontSize:11.5,color:'var(--text-muted)',margin:'-6px 0 12px'}}>
-              GST: {inr(gstPortionOf(form.value, form.gstRate))} · Total incl. GST: <strong style={{color:'var(--text)'}}>{inr(totalWithGST(form.value, form.gstRate))}</strong>
-            </div>
-          )}
           <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
           <div className="form-group">
             <label className="form-label">Stage</label>
@@ -2635,7 +2465,6 @@ const PO_STAGE_COLOR = { 'Draft':'grey','Issued':'blue','Goods In Transit':'ambe
 function PurchaseOrders() {
   const { items, loading } = usePurchaseOrders();
   const { items: quotations } = useQuotations();
-  const { items: vendors } = useVendors();
   const [showNew, setShowNew] = useState(false);
   const [editPO, setEditPO] = useState(null);
   const [viewSchedule, setViewSchedule] = useState(null);
@@ -2647,18 +2476,18 @@ function PurchaseOrders() {
 
   const nextNumber = nextPONumber(items.length);
   const poVendors = [...new Set(items.map(p=>p.vendorName).filter(Boolean))].sort();
-  const poMonths = [...new Set(items.map(p=>(p.poDate||'').slice(0,7)).filter(Boolean))].sort().reverse();
+  const poMonths = [...new Set(items.map(p=>p.createdAt?new Date(p.createdAt).toISOString().slice(0,7):null).filter(Boolean))].sort().reverse();
   const filtered = [...items].filter(p=>
     (stageFilter==='all'||p.stage===stageFilter) &&
     (projectFilter==='all'||p.project===projectFilter) &&
     (vendorFilter==='all'||p.vendorName===vendorFilter) &&
-    (monthFilter==='all'||(p.poDate||'').startsWith(monthFilter))
+    (monthFilter==='all'||(p.createdAt?new Date(p.createdAt).toISOString().slice(0,7):'')===monthFilter)
   ).sort((a,b)=>{
-    if(poSortBy==='date_asc')    return (a.poDate||'').localeCompare(b.poDate||'');
+    if(poSortBy==='date_asc')    return (a.createdAt||0)-(b.createdAt||0);
     if(poSortBy==='amount_desc') return Number(b.value||0)-Number(a.value||0);
     if(poSortBy==='amount_asc')  return Number(a.value||0)-Number(b.value||0);
     if(poSortBy==='vendor_asc')  return (a.vendorName||'').localeCompare(b.vendorName||'');
-    return (b.poDate||'').localeCompare(a.poDate||'');
+    return (b.createdAt||0)-(a.createdAt||0);
   });
   const totalValue = items.reduce((s,p) => s + Number(p.value||0), 0);
   const activeCount = items.filter(p => p.stage !== 'Closed' && p.stage !== 'Draft').length;
@@ -2734,20 +2563,16 @@ function PurchaseOrders() {
         ) : (
           <table>
             <thead>
-              <tr><th>PO Number</th><th>Date</th><th>Vendor</th><th>Project</th><th>Description</th><th>Value</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr>
+              <tr><th>PO Number</th><th>Vendor</th><th>Project</th><th>Description</th><th>Value</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {filtered.map(p => (
                 <tr key={p.docId}>
                   <td className="mono" style={{whiteSpace:'nowrap'}}>{p.po}</td>
-                  <td style={{whiteSpace:'nowrap'}}>{fmt(p.poDate)}</td>
                   <td className="fw-600">{p.vendorName}</td>
                   <td>{p.project?<span className={`badge ${PROJECT_COLOR[p.project]||'grey'}`}>{p.project}</span>:<span className="text-muted">—</span>}</td>
                   <td style={{maxWidth:180}}>{p.description || '—'}</td>
-                  <td className="amount fw-600">
-                    {inr(totalWithGST(p.value,p.gstRate)||0)}
-                    <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:400}}>{inr(p.value||0)} + {p.gstRate||0}% GST</div>
-                  </td>
+                  <td className="amount fw-600">{inr(p.value||0)}</td>
                   <td>
                     {p.paymentSchedule && p.paymentSchedule.length > 0 ? (
                       <span className="btn btn-sm btn-ghost" style={{cursor:'pointer',whiteSpace:'nowrap'}} onClick={() => setViewSchedule({...p, label:p.po})}>
@@ -2864,142 +2689,35 @@ function CashFlow() {
   const { items: capital,  loading: capitalLoading  } = useCapitalLoans();
   const { items: expenses, loading: expLoading      } = useExpenses();
   const { items: petty,    loading: pettyLoading    } = usePettyCash();
-  const { items: pos,      loading: posLoading      } = usePurchaseOrders();
-  const { items: wos,      loading: wosLoading       } = useWorkOrders();
-  const { items: raBills,  loading: raBillsLoading   } = useRABills();
   const { settings, loading: settingsLoading } = useCashSettings();
   const [editingBalance, setEditingBalance] = useState(false);
   const [balanceInput, setBalanceInput] = useState('');
 
-  const loading = billsLoading || settingsLoading || receiptsLoading || capitalLoading || advLoading || expLoading || pettyLoading || posLoading || wosLoading || raBillsLoading;
+  const loading = billsLoading || settingsLoading || receiptsLoading || capitalLoading || advLoading || expLoading || pettyLoading;
   const todayStr = new Date().toISOString().slice(0,10);
-
-  // ── Net GST payable schedule ──
-  // Output GST: GST on RA Bills raised to clients (liability arises on invoice
-  // date, not on receipt date — standard invoice-based GST treatment).
-  // Input GST / ITC: GST on vendor Bills booked (reclaimable against output
-  // GST). PO/WO schedules are commitments only — GST from them isn't ITC-
-  // eligible until an actual Bill is booked, so they're intentionally excluded.
-  // Net liability per month carries forward as credit if negative, and falls
-  // due ~20th of the following month (GSTR-3B style) if positive.
-  const gstMonths = {};
-  raBills.forEach(rb => {
-    const m = (rb.dateSubmitted||'').slice(0,7);
-    if (!m) return;
-    gstMonths[m] = gstMonths[m] || { output: 0, input: 0 };
-    gstMonths[m].output += gstPortionOf(rb.amountClaimed, rb.gstRate);
-  });
-  bills.forEach(b => {
-    const m = (b.invoiceDate||'').slice(0,7);
-    if (!m) return;
-    gstMonths[m] = gstMonths[m] || { output: 0, input: 0 };
-    gstMonths[m].input += gstPortionOf(b.amount, b.gstRate);
-  });
-  let gstCreditCarry = 0;
-  const gstSchedule = Object.keys(gstMonths).sort().map(m => {
-    const { output, input } = gstMonths[m];
-    const availableITC = input + gstCreditCarry;
-    const net = output - availableITC;
-    if (net > 0) { gstCreditCarry = 0; return { month: m, due: gstDueDateFor(m), amount: net }; }
-    gstCreditCarry = -net;
-    return null;
-  }).filter(Boolean);
 
   // ── Build all rows from every money movement ──
   const allRows = [
     // OUTFLOWS
     ...bills.flatMap(b => {
-      // If bill has a payment schedule, use each stage as a separate outflow.
-      // Every stage is listed whether paid or not, so an unpaid stage always
-      // still shows up as a pending outflow — it just carries an "Unpaid" tag.
-      // Stage amounts are % of the BASE value, so each is grossed up by the
-      // bill's GST rate to get the real cash amount that actually goes out.
+      // If bill has a payment schedule, use each stage as a separate outflow
       if (b.paymentSchedule && b.paymentSchedule.length > 0) {
-        return b.paymentSchedule.map(stage => {
-          const paid = isStagePaid(b, stage);
-          return {
-            date: stage.date||b.due||'',
-            label: `${b.payee} — ${stage.name||'Payment'}`,
-            cat: b.category||'Bill', subcat: `${paid?'Paid':'Unpaid'} · ${stage.pct||''}% of ${inr(totalWithGST(b.amount,b.gstRate)||0)} incl. GST`,
-            type: 'out', amt: totalWithGST(stage.amount, b.gstRate), project: b.project||'',
-            ref: b.invoiceNo||'', isPast: (stage.date||b.due||'') < todayStr,
-          };
-        });
+        return b.paymentSchedule.map(stage => ({
+          date: stage.date||b.due||'',
+          label: `${b.payee} — ${stage.name||'Payment'}`,
+          cat: b.category||'Bill', subcat: `${stage.pct||''}% of ${inr(b.amount||0)}`,
+          type: 'out', amt: Number(stage.amount||0), project: b.project||'',
+          ref: b.invoiceNo||'', isPast: (stage.date||b.due||'') < todayStr,
+        }));
       }
       // No schedule — single outflow on due date
       return [{
         date: b.due||b.invoiceDate||'', label: b.payee,
-        cat: b.category||'Bill', subcat: `${b.paid?'Paid':'Unpaid'} · incl. ${b.gstRate||0}% GST`,
-        type: 'out', amt: totalWithGST(b.amount, b.gstRate), project: b.project||'',
+        cat: b.category||'Bill', subcat: b.paid?'Paid':'Unpaid',
+        type: 'out', amt: Number(b.amount||0), project: b.project||'',
         ref: b.invoiceNo||'', isPast: (b.due||'') < todayStr,
       }];
     }),
-    // Purchase Order payment schedules — these are the committed vendor
-    // payment terms before any invoice/Bill has actually been raised.
-    // Bills linked to a PO (Bill Payments → "Link to PO") are netted off the
-    // PO's schedule (earliest stage first) rather than dropping the whole PO,
-    // so a PO billed across several partial bills still shows only the
-    // genuinely un-billed remainder — never both, and never double-counted.
-    // Draft POs aren't counted since they aren't a confirmed commitment yet.
-    ...pos.flatMap(p => {
-      if (p.stage === 'Draft') return [];
-      if (!p.paymentSchedule || p.paymentSchedule.length === 0) return [];
-      let billedRemaining = bills.filter(b => b.linkedPO === p.po).reduce((s,b) => s + Number(b.amount||0), 0);
-      const orderedStages = [...p.paymentSchedule].sort((a,b) => (a.date||'').localeCompare(b.date||''));
-      const rows = [];
-      for (const stage of orderedStages) {
-        const stageAmt = Number(stage.amount||0);
-        const consumed = Math.min(billedRemaining, stageAmt);
-        billedRemaining -= consumed;
-        const unbilled = stageAmt - consumed;
-        if (unbilled <= 0) continue; // this stage is fully covered by bill(s) already raised
-        rows.push({
-          date: stage.date||'',
-          label: `${p.vendorName} — ${stage.name||'Payment'} (PO ${p.po})`,
-          cat: 'Purchase Order',
-          subcat: (consumed > 0
-            ? `${inr(totalWithGST(unbilled,p.gstRate))} of ${inr(totalWithGST(stageAmt,p.gstRate))} remaining · partly billed`
-            : `${stage.pct||''}% of ${inr(totalWithGST(p.value,p.gstRate)||0)} · not yet billed`) + ` · incl. ${p.gstRate||0}% GST`,
-          type: 'out', amt: totalWithGST(unbilled, p.gstRate), project: p.project||'',
-          ref: p.po||'', isPast: (stage.date||'') < todayStr,
-        });
-      }
-      return rows;
-    }),
-    // Work Order payment schedules — same netting logic as Purchase Orders above.
-    ...wos.flatMap(w => {
-      if (w.stage === 'Draft' || w.stage === 'Cancelled') return [];
-      if (!w.paymentSchedule || w.paymentSchedule.length === 0) return [];
-      let billedRemaining = bills.filter(b => b.linkedWO === w.wo).reduce((s,b) => s + Number(b.amount||0), 0);
-      const orderedStages = [...w.paymentSchedule].sort((a,b) => (a.date||'').localeCompare(b.date||''));
-      const rows = [];
-      for (const stage of orderedStages) {
-        const stageAmt = Number(stage.amount||0);
-        const consumed = Math.min(billedRemaining, stageAmt);
-        billedRemaining -= consumed;
-        const unbilled = stageAmt - consumed;
-        if (unbilled <= 0) continue;
-        rows.push({
-          date: stage.date||'',
-          label: `${w.vendorName} — ${stage.name||'Payment'} (WO ${w.wo})`,
-          cat: 'Work Order',
-          subcat: (consumed > 0
-            ? `${inr(totalWithGST(unbilled,w.gstRate))} of ${inr(totalWithGST(stageAmt,w.gstRate))} remaining · partly billed`
-            : `${stage.pct||''}% of ${inr(totalWithGST(w.value,w.gstRate)||0)} · not yet billed`) + ` · incl. ${w.gstRate||0}% GST`,
-          type: 'out', amt: totalWithGST(unbilled, w.gstRate), project: w.project||'',
-          ref: w.wo||'', isPast: (stage.date||'') < todayStr,
-        });
-      }
-      return rows;
-    }),
-    // Net GST Payable — output GST (client invoices) minus input GST/ITC
-    // (vendor bills), due around the 20th of the following month.
-    ...gstSchedule.map(g => ({
-      date: g.due, label: `GST Payment — ${new Date(g.month+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}`,
-      cat: 'GST Payable', subcat: 'Net of output GST vs input tax credit (GSTR-3B)',
-      type: 'out', amt: g.amount, project: '',
-      ref: '', isPast: g.due < todayStr,
-    })),
     ...advances.map(a => ({
       date: a.datePaid||'', label: `Advance — ${a.vendor}`,
       cat: 'Advance', subcat: a.status||'',
@@ -3073,14 +2791,14 @@ function CashFlow() {
     } catch(e) { console.error(e); alert('Could not save balance.'); }
   }
 
-  const TYPE_BADGE = { 'Bill':'red', 'Advance':'amber', 'General Expense':'red', 'Client Receipt':'green', 'Capital Inflow':'blue', 'Purchase Order':'teal', 'Work Order':'teal', 'GST Payable':'red' };
+  const TYPE_BADGE = { 'Bill':'red', 'Advance':'amber', 'General Expense':'red', 'Client Receipt':'green', 'Capital Inflow':'blue' };
 
   return (
     <div>
       <div className="section-header">
         <div>
           <div className="section-title">Cash Flow</div>
-          <div className="section-sub">{loading?'Loading…':`${allRows.length} transactions — Bills · POs · WOs · Advances · Expenses · Petty Cash · Receipts · Capital`}</div>
+          <div className="section-sub">{loading?'Loading…':`${allRows.length} transactions — Bills · Advances · Expenses · Petty Cash · Receipts · Capital`}</div>
         </div>
       </div>
 
@@ -3219,29 +2937,13 @@ function CashFlow() {
     </div>
   );
 }
+  const [editingBalance, setEditingBalance] = useState(false);
+  const [balanceInput, setBalanceInput] = useState('');
 
 // ─── Bills Module ─────────────────────────────────────
 const BILLS_COLLECTION = 'bills';
 const ADVANCES_COLLECTION = 'advances';
 const PAYMENT_MODES = ['NEFT','RTGS','Cheque','Cash','UPI','Other'];
-
-// A schedule stage (or a whole no-schedule bill) counts as paid if it's
-// individually marked paid, OR the bill itself was marked fully paid
-// (covers bills created before per-stage tracking existed).
-function isStagePaid(bill, stage) { return !!(bill.paid || (stage && stage.paid)); }
-
-// Auto-derive the bill's "due" date from its payment schedule so the rest
-// of the app (Dashboard alerts, Reminders, Reports) keeps working without
-// the user having to type a separate Due Date. Priority: earliest unpaid
-// stage date → earliest stage date (all paid) → invoice date → ''.
-function computeEffectiveDue(schedule, invoiceDate) {
-  const stages = schedule || [];
-  const unpaidDates = stages.filter(s => !s.paid).map(s => s.date).filter(Boolean).sort();
-  if (unpaidDates.length) return unpaidDates[0];
-  const anyDates = stages.map(s => s.date).filter(Boolean).sort();
-  if (anyDates.length) return anyDates[0];
-  return invoiceDate || '';
-}
 
 // ─── Bills hooks and helpers ───────────────────────
 function useBills() {
@@ -3278,32 +2980,6 @@ async function addBill(data) {
 async function markBillPaid(docId) {
   const { db, doc, updateDoc } = window.fb;
   await updateDoc(userDoc(BILLS_COLLECTION, docId), { paid: true, paidAt: Date.now() });
-}
-// Mark a single payment-schedule stage as paid (for bills with a schedule).
-// Only marks the bill as fully "paid" once every stage is paid — this is
-// the fix for a bill wrongly showing fully paid after only one stage was settled.
-async function markBillStagePaid(bill, stageId) {
-  const { doc, updateDoc } = window.fb;
-  const updatedSchedule = (bill.paymentSchedule||[]).map(s =>
-    s.id === stageId ? { ...s, paid: true, paidAt: Date.now() } : s
-  );
-  const allPaid = updatedSchedule.length > 0 && updatedSchedule.every(s => s.paid);
-  await updateDoc(userDoc(BILLS_COLLECTION, bill.docId), {
-    paymentSchedule: updatedSchedule,
-    paid: allPaid,
-    due: computeEffectiveDue(updatedSchedule, bill.invoiceDate),
-  });
-}
-async function unmarkBillStagePaid(bill, stageId) {
-  const { doc, updateDoc } = window.fb;
-  const updatedSchedule = (bill.paymentSchedule||[]).map(s =>
-    s.id === stageId ? { ...s, paid: false, paidAt: null } : s
-  );
-  await updateDoc(userDoc(BILLS_COLLECTION, bill.docId), {
-    paymentSchedule: updatedSchedule,
-    paid: false,
-    due: computeEffectiveDue(updatedSchedule, bill.invoiceDate),
-  });
 }
 async function deleteBill(docId) {
   const { db, doc, deleteDoc } = window.fb;
@@ -3376,11 +3052,10 @@ function NewBillModal({ onClose, existing }) {
     payee: existing.payee||'', category: existing.category||'Vendor',
     invoiceNo: existing.invoiceNo||'', invoiceDate: existing.invoiceDate||'',
     due: existing.due||'', amount: existing.amount ? String(existing.amount) : '',
-    gstRate: existing.gstRate!=null ? String(existing.gstRate) : String(DEFAULT_GST_RATE),
     notes: existing.notes||'', project: existing.project||'', split: existing.split||{pontoon:50,wtp:50},
     linkedPO: existing.linkedPO||'', linkedWO: existing.linkedWO||'',
   } : {
-    payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '', gstRate: String(DEFAULT_GST_RATE),
+    payee: '', category: 'Vendor', invoiceNo: '', invoiceDate: '', due: '', amount: '',
     notes: '', project: '', split:{pontoon:50,wtp:50}, linkedPO: '', linkedWO: '',
   });
   const [schedule, setSchedule] = useState(
@@ -3392,15 +3067,14 @@ function NewBillModal({ onClose, existing }) {
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
 
   async function handleSave() {
-    if (!form.payee.trim() || !form.amount) return;
+    if (!form.payee.trim() || !form.amount || !form.due) return;
     setSaving(true);
     try {
-      const due = computeEffectiveDue(schedule, form.invoiceDate);
       if (isEdit) {
         const { db, doc, updateDoc } = window.fb;
-        await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...form, due, amount: Number(form.amount), gstRate: Number(form.gstRate)||0, paymentSchedule: schedule });
+        await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...form, amount: Number(form.amount), paymentSchedule: schedule });
       } else {
-        await addBill({ ...form, due, amount: Number(form.amount), gstRate: Number(form.gstRate)||0, entryType: 'invoice', paymentSchedule: schedule });
+        await addBill({ ...form, amount: Number(form.amount), entryType: 'invoice', paymentSchedule: schedule });
       }
       onClose();
     } catch (e) { console.error(e); alert('Could not save bill.'); }
@@ -3436,21 +3110,13 @@ function NewBillModal({ onClose, existing }) {
               <input className="form-input" type="date" value={form.invoiceDate} onChange={e=>set('invoiceDate', e.target.value)} />
             </div>
             <div className="form-group">
-              <label className="form-label">Amount — Base (₹)</label>
-              <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount', e.target.value)} placeholder="0" />
+              <label className="form-label">Due Date</label>
+              <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
             </div>
           </div>
           <div className="form-group">
-            <label className="form-label">GST Rate (%)</label>
-            <input className="form-input font-mono" type="number" style={{maxWidth:140}} value={form.gstRate} onChange={e=>set('gstRate', e.target.value)} placeholder="18" />
-          </div>
-          {form.amount && (
-            <div style={{fontSize:11.5,color:'var(--text-muted)',margin:'-6px 0 12px'}}>
-              GST: {inr(gstPortionOf(form.amount, form.gstRate))} · Total incl. GST: <strong style={{color:'var(--text)'}}>{inr(totalWithGST(form.amount, form.gstRate))}</strong>
-            </div>
-          )}
-          <div style={{fontSize:11,color:'var(--text-muted)',margin:'-6px 0 10px'}}>
-            No separate due date needed — add payment stages below with their own dates, and the app tracks what's next due automatically.
+            <label className="form-label">Amount (₹)</label>
+            <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount', e.target.value)} placeholder="0" />
           </div>
           <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.amount} />
           <div className="form-grid">
@@ -3477,8 +3143,8 @@ function NewBillModal({ onClose, existing }) {
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleSave} disabled={saving || !form.payee.trim() || !form.amount} className="btn btn-primary"
-            style={{opacity: saving || !form.payee.trim() || !form.amount ? 0.6 : 1}}>
+          <button onClick={handleSave} disabled={saving || !form.payee.trim() || !form.amount || !form.due} className="btn btn-primary"
+            style={{opacity: saving || !form.payee.trim() || !form.amount || !form.due ? 0.6 : 1}}>
             {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Save Bill'}
           </button>
         </div>
@@ -3693,35 +3359,18 @@ function BillPayments() {
 
   const todayStr = new Date().toISOString().slice(0,10);
 
-  // Bills with computed status — schedule-aware, so a bill with multiple
-  // payment stages can be "Partially Paid" instead of jumping straight to "Paid".
+  // Bills with computed status
   const withStatus = items.map(b => {
-    const stages = b.paymentSchedule || [];
-    const stagesTotal = stages.length;
-    const stagesPaidCount = stages.filter(s => isStagePaid(b, s)).length;
-    const paidAmt = stagesTotal > 0
-      ? stages.filter(s => isStagePaid(b, s)).reduce((s,r) => s + Number(r.amount||0), 0)
-      : (b.paid ? Number(b.amount||0) : 0);
-    const effectiveDue = stagesTotal > 0 ? computeEffectiveDue(stages, b.invoiceDate) : b.due;
-
     let status;
-    if (stagesTotal > 0) {
-      if (stagesPaidCount === stagesTotal) status = 'Paid';
-      else if (stagesPaidCount > 0) status = 'Partially Paid';
-      else if (effectiveDue === todayStr) status = 'Due Today';
-      else if (effectiveDue && effectiveDue < todayStr) status = 'Overdue';
-      else status = 'Upcoming';
-    } else {
-      if (b.paid) status = 'Paid';
-      else if (b.due === todayStr) status = 'Due Today';
-      else if (b.due < todayStr) status = 'Overdue';
-      else status = 'Upcoming';
-    }
-    const days = ((status === 'Overdue') && effectiveDue) ? Math.floor((new Date(todayStr) - new Date(effectiveDue)) / 86400000) : 0;
+    if (b.paid) status = 'Paid';
+    else if (b.due === todayStr) status = 'Due Today';
+    else if (b.due < todayStr) status = 'Overdue';
+    else status = 'Upcoming';
+    const days = (status === 'Overdue' && b.due) ? Math.floor((new Date(todayStr) - new Date(b.due)) / 86400000) : 0;
     const linkedAdv = advances.filter(a => a.linkedBill === b.docId);
     const advanceDeducted = linkedAdv.reduce((s,a) => s + Number(a.adjustedAmount||0), 0);
-    const netPayable = Math.max(0, Number(b.amount||0) - advanceDeducted - paidAmt);
-    return { ...b, computedStatus: status, days, effectiveDue, advanceDeducted, netPayable, stagesTotal, stagesPaidCount, paidAmt };
+    const netPayable = Math.max(0, Number(b.amount||0) - advanceDeducted);
+    return { ...b, computedStatus: status, days, advanceDeducted, netPayable };
   });
 
   function applySort(arr, key, dateField='due', amtField='amount', nameField='payee') {
@@ -3734,8 +3383,8 @@ function BillPayments() {
       case 'payee_asc':   return sorted.sort((a,b)=>(a[nameField]||'').localeCompare(b[nameField]||''));
       case 'vendor_asc':  return sorted.sort((a,b)=>(a.vendorName||a.vendor||a.source||'').localeCompare(b.vendorName||b.vendor||b.source||''));
       case 'status':      return sorted.sort((a,b)=>{
-        const order = {Overdue:0,'Due Today':1,'Partially Paid':2,Upcoming:3,Paid:4,Unadjusted:0,'Partially Adjusted':1,'Fully Adjusted':2};
-        return (order[a.computedStatus||a.status]??5)-(order[b.computedStatus||b.status]??5);
+        const order = {Overdue:0,'Due Today':1,Upcoming:2,Paid:3,Unadjusted:0,'Partially Adjusted':1,'Fully Adjusted':2};
+        return (order[a.computedStatus||a.status]??4)-(order[b.computedStatus||b.status]??4);
       });
       default: return sorted;
     }
@@ -3750,7 +3399,7 @@ function BillPayments() {
       (projectFilter === 'all' || b.project === projectFilter) &&
       (vendorFilter === 'all' || b.payee === vendorFilter) &&
       (monthFilter === 'all' || (b.due||'').startsWith(monthFilter))
-    ), sortBy, 'effectiveDue'
+    ), sortBy
   );
 
   // Stats
@@ -3758,8 +3407,8 @@ function BillPayments() {
   const overdueCount = withStatus.filter(b=>b.computedStatus==='Overdue').length;
   const dueTodayTotal = withStatus.filter(b=>b.computedStatus==='Due Today').reduce((s,b)=>s+b.netPayable,0);
   const next7 = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
-  const dueWeekTotal = withStatus.filter(b=>b.computedStatus!=='Paid'&&b.effectiveDue>=todayStr&&b.effectiveDue<=next7).reduce((s,b)=>s+b.netPayable,0);
-  const paidTotal = withStatus.reduce((s,b)=>s+b.paidAmt,0);
+  const dueWeekTotal = withStatus.filter(b=>!b.paid&&b.due>=todayStr&&b.due<=next7).reduce((s,b)=>s+b.netPayable,0);
+  const paidTotal = withStatus.filter(b=>b.paid).reduce((s,b)=>s+Number(b.amount||0),0);
 
   // Advance stats
   const totalAdvances = advances.reduce((s,a)=>s+Number(a.amount||0),0);
@@ -3833,7 +3482,7 @@ function BillPayments() {
                 </select>
                 <select className="form-input form-select" style={{width:140}} onChange={e=>setStatusFilter(e.target.value)}>
                   <option value="all">All Status</option>
-                  <option>Overdue</option><option>Due Today</option><option>Partially Paid</option><option>Upcoming</option><option>Paid</option>
+                  <option>Overdue</option><option>Due Today</option><option>Upcoming</option><option>Paid</option>
                 </select>
                 <select className="form-input form-select" style={{width:130}} value={projectFilter} onChange={e=>setBillProjectFilter(e.target.value)}>
                   <option value="all">All Projects</option>
@@ -3848,8 +3497,8 @@ function BillPayments() {
                   {billMonths.map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}</option>)}
                 </select>
                 <select className="form-input form-select" style={{width:180}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
-                  <option value="date_desc">↓ Next Payment (Newest)</option>
-                  <option value="date_asc">↑ Next Payment (Oldest)</option>
+                  <option value="date_desc">↓ Due Date (Newest)</option>
+                  <option value="date_asc">↑ Due Date (Oldest)</option>
                   <option value="amount_desc">↓ Amount (Highest)</option>
                   <option value="amount_asc">↑ Amount (Lowest)</option>
                   <option value="payee_asc">A→Z Payee</option>
@@ -3864,7 +3513,7 @@ function BillPayments() {
             ) : (
               <table>
                 <thead>
-                  <tr><th>Payee</th><th>Project</th><th>Category</th><th>Invoice #</th><th>Bill Amount</th><th>Paid</th><th>Advance Deducted</th><th>Net Payable</th><th>Linked To</th><th>Status</th><th>Actions</th></tr>
+                  <tr><th>Payee</th><th>Project</th><th>Category</th><th>Invoice #</th><th>Due Date</th><th>Bill Amount</th><th>Advance Deducted</th><th>Net Payable</th><th>Linked To</th><th>Status</th><th>Actions</th></tr>
                 </thead>
                 <tbody>
                   {filtered.map(b => (
@@ -3873,22 +3522,8 @@ function BillPayments() {
                       <td>{b.project?<span className={`badge ${PROJECT_COLOR[b.project]||'grey'}`}>{b.project}</span>:<span className="text-muted">—</span>}</td>
                       <td><span className="badge grey">{b.category}</span></td>
                       <td className="mono">{b.invoiceNo||'—'}</td>
-                      <td className="amount">
-                        {inr(totalWithGST(b.amount,b.gstRate)||0)}
-                        <div style={{fontSize:10,color:'var(--text-muted)'}}>{inr(b.amount||0)} + {b.gstRate||0}% GST</div>
-                      </td>
-                      <td>
-                        {b.stagesTotal > 0 ? (
-                          <div style={{fontSize:11.5}}>
-                            <div className="fw-600" style={{color: b.stagesPaidCount===b.stagesTotal?'var(--green)':b.stagesPaidCount>0?'var(--secondary)':'var(--text-muted)'}}>
-                              {b.stagesPaidCount}/{b.stagesTotal} stages
-                            </div>
-                            <div className="text-muted" style={{fontSize:10.5}}>{inr(b.paidAmt)} paid</div>
-                          </div>
-                        ) : (
-                          <span className={`badge ${b.paid?'green':'grey'}`}>{b.paid?'Paid':'Unpaid'}</span>
-                        )}
-                      </td>
+                      <td>{fmt(b.due)}{b.days>0&&<span style={{color:'var(--red)',fontWeight:600,marginLeft:4}}>+{b.days}d</span>}</td>
+                      <td className="amount">{inr(b.amount||0)}</td>
                       <td className="amount" style={{color:'var(--green)'}}>
                         {b.advanceDeducted > 0 ? <>− {inr(b.advanceDeducted)}</> : <span className="text-muted">—</span>}
                       </td>
@@ -3896,16 +3531,12 @@ function BillPayments() {
                         {inr(b.netPayable)}
                       </td>
                       <td><XRefBadge po={b.linkedPO} wo={b.linkedWO} /></td>
-                      <td>
-                        <span className={`badge ${BILL_STATUS_COLOR[b.computedStatus]}`}>{b.computedStatus}</span>
-                        {b.days>0&&<span style={{color:'var(--red)',fontWeight:600,marginLeft:4,fontSize:11}}>+{b.days}d</span>}
-                      </td>
+                      <td><span className={`badge ${BILL_STATUS_COLOR[b.computedStatus]}`}>{b.computedStatus}</span></td>
                       <td>
                         <div className="flex gap-2">
                           <button className="btn btn-sm btn-ghost" onClick={()=>setEditBill(b)}>Edit</button>
-                          {b.stagesTotal>0
-                            ? <button className="btn btn-sm btn-outline" onClick={()=>setViewBillSchedule(b)}>Payments</button>
-                            : (!b.paid && <button className="btn btn-sm btn-primary" onClick={()=>markBillPaid(b.docId)}>Mark Paid</button>)}
+                          {b.paymentSchedule&&b.paymentSchedule.length>0&&<button className="btn btn-sm btn-outline" onClick={()=>setViewBillSchedule(b)}>Schedule</button>}
+                          {!b.paid && <button className="btn btn-sm btn-primary" onClick={()=>markBillPaid(b.docId)}>Mark Paid</button>}
                           <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteBill(b.docId);}}>Delete</button>
                         </div>
                       </td>
@@ -4007,53 +3638,30 @@ function BillPayments() {
       {editBill && <NewBillModal onClose={()=>setEditBill(null)} existing={editBill} />}
       {showNewAdvance && <NewAdvanceModal onClose={()=>setShowNewAdvance(false)} pos={pos} wos={wos} bills={items} />}
       {editAdvance && <NewAdvanceModal onClose={()=>setEditAdvance(null)} pos={pos} wos={wos} bills={items} existing={editAdvance} />}
-      {viewBillSchedule && (() => {
-        // Always read the live bill from Firestore data (not the stale snapshot
-        // captured when "Payments" was clicked) so paid-status updates show instantly.
-        const liveBill = items.find(x => x.docId === viewBillSchedule.docId) || viewBillSchedule;
-        const stages = liveBill.paymentSchedule || [];
-        const paidAmt = stages.filter(s => isStagePaid(liveBill, s)).reduce((s,r) => s + Number(r.amount||0), 0);
-        const totalAmt = Number(liveBill.amount||0);
-        return (
+      {viewBillSchedule && (
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{background:'var(--surface)',borderRadius:10,width:540,maxHeight:'80vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:'var(--surface)',borderRadius:10,width:500,maxHeight:'80vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
             <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
-              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payments — {liveBill.payee}</span>
+              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payment Schedule — {viewBillSchedule.payee}</span>
             </div>
             <div style={{padding:'16px 20px'}}>
-              <div className="flex gap-2" style={{marginBottom:12,flexWrap:'wrap'}}>
-                <span style={{fontSize:12,color:'var(--text-muted)'}}>Bill Total: <strong style={{color:'var(--text)'}}>{inr(totalAmt)}</strong></span>
-                <span style={{fontSize:12,color:'var(--text-muted)'}}>· Paid: <strong style={{color:'var(--green)'}}>{inr(paidAmt)}</strong></span>
-                <span style={{fontSize:12,color:'var(--text-muted)'}}>· Remaining: <strong style={{color: totalAmt-paidAmt>0?'var(--red)':'var(--green)'}}>{inr(Math.max(0,totalAmt-paidAmt))}</strong></span>
-              </div>
+              <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:12}}>Total: {inr(viewBillSchedule.amount||0)}</div>
               <table style={{width:'100%'}}>
                 <thead><tr style={{background:'var(--grey-50)'}}>
                   <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Stage</th>
                   <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>%</th>
                   <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Amount</th>
-                  <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Date</th>
-                  <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Status</th>
+                  <th style={{padding:'6px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Due Date</th>
                 </tr></thead>
                 <tbody>
-                  {stages.map((s,i)=>{
-                    const paid = isStagePaid(liveBill, s);
-                    return (
-                    <tr key={s.id||i} style={{borderTop:'1px solid var(--grey-50)'}}>
+                  {(viewBillSchedule.paymentSchedule||[]).map((s,i)=>(
+                    <tr key={i} style={{borderTop:'1px solid var(--grey-50)'}}>
                       <td style={{padding:'8px 10px',fontSize:12.5,fontWeight:600}}>{s.name||`Stage ${i+1}`}</td>
                       <td style={{padding:'8px 10px',fontSize:12}}>{s.pct||'—'}%</td>
                       <td style={{padding:'8px 10px',fontSize:12,fontWeight:600,color:'var(--red)'}}>{inr(s.amount||0)}</td>
                       <td style={{padding:'8px 10px',fontSize:12}}>{fmt(s.date)||'—'}</td>
-                      <td style={{padding:'8px 10px',fontSize:12}}>
-                        {paid
-                          ? <div className="flex gap-2" style={{alignItems:'center'}}>
-                              <span className="badge green">✓ Paid</span>
-                              <span style={{fontSize:10.5,color:'var(--text-muted)',cursor:'pointer',textDecoration:'underline'}}
-                                onClick={()=>unmarkBillStagePaid(liveBill, s.id)}>undo</span>
-                            </div>
-                          : <button className="btn btn-sm btn-primary" onClick={()=>markBillStagePaid(liveBill, s.id)}>Mark Paid</button>}
-                      </td>
                     </tr>
-                  );})}
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -4062,8 +3670,7 @@ function BillPayments() {
             </div>
           </div>
         </div>
-        );
-      })()}
+      )}
       {linkingAdvance && <LinkAdvanceModal advance={linkingAdvance} onClose={()=>setLinkingAdvance(null)} pos={pos} bills={items} />}
     </div>
   );
@@ -4202,7 +3809,6 @@ function nextRABillNumber(existing) {
 // MODAL 1 — New Billing Schedule
 // ════════════════════════════════════════════════════
 function NewBillingScheduleModal({ onClose }) {
-  const knownNames = useKnownNames();
   const [form, setForm] = useState({ client:'', projectRef:'', contractValue:'', project:'' });
   const [milestones, setMilestones] = useState([
     { id:genRowId(), name:'Advance',    pct:'', amount:'', expectedDate:'' },
@@ -4336,7 +3942,7 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
   const [form, setForm] = useState({
     raBillNo: nextRABillNumber(existingCount),
     scheduleId: '', client:'', projectRef:'', milestoneIndex: '',
-    amountClaimed: '', gstRate: String(DEFAULT_GST_RATE), dateSubmitted: new Date().toISOString().slice(0,10),
+    amountClaimed: '', dateSubmitted: new Date().toISOString().slice(0,10),
     notes: ''
   });
   const [saving, setSaving] = useState(false);
@@ -4368,9 +3974,8 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
       await addRABill({
         ...form,
         amountClaimed: Number(form.amountClaimed),
-        gstRate: Number(form.gstRate)||0,
         amountReceived: 0,
-        balancePending: totalWithGST(form.amountClaimed, form.gstRate),
+        balancePending: Number(form.amountClaimed),
         status: 'Submitted',
         milestoneName: selectedMilestone?.name||'',
         project: selectedSchedule?.project||'',
@@ -4432,21 +4037,10 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
             </div>
           )}
 
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">Amount Claimed — Base (₹)</label>
-              <input className="form-input font-mono" value={form.amountClaimed} onChange={e=>set('amountClaimed',e.target.value)} placeholder="0" />
-            </div>
-            <div className="form-group">
-              <label className="form-label">GST Rate (%)</label>
-              <input className="form-input font-mono" type="number" value={form.gstRate} onChange={e=>set('gstRate',e.target.value)} placeholder="18" />
-            </div>
+          <div className="form-group">
+            <label className="form-label">Amount Claimed (₹)</label>
+            <input className="form-input font-mono" value={form.amountClaimed} onChange={e=>set('amountClaimed',e.target.value)} placeholder="0" />
           </div>
-          {form.amountClaimed && (
-            <div style={{fontSize:11.5,color:'var(--text-muted)',margin:'-6px 0 12px'}}>
-              GST: {inr(gstPortionOf(form.amountClaimed, form.gstRate))} · Total invoice (incl. GST): <strong style={{color:'var(--text)'}}>{inr(totalWithGST(form.amountClaimed, form.gstRate))}</strong>
-            </div>
-          )}
           <div className="form-group">
             <label className="form-label">Notes</label>
             <input className="form-input" value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Optional — scope, period, etc." />
@@ -4469,8 +4063,7 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
 // ════════════════════════════════════════════════════
 function RecordReceiptModal({ raBill, onClose, allReceipts }) {
   const alreadyReceived = allReceipts.filter(r=>r.raBillId===raBill.docId).reduce((s,r)=>s+Number(r.amountReceived||0),0);
-  const invoiceTotal = totalWithGST(raBill.amountClaimed, raBill.gstRate);
-  const pendingBalance = Math.max(0, invoiceTotal - alreadyReceived);
+  const pendingBalance = Math.max(0, Number(raBill.amountClaimed||0) - alreadyReceived);
 
   const [form, setForm] = useState({
     amountReceived: String(pendingBalance),
@@ -4506,7 +4099,7 @@ function RecordReceiptModal({ raBill, onClose, allReceipts }) {
       });
       // Update RA Bill received total and status
       const totalReceived = alreadyReceived + amt;
-      const newPending = Math.max(0, totalWithGST(raBill.amountClaimed, raBill.gstRate) - totalReceived);
+      const newPending = Math.max(0, Number(raBill.amountClaimed||0) - totalReceived);
       const status = newPending <= 0 ? 'Fully Received' : 'Partially Received';
       await updateRABill(raBill.docId, {
         amountReceived: totalReceived,
@@ -4533,9 +4126,7 @@ function RecordReceiptModal({ raBill, onClose, allReceipts }) {
             <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Billing Milestone</span><span>{raBill.milestoneName||'—'}</span></div>
             <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>RA Bill No.</span><span className="mono">{raBill.raBillNo}</span></div>
             <div style={{borderTop:'1px solid #C8E6C9',marginTop:8,paddingTop:8}}>
-              <div className="flex justify-between"><span style={{color:'var(--text-muted)'}}>Base Value</span><span className="amount">{inr(raBill.amountClaimed||0)}</span></div>
-              <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>GST ({raBill.gstRate||0}%)</span><span className="amount">{inr(gstPortionOf(raBill.amountClaimed, raBill.gstRate))}</span></div>
-              <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Total Invoice (incl. GST)</span><span className="amount fw-600">{inr(invoiceTotal)}</span></div>
+              <div className="flex justify-between"><span style={{color:'var(--text-muted)'}}>Total Claimed</span><span className="amount fw-600">{inr(raBill.amountClaimed||0)}</span></div>
               <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Already Received</span><span className="amount" style={{color:'var(--green)'}}>{inr(alreadyReceived)}</span></div>
               <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Balance Pending</span><span className="amount fw-600" style={{color:'var(--red)'}}>{inr(pendingBalance)}</span></div>
             </div>
@@ -4809,10 +4400,7 @@ function Receipts() {
                     <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{b.projectRef||'—'}</td>
                     <td>{b.milestoneName||'—'}</td>
                     <td>{b.dateSubmitted}</td>
-                    <td className="amount fw-600">
-                      {inr(totalWithGST(b.amountClaimed,b.gstRate)||0)}
-                      <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:400}}>{inr(b.amountClaimed||0)} + {b.gstRate||0}% GST</div>
-                    </td>
+                    <td className="amount fw-600">{inr(b.amountClaimed||0)}</td>
                     <td className="amount" style={{color:'var(--green)',fontWeight:600}}>{inr(b.amountReceived||0)}</td>
                     <td className="amount" style={{color:Number(b.balancePending||0)>0?'var(--red)':'var(--green)',fontWeight:600}}>{inr(b.balancePending||0)}</td>
                     <td><span className={`badge ${RA_STATUS_COLOR[b.status]||'grey'}`}>{b.status}</span></td>
@@ -6723,10 +6311,7 @@ function QuotationsWithUser({ currentUser }) {
                   <td className="fw-600">{q.vendorName}</td>
                   <td>{q.project?<span className={`badge ${PROJECT_COLOR[q.project]||'grey'}`}>{q.project}</span>:<span className="text-muted">—</span>}</td>
                   <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{reqLabel(q.linkedReq)}</td>
-                  <td className="amount fw-600">
-                    {inr(totalWithGST(q.value,q.gstRate)||0)}
-                    <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:400}}>{inr(q.value||0)} + {q.gstRate||0}% GST</div>
-                  </td>
+                  <td className="amount fw-600">{inr(q.value||0)}</td>
                   <td>
                     {q.paymentSchedule&&q.paymentSchedule.length>0
                       ? <span className="btn btn-sm btn-ghost" style={{cursor:'pointer'}} onClick={()=>setViewSchedule(q)}>{q.paymentSchedule.length} stage{q.paymentSchedule.length===1?'':'s'}</span>
@@ -6799,10 +6384,10 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
   const [form, setForm] = useState(isEdit ? {
     quotNo: existing.quotNo||'', vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
-    receivedDate: existing.receivedDate||'', gstRate: existing.gstRate!=null ? String(existing.gstRate) : String(DEFAULT_GST_RATE),
+    receivedDate: existing.receivedDate||'',
     stage: existing.stage||'Receipt of Quotation', notes: existing.notes||'', project: existing.project||''
   } : {
-    quotNo:'', vendorName:'', description:'', value:'', gstRate: String(DEFAULT_GST_RATE),
+    quotNo:'', vendorName:'', description:'', value:'',
     receivedDate: new Date().toISOString().slice(0,10),
     stage:'Receipt of Quotation', notes:'', project:''
   });
@@ -6815,9 +6400,9 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
     setSaving(true);
     try{
       if (isEdit) {
-        await updateQuotation(existing.docId, {...form, value:Number(form.value), gstRate:Number(form.gstRate)||0, paymentSchedule:schedule});
+        await updateQuotation(existing.docId, {...form, value:Number(form.value), paymentSchedule:schedule});
       } else {
-        await addQuotation({...form,value:Number(form.value), gstRate:Number(form.gstRate)||0, paymentSchedule:schedule});
+        await addQuotation({...form,value:Number(form.value),paymentSchedule:schedule});
       }
       onClose();
     }catch(e){console.error(e);alert('Could not save quotation.');}
@@ -6849,21 +6434,10 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
             <label className="form-label">Description</label>
             <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="e.g. RO membranes — 5 units, 4040 size" />
           </div>
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">Total Value — Base (₹)</label>
-              <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} placeholder="0" />
-            </div>
-            <div className="form-group">
-              <label className="form-label">GST Rate (%)</label>
-              <input className="form-input font-mono" type="number" value={form.gstRate} onChange={e=>set('gstRate',e.target.value)} placeholder="18" />
-            </div>
+          <div className="form-group">
+            <label className="form-label">Total Value (₹)</label>
+            <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} placeholder="0" />
           </div>
-          {form.value && (
-            <div style={{fontSize:11.5,color:'var(--text-muted)',margin:'-6px 0 12px'}}>
-              GST: {inr(gstPortionOf(form.value, form.gstRate))} · Total incl. GST: <strong style={{color:'var(--text)'}}>{inr(totalWithGST(form.value, form.gstRate))}</strong>
-            </div>
-          )}
           <div className="form-group">
             <label className="form-label">Stage</label>
             <select className="form-input form-select" value={form.stage} onChange={e=>set('stage',e.target.value)}>
