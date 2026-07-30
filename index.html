@@ -1443,6 +1443,171 @@ function nextWONumber(count) {
   return `NWTS/WO/${new Date().getFullYear()}-${String(new Date().getFullYear()+1).slice(2)}/${String(count+1).padStart(3,'0')}`;
 }
 
+// ─── Dashboard ────────────────────────────────────────
+function Dashboard({ setActive }) {
+  const { items: bills }    = useBills();
+  const { items: advances } = useAdvances();
+  const { items: wos }      = useWorkOrders();
+  const { items: pos }      = usePurchaseOrders();
+  const { items: quotes }   = useQuotations();
+  const { items: receipts } = useReceipts();
+  const { items: expenses } = useExpenses();
+  const { items: petty }    = usePettyCash();
+
+  const today = new Date().toISOString().slice(0,10);
+
+  // Key metrics
+  const overdueBills = bills.filter(b => !b.paid && b.due && b.due < today);
+  const overdueAmt   = overdueBills.reduce((s,b) => s+Number(b.amount||0), 0);
+  const dueTodayBills = bills.filter(b => !b.paid && b.due === today);
+  const activeWOs    = wos.filter(w => w.stage === 'In Progress' || w.stage === 'Issued');
+  const pendingPOs   = pos.filter(p => p.stage !== 'Closed' && p.stage !== 'Fully Received');
+  const unadjAdv     = advances.filter(a => a.status !== 'Fully Adjusted');
+  const unadjAmt     = unadjAdv.reduce((s,a) => s+Number(a.amount||0), 0);
+  const thisMonth    = today.slice(0,7);
+  const monthExpenses = [...expenses,...petty].filter(i=>(i.date||'').startsWith(thisMonth)).reduce((s,i)=>s+Number(i.amount||0),0);
+  const monthReceipts = receipts.filter(r=>(r.dateReceived||'').startsWith(thisMonth)).reduce((s,r)=>s+Number(r.amountReceived||0),0);
+  const pendingQuotes = quotes.filter(q=>!q.approved);
+
+  const alerts = [];
+  if (overdueBills.length) alerts.push({ type:'red', msg:`${overdueBills.length} overdue bill${overdueBills.length>1?'s':''} — ${inr(overdueAmt)} pending` });
+  if (dueTodayBills.length) alerts.push({ type:'amber', msg:`${dueTodayBills.length} bill${dueTodayBills.length>1?'s':''} due today` });
+  if (unadjAdv.length) alerts.push({ type:'amber', msg:`${unadjAdv.length} unadjusted advance${unadjAdv.length>1?'s':''} — ${inr(unadjAmt)}` });
+  if (pendingQuotes.length) alerts.push({ type:'blue', msg:`${pendingQuotes.length} quotation${pendingQuotes.length>1?'s':''} pending approval` });
+
+  const quickLinks = [
+    { icon:'📋', label:'Quotations',       id:'quotations' },
+    { icon:'🔧', label:'Work Orders',      id:'workorders' },
+    { icon:'📦', label:'Purchase Orders',  id:'purchaseorders' },
+    { icon:'📑', label:'Bill Payments',    id:'billpayments' },
+    { icon:'📈', label:'Cash Flow',        id:'cashflow' },
+    { icon:'📊', label:'Project P&L',      id:'projectpnl' },
+    { icon:'📥', label:'Receipts',         id:'receipts' },
+    { icon:'⚙',  label:'Settings',         id:'settings' },
+  ];
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Dashboard</div>
+          <div className="section-sub">{new Date().toLocaleDateString('en-IN',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div>
+        </div>
+      </div>
+
+      {alerts.map((a,i) => (
+        <div key={i} style={{background:a.type==='red'?'#FEE2E2':a.type==='amber'?'#FEF3C7':'#DBEAFE',borderLeft:`4px solid var(--${a.type})`,padding:'10px 14px',borderRadius:6,marginBottom:8,fontSize:13,color:'var(--text)'}}>
+          {a.type==='red'?'🚨':a.type==='amber'?'⚠️':'ℹ️'} {a.msg}
+        </div>
+      ))}
+
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginTop:16}}>
+        <div className="stat-card" style={{cursor:'pointer'}} onClick={()=>setActive('billpayments')}>
+          <div className="stat-label">Overdue Bills</div>
+          <div className="stat-value red">{overdueBills.length}</div>
+          <div className="stat-sub">{inr(overdueAmt)}</div>
+        </div>
+        <div className="stat-card" style={{cursor:'pointer'}} onClick={()=>setActive('workorders')}>
+          <div className="stat-label">Active Work Orders</div>
+          <div className="stat-value blue">{activeWOs.length}</div>
+          <div className="stat-sub">{pendingPOs.length} POs pending</div>
+        </div>
+        <div className="stat-card" style={{cursor:'pointer'}} onClick={()=>setActive('receipts')}>
+          <div className="stat-label">This Month Receipts</div>
+          <div className="stat-value green">{inr(monthReceipts)}</div>
+          <div className="stat-sub">{thisMonth}</div>
+        </div>
+        <div className="stat-card" style={{cursor:'pointer'}} onClick={()=>setActive('cashflow')}>
+          <div className="stat-label">This Month Expenses</div>
+          <div className="stat-value amber">{inr(monthExpenses)}</div>
+          <div className="stat-sub">Petty + General</div>
+        </div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginTop:14}}>
+        {/* Quick Links */}
+        <div className="card">
+          <div className="card-header"><span className="card-title">Quick Links</span></div>
+          <div className="card-body" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            {quickLinks.map(l=>(
+              <button key={l.id} onClick={()=>setActive(l.id)}
+                style={{display:'flex',alignItems:'center',gap:8,padding:'10px 12px',background:'var(--grey-50)',border:'1px solid var(--border)',borderRadius:6,cursor:'pointer',fontSize:12.5,fontWeight:500,color:'var(--text)',textAlign:'left'}}>
+                <span style={{fontSize:16}}>{l.icon}</span>{l.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Recent Overdue Bills */}
+        <div className="card">
+          <div className="card-header"><span className="card-title">Overdue Bills</span></div>
+          {overdueBills.length === 0 ? (
+            <div style={{padding:'20px',textAlign:'center',color:'var(--text-muted)',fontSize:13}}>✓ No overdue bills</div>
+          ) : (
+            <table>
+              <thead><tr><th>Payee</th><th>Due</th><th>Amount</th></tr></thead>
+              <tbody>
+                {overdueBills.slice(0,5).map(b=>(
+                  <tr key={b.docId}>
+                    <td className="fw-600" style={{fontSize:12}}>{b.payee}</td>
+                    <td style={{fontSize:11,color:'var(--red)'}}>{fmt(b.due)}</td>
+                    <td className="amount" style={{fontSize:12,color:'var(--red)',fontWeight:700}}>{inr(b.amount||0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginTop:14}}>
+        {/* Active WOs */}
+        <div className="card">
+          <div className="card-header"><span className="card-title">Active Work Orders</span></div>
+          {activeWOs.length === 0 ? (
+            <div style={{padding:'20px',textAlign:'center',color:'var(--text-muted)',fontSize:13}}>No active work orders</div>
+          ) : (
+            <table>
+              <thead><tr><th>WO #</th><th>Vendor</th><th>Stage</th><th>Value</th></tr></thead>
+              <tbody>
+                {activeWOs.slice(0,5).map(w=>(
+                  <tr key={w.docId}>
+                    <td className="mono" style={{fontSize:11}}>{w.wo}</td>
+                    <td style={{fontSize:12}}>{w.vendorName}</td>
+                    <td><span className={`badge ${WO_STAGE_COLOR[w.stage]||'grey'}`} style={{fontSize:10}}>{w.stage}</span></td>
+                    <td className="amount" style={{fontSize:12}}>{inr(w.value||0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Recent Quotations */}
+        <div className="card">
+          <div className="card-header"><span className="card-title">Pending Quotations</span></div>
+          {pendingQuotes.length === 0 ? (
+            <div style={{padding:'20px',textAlign:'center',color:'var(--text-muted)',fontSize:13}}>No pending quotations</div>
+          ) : (
+            <table>
+              <thead><tr><th>Vendor</th><th>Value</th><th>Stage</th></tr></thead>
+              <tbody>
+                {pendingQuotes.slice(0,5).map(q=>(
+                  <tr key={q.docId}>
+                    <td style={{fontSize:12}} className="fw-600">{q.vendorName}</td>
+                    <td className="amount" style={{fontSize:12}}>{inr(q.value||0)}</td>
+                    <td><span className={`badge ${STAGE_COLOR[q.stage]||'grey'}`} style={{fontSize:10}}>{q.stage}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WorkOrders() {
   const { items, loading } = useWorkOrders();
   const { items: quotations } = useQuotations();
