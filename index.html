@@ -970,46 +970,51 @@ function ClearDataCard({ item }) {
 
 // ─── PaymentScheduleEditor ────────────────────────────
 function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChange }) {
-  // gstPct: GST % on the base amount (e.g. 18)
-  // Base amount = totalValue / (1 + gstPct/100) if inclusive, or totalValue if exclusive
-  // We treat totalValue as BASE (exclusive of GST). GST is added on top as a final stage.
-
   const baseAmt = Number(totalValue)||0;
   const gstRate = parseFloat(gstPct)||0;
-  const gstAmt  = Math.round(baseAmt * gstRate / 100);
-  const totalWithGST = baseAmt + gstAmt;
+  const totalGstAmt = Math.round(baseAmt * gstRate / 100);
 
-  function addRow() { setRows(r=>[...r,{id:genRowId(),name:'',pct:'',amount:'',date:''}]); }
+  function addRow() {
+    setRows(r=>[...r,{id:genRowId(),name:'',pct:'',amount:'',date:'',includesGst:false,gstAmount:''}]);
+  }
   function removeRow(id) { setRows(r=>r.filter(x=>x.id!==id)); }
   function updateRow(id,field,value) {
     setRows(r=>r.map(x=>{
       if(x.id!==id) return x;
       const next={...x,[field]:value};
-      // % and amount auto-calc based on BASE amount only (excl GST)
+      // % ↔ amount auto-calc on base (excl GST)
       if(field==='pct'&&baseAmt) next.amount=String(Math.round((parseFloat(value)||0)/100*baseAmt));
       if(field==='amount'&&baseAmt>0) next.pct=String(Math.round((Number(value)||0)/baseAmt*100));
+      // When GST checkbox toggled on, pre-fill gstAmount with full GST
+      if(field==='includesGst') {
+        if(value && !next.gstAmount && totalGstAmt>0) next.gstAmount=String(totalGstAmt);
+        if(!value) next.gstAmount='';
+      }
       return next;
     }));
   }
 
-  const stageTotal = rows.reduce((s,r)=>s+(parseFloat(r.pct)||0),0);
+  const stageTotal    = rows.reduce((s,r)=>s+(parseFloat(r.pct)||0),0);
   const stageAmtTotal = rows.reduce((s,r)=>s+(Number(r.amount)||0),0);
-  const remaining = baseAmt - stageAmtTotal;
+  const gstAssigned   = rows.filter(r=>r.includesGst).reduce((s,r)=>s+(Number(r.gstAmount)||0),0);
 
   return (
     <div className="form-group">
-      <label className="form-label">Payment Schedule <span style={{color:'var(--text-muted)',fontWeight:400,fontSize:11}}>(optional)</span></label>
+      <label className="form-label">
+        Payment Schedule <span style={{color:'var(--text-muted)',fontWeight:400,fontSize:11}}>(optional)</span>
+      </label>
 
-      {/* GST field */}
+      {/* GST rate field */}
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,padding:'8px 10px',background:'var(--grey-50)',borderRadius:6,border:'1px solid var(--border)'}}>
-        <span style={{fontSize:12,color:'var(--text-secondary)',whiteSpace:'nowrap'}}>GST %</span>
+        <span style={{fontSize:12,color:'var(--text-secondary)',whiteSpace:'nowrap',fontWeight:600}}>GST %</span>
         <input className="form-input font-mono" style={{width:70,fontSize:12,padding:'4px 8px'}}
           value={gstPct||''} onChange={e=>onGstPctChange&&onGstPctChange(e.target.value)}
           placeholder="18" />
         {gstRate>0&&baseAmt>0&&(
           <span style={{fontSize:11.5,color:'var(--text-muted)'}}>
-            GST on base {inr(baseAmt)} = <strong style={{color:'var(--primary)'}}>{inr(gstAmt)}</strong> → Total {inr(totalWithGST)}
-            <span style={{marginLeft:8,color:'var(--text-muted)'}}>| GST auto-added as final stage on invoice</span>
+            Total GST = <strong style={{color:'var(--primary)'}}>{inr(totalGstAmt)}</strong>
+            &nbsp;· Tick "GST" on the stage where GST is payable
+            &nbsp;· ITC recovered on 20th of following month
           </span>
         )}
       </div>
@@ -1017,39 +1022,73 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
       {rows.length>0 && (
         <div style={{border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',marginBottom:8}}>
           <table style={{width:'100%'}}>
-            <thead><tr style={{background:'var(--grey-50)'}}>
-              {['Stage','% of Base','Amount (₹)','Due Date',''].map((h,i)=><th key={i} style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>{h}</th>)}
-            </tr></thead>
+            <thead>
+              <tr style={{background:'var(--grey-50)'}}>
+                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>Stage</th>
+                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>%</th>
+                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>Amount (₹)</th>
+                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>Due Date</th>
+                <th style={{fontSize:10,padding:'5px 8px',textAlign:'center',color:'var(--primary)',whiteSpace:'nowrap'}}>GST?</th>
+                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--primary)'}}>GST Amt (₹)</th>
+                <th style={{fontSize:10,padding:'5px 8px',width:20}}></th>
+              </tr>
+            </thead>
             <tbody>
               {rows.map(r=>(
-                <tr key={r.id} style={{borderTop:'1px solid var(--grey-50)'}}>
-                  <td style={{padding:3}}><input className="form-input" style={{fontSize:11.5,padding:'4px 6px'}} value={r.name} onChange={e=>updateRow(r.id,'name',e.target.value)} placeholder="e.g. Advance" /></td>
-                  <td style={{padding:3,width:60}}><input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px'}} value={r.pct} onChange={e=>updateRow(r.id,'pct',e.target.value)} placeholder="30" /></td>
-                  <td style={{padding:3,width:110}}><input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px'}} value={r.amount} onChange={e=>updateRow(r.id,'amount',e.target.value)} placeholder="0" /></td>
-                  <td style={{padding:3,width:130}}><input className="form-input" type="date" style={{fontSize:11.5,padding:'4px 6px'}} value={r.date} onChange={e=>updateRow(r.id,'date',e.target.value)} /></td>
-                  <td style={{padding:3,textAlign:'center',width:24}}><span onClick={()=>removeRow(r.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span></td>
+                <tr key={r.id} style={{borderTop:'1px solid var(--grey-50)',background:r.includesGst?'#EFF6FF':''}}>
+                  <td style={{padding:3}}>
+                    <input className="form-input" style={{fontSize:11.5,padding:'4px 6px'}}
+                      value={r.name} onChange={e=>updateRow(r.id,'name',e.target.value)} placeholder="e.g. Advance" />
+                  </td>
+                  <td style={{padding:3,width:55}}>
+                    <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px'}}
+                      value={r.pct} onChange={e=>updateRow(r.id,'pct',e.target.value)} placeholder="30" />
+                  </td>
+                  <td style={{padding:3,width:105}}>
+                    <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px'}}
+                      value={r.amount} onChange={e=>updateRow(r.id,'amount',e.target.value)} placeholder="0" />
+                  </td>
+                  <td style={{padding:3,width:125}}>
+                    <input className="form-input" type="date" style={{fontSize:11.5,padding:'4px 6px'}}
+                      value={r.date} onChange={e=>updateRow(r.id,'date',e.target.value)} />
+                  </td>
+                  <td style={{padding:3,textAlign:'center',width:40}}>
+                    <input type="checkbox" checked={!!r.includesGst}
+                      onChange={e=>updateRow(r.id,'includesGst',e.target.checked)}
+                      style={{width:16,height:16,cursor:'pointer',accentColor:'var(--primary)'}} />
+                  </td>
+                  <td style={{padding:3,width:105}}>
+                    {r.includesGst ? (
+                      <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px',background:'#EFF6FF',borderColor:'var(--primary)'}}
+                        value={r.gstAmount} onChange={e=>updateRow(r.id,'gstAmount',e.target.value)}
+                        placeholder={String(totalGstAmt||0)} />
+                    ) : (
+                      <span style={{fontSize:11,color:'var(--text-muted)',padding:'0 6px'}}>—</span>
+                    )}
+                  </td>
+                  <td style={{padding:3,textAlign:'center'}}>
+                    <span onClick={()=>removeRow(r.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span>
+                  </td>
                 </tr>
               ))}
-              {/* GST row — auto-shown if gstPct is set */}
-              {gstRate>0&&baseAmt>0&&(
-                <tr style={{background:'#EFF6FF',borderTop:'1px solid var(--border)'}}>
-                  <td style={{padding:'4px 8px',fontSize:11.5,fontWeight:600,color:'var(--primary)'}}>GST ({gstRate}%) — On Invoice</td>
-                  <td style={{padding:'4px 8px',fontSize:11,color:'var(--text-muted)'}}>—</td>
-                  <td style={{padding:'4px 8px',fontSize:11.5,fontWeight:700,color:'var(--primary)'}} className="amount">{inr(gstAmt)}</td>
-                  <td style={{padding:'4px 8px',fontSize:11,color:'var(--text-muted)'}}>On receipt of invoice</td>
-                  <td></td>
-                </tr>
-              )}
             </tbody>
           </table>
-          <div style={{padding:'4px 8px',fontSize:11,background:'var(--grey-50)',display:'flex',gap:16}}>
+          <div style={{padding:'5px 8px',fontSize:11,background:'var(--grey-50)',display:'flex',gap:16,flexWrap:'wrap'}}>
             <span style={{color:Math.abs(stageTotal-100)<1?'var(--green)':'var(--amber)'}}>
               Stages: {stageTotal}%{Math.abs(stageTotal-100)<1?' ✓':' (should = 100%)'}
             </span>
-            <span style={{color:'var(--text-muted)'}}>
-              Base stages: {inr(stageAmtTotal)} | Remaining: {inr(remaining)}
-              {gstRate>0&&<span> | Total incl. GST: {inr(stageAmtTotal+gstAmt)}</span>}
-            </span>
+            <span style={{color:'var(--text-muted)'}}>Base: {inr(stageAmtTotal)}</span>
+            {gstRate>0&&(
+              <span style={{color:gstAssigned>0?'var(--primary)':'var(--text-muted)'}}>
+                GST assigned: {inr(gstAssigned)} / {inr(totalGstAmt)}
+                {gstAssigned>0&&<span style={{marginLeft:4}}>· ITC on 20th of next month</span>}
+              </span>
+            )}
+            {gstAssigned>0&&(
+              <span style={{color:'var(--green)',fontWeight:600}}>
+                Total payable: {inr(stageAmtTotal+gstAssigned)}
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -2249,17 +2288,39 @@ function CashFlow() {
   const allRows = [
     // OUTFLOWS
     ...bills.flatMap(b => {
-      // If bill has a payment schedule, use each stage as a separate outflow
       if (b.paymentSchedule && b.paymentSchedule.length > 0) {
-        return b.paymentSchedule.map(stage => ({
-          date: stage.date||b.due||'',
-          label: `${b.payee} — ${stage.name||'Payment'}`,
-          cat: b.category||'Bill', subcat: `${stage.pct||''}% of ${inr(b.amount||0)}`,
-          type: 'out', amt: Number(stage.amount||0), project: b.project||'',
-          ref: b.invoiceNo||'', isPast: (stage.date||b.due||'') < todayStr,
-        }));
+        return b.paymentSchedule.flatMap(stage => {
+          const rows = [{
+            date: stage.date||b.due||'', label: `${b.payee} — ${stage.name||'Payment'}`,
+            cat: b.category||'Bill', subcat: `${stage.pct||''}% of ${inr(b.amount||0)}`,
+            type: 'out', amt: Number(stage.amount||0), project: b.project||'',
+            ref: b.invoiceNo||'', isPast: (stage.date||b.due||'') < todayStr,
+          }];
+          // GST outflow on this stage
+          if (stage.includesGst && Number(stage.gstAmount||0) > 0) {
+            rows.push({
+              date: stage.date||b.due||'', label: `GST — ${b.payee}`,
+              cat: 'GST Paid', subcat: `${b.gstPct||''}%`,
+              type: 'out', amt: Number(stage.gstAmount), project: b.project||'',
+              ref: b.invoiceNo||'', isPast: (stage.date||b.due||'') < todayStr,
+            });
+            // ITC recovery on 20th of following month
+            const stageDate = stage.date||b.due||'';
+            if (stageDate) {
+              const d = new Date(stageDate);
+              d.setMonth(d.getMonth()+1);
+              const itcDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-20`;
+              rows.push({
+                date: itcDate, label: `ITC Recovery — ${b.payee} (GST Refund)`,
+                cat: 'GST ITC Recovery', subcat: 'Input Tax Credit',
+                type: 'in', amt: Number(stage.gstAmount), project: b.project||'',
+                ref: b.invoiceNo||'', isPast: itcDate < todayStr,
+              });
+            }
+          }
+          return rows;
+        });
       }
-      // No schedule — single outflow on due date
       return [{
         date: b.due||b.invoiceDate||'', label: b.payee,
         cat: b.category||'Bill', subcat: b.paid?'Paid':'Unpaid',
