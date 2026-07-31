@@ -4,7 +4,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Nirman Watertech — Workflow Platform</title>
+<title>Nirmaan Watertech Solutions — Workflow Platform</title>
 <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
@@ -2564,10 +2564,13 @@ function BillScheduleModal({ bill, onClose, onUpdate }) {
     } catch(e) { console.error(e); alert('Could not save.'); setSaving(false); }
   }
 
-  const paidAmt   = stages.filter(s=>s.paid).reduce((sum,s)=>sum+Number(s.amount||0),0);
-  const unpaidAmt = stages.filter(s=>!s.paid).reduce((sum,s)=>sum+Number(s.amount||0),0);
+  const paidAmt   = stages.filter(s=>s.paid).reduce((sum,s)=>sum+Number(s.amount||0)+(s.includesGst?Number(s.gstAmount||0):0),0);
+  const unpaidAmt = stages.filter(s=>!s.paid).reduce((sum,s)=>sum+Number(s.amount||0)+(s.includesGst?Number(s.gstAmount||0):0),0);
   const gstRate   = parseFloat(bill.gstPct)||0;
   const gstAmt    = Math.round(Number(bill.amount||0) * gstRate / 100);
+  const gstAssigned = stages.filter(s=>s.includesGst).reduce((s,r)=>s+Number(r.gstAmount||0),0);
+  const unassignedGst = Math.max(0, gstAmt - gstAssigned);
+  const totalRemaining = unpaidAmt + unassignedGst;
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
@@ -2583,8 +2586,8 @@ function BillScheduleModal({ bill, onClose, onUpdate }) {
               <div className="amount" style={{fontSize:15,fontWeight:700,color:'var(--green)'}}>{inr(paidAmt)}</div>
             </div>
             <div style={{flex:1,padding:'8px 12px',background:'#FFF7ED',borderRadius:6,border:'1px solid var(--amber)'}}>
-              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Remaining</div>
-              <div className="amount" style={{fontSize:15,fontWeight:700,color:'var(--amber)'}}>{inr(unpaidAmt)}</div>
+              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Remaining (incl. GST)</div>
+              <div className="amount" style={{fontSize:15,fontWeight:700,color:'var(--amber)'}}>{inr(totalRemaining)}</div>
             </div>
             <div style={{flex:1,padding:'8px 12px',background:'var(--grey-50)',borderRadius:6,border:'1px solid var(--border)'}}>
               <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Bill Total (excl. GST)</div>
@@ -3078,8 +3081,34 @@ function BillPayments() {
     const days = (status === 'Overdue' && b.due) ? Math.floor((new Date(todayStr) - new Date(b.due)) / 86400000) : 0;
     const linkedAdv = advances.filter(a => a.linkedBill === b.docId);
     const advanceDeducted = linkedAdv.reduce((s,a) => s + Number(a.adjustedAmount||0), 0);
-    const netPayable = Math.max(0, Number(b.amount||0) - advanceDeducted);
-    return { ...b, computedStatus: status, days, advanceDeducted, netPayable };
+
+    // If bill has payment schedule, calculate paid/unpaid from stages
+    let paidStagesAmt = 0, unpaidStagesAmt = 0;
+    const hasSchedule = b.paymentSchedule && b.paymentSchedule.length > 0;
+    const totalGstAmt = b.gstPct ? Math.round(Number(b.amount||0) * parseFloat(b.gstPct) / 100) : 0;
+    const gstAssignedToStages = hasSchedule
+      ? b.paymentSchedule.filter(s=>s.includesGst).reduce((s,r)=>s+Number(r.gstAmount||0),0)
+      : 0;
+    const unassignedGst = Math.max(0, totalGstAmt - gstAssignedToStages);
+
+    if (hasSchedule) {
+      b.paymentSchedule.forEach(s => {
+        const base = Number(s.amount||0);
+        const gst  = Number(s.includesGst ? s.gstAmount||0 : 0);
+        if (s.paid) paidStagesAmt += base + gst;
+        else unpaidStagesAmt += base + gst;
+      });
+      // Add any GST not yet assigned to a stage — always unpaid until invoice
+      unpaidStagesAmt += unassignedGst;
+    }
+
+    const netPayable = hasSchedule
+      ? Math.max(0, unpaidStagesAmt - advanceDeducted)
+      : Math.max(0, Number(b.amount||0) + totalGstAmt - advanceDeducted);
+    const paidSoFar = hasSchedule ? paidStagesAmt : 0;
+    const totalBillAmt = Number(b.amount||0) + totalGstAmt;
+
+    return { ...b, computedStatus: status, days, advanceDeducted, netPayable, paidSoFar, hasSchedule, totalBillAmt };
   });
 
   function applySort(arr, key, dateField='due', amtField='amount', nameField='payee') {
@@ -3222,7 +3251,7 @@ function BillPayments() {
             ) : (
               <table>
                 <thead>
-                  <tr><th>Payee</th><th>Project</th><th>Category</th><th>Invoice #</th><th>Due Date</th><th>Bill Amount</th><th>Advance Deducted</th><th>Net Payable</th><th>Linked To</th><th>Status</th><th>Actions</th></tr>
+                  <tr><th>Payee</th><th>Project</th><th>Category</th><th>Invoice #</th><th>Due Date</th><th>Bill Amount</th><th>Paid So Far</th><th>Net Payable</th><th>Linked To</th><th>Status</th><th>Actions</th></tr>
                 </thead>
                 <tbody>
                   {filtered.map(b => (
@@ -3234,10 +3263,12 @@ function BillPayments() {
                       <td>{fmt(b.due)}{b.days>0&&<span style={{color:'var(--red)',fontWeight:600,marginLeft:4}}>+{b.days}d</span>}</td>
                       <td className="amount">{inr(b.amount||0)}</td>
                       <td className="amount" style={{color:'var(--green)'}}>
-                        {b.advanceDeducted > 0 ? <>− {inr(b.advanceDeducted)}</> : <span className="text-muted">—</span>}
+                        {b.hasSchedule
+                          ? (b.paidSoFar > 0 ? inr(b.paidSoFar) : <span className="text-muted">—</span>)
+                          : (b.advanceDeducted > 0 ? <>− {inr(b.advanceDeducted)}</> : <span className="text-muted">—</span>)}
                       </td>
-                      <td className="amount fw-600" style={{color: b.advanceDeducted > 0 ? 'var(--primary)' : 'var(--text)'}}>
-                        {inr(b.netPayable)}
+                      <td className="amount fw-600" style={{color: b.netPayable > 0 ? 'var(--red)' : 'var(--green)'}}>
+                        {b.netPayable > 0 ? inr(b.netPayable) : <span style={{color:'var(--green)'}}>✓ Settled</span>}
                       </td>
                       <td><XRefBadge po={b.linkedPO} wo={b.linkedWO} /></td>
                       <td><span className={`badge ${BILL_STATUS_COLOR[b.computedStatus]}`}>{b.computedStatus}</span></td>
@@ -6474,7 +6505,7 @@ function App() {
       {/* Sidebar */}
       <div className="sidebar">
         <div className="sidebar-header">
-          <div className="sidebar-logo">💧 Nirman Watertech</div>
+          <div className="sidebar-logo">💧 Nirmaan Watertech Solutions</div>
           <div className="sidebar-sub">Internal Workflow Platform</div>
         </div>
         {NAV.map((item, i) => {
