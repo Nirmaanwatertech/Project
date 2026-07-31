@@ -969,27 +969,56 @@ function ClearDataCard({ item }) {
 }
 
 // ─── PaymentScheduleEditor ────────────────────────────
-function PaymentScheduleEditor({ rows, setRows, totalValue }) {
+function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChange }) {
+  // gstPct: GST % on the base amount (e.g. 18)
+  // Base amount = totalValue / (1 + gstPct/100) if inclusive, or totalValue if exclusive
+  // We treat totalValue as BASE (exclusive of GST). GST is added on top as a final stage.
+
+  const baseAmt = Number(totalValue)||0;
+  const gstRate = parseFloat(gstPct)||0;
+  const gstAmt  = Math.round(baseAmt * gstRate / 100);
+  const totalWithGST = baseAmt + gstAmt;
+
   function addRow() { setRows(r=>[...r,{id:genRowId(),name:'',pct:'',amount:'',date:''}]); }
   function removeRow(id) { setRows(r=>r.filter(x=>x.id!==id)); }
   function updateRow(id,field,value) {
     setRows(r=>r.map(x=>{
       if(x.id!==id) return x;
       const next={...x,[field]:value};
-      if(field==='pct'&&totalValue) next.amount=String(Math.round((parseFloat(value)||0)/100*Number(totalValue)));
-      if(field==='amount'&&totalValue&&Number(totalValue)>0) next.pct=String(Math.round((Number(value)||0)/Number(totalValue)*100));
+      // % and amount auto-calc based on BASE amount only (excl GST)
+      if(field==='pct'&&baseAmt) next.amount=String(Math.round((parseFloat(value)||0)/100*baseAmt));
+      if(field==='amount'&&baseAmt>0) next.pct=String(Math.round((Number(value)||0)/baseAmt*100));
       return next;
     }));
   }
-  const total = rows.reduce((s,r)=>s+(parseFloat(r.pct)||0),0);
+
+  const stageTotal = rows.reduce((s,r)=>s+(parseFloat(r.pct)||0),0);
+  const stageAmtTotal = rows.reduce((s,r)=>s+(Number(r.amount)||0),0);
+  const remaining = baseAmt - stageAmtTotal;
+
   return (
     <div className="form-group">
       <label className="form-label">Payment Schedule <span style={{color:'var(--text-muted)',fontWeight:400,fontSize:11}}>(optional)</span></label>
+
+      {/* GST field */}
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,padding:'8px 10px',background:'var(--grey-50)',borderRadius:6,border:'1px solid var(--border)'}}>
+        <span style={{fontSize:12,color:'var(--text-secondary)',whiteSpace:'nowrap'}}>GST %</span>
+        <input className="form-input font-mono" style={{width:70,fontSize:12,padding:'4px 8px'}}
+          value={gstPct||''} onChange={e=>onGstPctChange&&onGstPctChange(e.target.value)}
+          placeholder="18" />
+        {gstRate>0&&baseAmt>0&&(
+          <span style={{fontSize:11.5,color:'var(--text-muted)'}}>
+            GST on base {inr(baseAmt)} = <strong style={{color:'var(--primary)'}}>{inr(gstAmt)}</strong> → Total {inr(totalWithGST)}
+            <span style={{marginLeft:8,color:'var(--text-muted)'}}>| GST auto-added as final stage on invoice</span>
+          </span>
+        )}
+      </div>
+
       {rows.length>0 && (
         <div style={{border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',marginBottom:8}}>
           <table style={{width:'100%'}}>
             <thead><tr style={{background:'var(--grey-50)'}}>
-              {['Stage','%','Amount (₹)','Date',''].map((h,i)=><th key={i} style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>{h}</th>)}
+              {['Stage','% of Base','Amount (₹)','Due Date',''].map((h,i)=><th key={i} style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>{h}</th>)}
             </tr></thead>
             <tbody>
               {rows.map(r=>(
@@ -1001,9 +1030,27 @@ function PaymentScheduleEditor({ rows, setRows, totalValue }) {
                   <td style={{padding:3,textAlign:'center',width:24}}><span onClick={()=>removeRow(r.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span></td>
                 </tr>
               ))}
+              {/* GST row — auto-shown if gstPct is set */}
+              {gstRate>0&&baseAmt>0&&(
+                <tr style={{background:'#EFF6FF',borderTop:'1px solid var(--border)'}}>
+                  <td style={{padding:'4px 8px',fontSize:11.5,fontWeight:600,color:'var(--primary)'}}>GST ({gstRate}%) — On Invoice</td>
+                  <td style={{padding:'4px 8px',fontSize:11,color:'var(--text-muted)'}}>—</td>
+                  <td style={{padding:'4px 8px',fontSize:11.5,fontWeight:700,color:'var(--primary)'}} className="amount">{inr(gstAmt)}</td>
+                  <td style={{padding:'4px 8px',fontSize:11,color:'var(--text-muted)'}}>On receipt of invoice</td>
+                  <td></td>
+                </tr>
+              )}
             </tbody>
           </table>
-          {total>0&&<div style={{padding:'4px 8px',fontSize:11,color:Math.abs(total-100)<1?'var(--green)':'var(--amber)',background:'var(--grey-50)'}}>Total: {total}%{Math.abs(total-100)<1?' ✓':' (should total 100%)'}</div>}
+          <div style={{padding:'4px 8px',fontSize:11,background:'var(--grey-50)',display:'flex',gap:16}}>
+            <span style={{color:Math.abs(stageTotal-100)<1?'var(--green)':'var(--amber)'}}>
+              Stages: {stageTotal}%{Math.abs(stageTotal-100)<1?' ✓':' (should = 100%)'}
+            </span>
+            <span style={{color:'var(--text-muted)'}}>
+              Base stages: {inr(stageAmtTotal)} | Remaining: {inr(remaining)}
+              {gstRate>0&&<span> | Total incl. GST: {inr(stageAmtTotal+gstAmt)}</span>}
+            </span>
+          </div>
         </div>
       )}
       <button type="button" onClick={addRow} className="btn btn-sm btn-outline">+ Add Stage</button>
@@ -1129,6 +1176,7 @@ function NewWOModal({ onClose, existing, quotations }) {
     project: '', split:{pontoon:50,wtp:50}
   });
   const [schedule, setSchedule] = useState(isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) : []);
+  const [gstPct, setGstPct] = useState(isEdit ? (existing.gstPct||'') : '');
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
 
@@ -1148,8 +1196,8 @@ function NewWOModal({ onClose, existing, quotations }) {
     if(!form.vendorName.trim()||!form.description.trim()) return;
     setSaving(true);
     try {
-      if(isEdit) await updateWorkOrder(existing.docId,{...form,value:Number(form.value)||0,paymentSchedule:schedule});
-      else { const { addDoc } = window.fb; await addDoc(userCol(WO_COLLECTION),{...form,value:Number(form.value)||0,paymentSchedule:schedule,createdAt:Date.now()}); }
+      if(isEdit) await updateWorkOrder(existing.docId,{...form,value:Number(form.value)||0,paymentSchedule:schedule,gstPct});
+      else { const { addDoc } = window.fb; await addDoc(userCol(WO_COLLECTION),{...form,value:Number(form.value)||0,paymentSchedule:schedule,gstPct,createdAt:Date.now()}); }
       onClose();
     }catch(e){console.error(e);alert('Could not save.');}
     finally{setSaving(false);}
@@ -1199,7 +1247,7 @@ function NewWOModal({ onClose, existing, quotations }) {
               <input className="form-input" type="date" value={form.due} onChange={e=>set('due',e.target.value)} />
             </div>
           </div>
-          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} gstPct={gstPct} onGstPctChange={setGstPct} />
           <div className="form-group">
             <label className="form-label">Notes</label>
             <input className="form-input" value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Optional" />
@@ -2479,6 +2527,10 @@ async function markBillPaid(docId) {
   const { db, doc, updateDoc } = window.fb;
   await updateDoc(userDoc(BILLS_COLLECTION, docId), { paid: true, paidAt: Date.now() });
 }
+async function unmarkBillPaid(docId) {
+  const { updateDoc } = window.fb;
+  await updateDoc(userDoc(BILLS_COLLECTION, docId), { paid: false, paidAt: null });
+}
 async function deleteBill(docId) {
   const { db, doc, deleteDoc } = window.fb;
   await deleteDoc(userDoc(BILLS_COLLECTION, docId));
@@ -2561,6 +2613,7 @@ function NewBillModal({ onClose, existing }) {
       ? existing.paymentSchedule.map(r=>({...r, id:genRowId()}))
       : []
   );
+  const [gstPct, setGstPct] = useState(isEdit ? (existing.gstPct||'') : '');
   const [saving, setSaving] = useState(false);
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
 
@@ -2570,9 +2623,9 @@ function NewBillModal({ onClose, existing }) {
     try {
       if (isEdit) {
         const { db, doc, updateDoc } = window.fb;
-        await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...form, amount: Number(form.amount), paymentSchedule: schedule });
+        await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...form, amount: Number(form.amount), paymentSchedule: schedule, gstPct });
       } else {
-        await addBill({ ...form, amount: Number(form.amount), entryType: 'invoice', paymentSchedule: schedule });
+        await addBill({ ...form, amount: Number(form.amount), entryType: 'invoice', paymentSchedule: schedule, gstPct });
       }
       onClose();
     } catch (e) { console.error(e); alert('Could not save bill.'); }
@@ -2616,7 +2669,7 @@ function NewBillModal({ onClose, existing }) {
             <label className="form-label">Amount (₹)</label>
             <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount', e.target.value)} placeholder="0" />
           </div>
-          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.amount} />
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.amount} gstPct={gstPct} onGstPctChange={setGstPct} />
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Link to PO <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional)</span></label>
@@ -3035,6 +3088,7 @@ function BillPayments() {
                           <button className="btn btn-sm btn-ghost" onClick={()=>setEditBill(b)}>Edit</button>
                           {b.paymentSchedule&&b.paymentSchedule.length>0&&<button className="btn btn-sm btn-outline" onClick={()=>setViewBillSchedule(b)}>Schedule</button>}
                           {!b.paid && <button className="btn btn-sm btn-primary" onClick={()=>markBillPaid(b.docId)}>Mark Paid</button>}
+                          {b.paid && <button className="btn btn-sm btn-ghost" style={{color:'var(--amber)',border:'1px solid var(--amber)'}} onClick={()=>{if(confirm('Reverse payment? This will mark the bill as unpaid again.'))unmarkBillPaid(b.docId);}}>↩ Unmark Paid</button>}
                           <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteBill(b.docId);}}>Delete</button>
                         </div>
                       </td>
@@ -5933,7 +5987,7 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
               {QUOTE_STAGES.map(s=><option key={s}>{s}</option>)}
             </select>
           </div>
-          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} gstPct={gstPct} onGstPctChange={setGstPct} />
           <div className="form-group">
             <label className="form-label">Notes</label>
             <textarea className="form-input" rows="2" value={form.notes} onChange={e=>set('notes',e.target.value)} style={{resize:'vertical'}} />
