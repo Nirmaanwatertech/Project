@@ -978,27 +978,37 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
   const totalGstAmt = Math.round(baseAmt * gstRate / 100);
   const [stageSaving, setStageSaving] = useState(null);
 
+  const [payDateInputs, setPayDateInputs] = useState({}); // stageId → date string
+
   async function handleTogglePaid(row) {
     if (!parentDoc || !onStagePaid) return;
     const newPaid = !row.paid;
-    let paymentDate = row.date || new Date().toISOString().slice(0,10);
     if (newPaid) {
-      // Ask for payment date
-      const input = window.prompt(
-        `Date of payment for "${row.stageType||'Stage'}" (${inr(row.amount||0)}):\nFormat: YYYY-MM-DD`,
-        paymentDate
-      );
-      if (input === null) return; // user cancelled
-      if (input.trim()) paymentDate = input.trim();
+      const paymentDate = payDateInputs[row.id] || '';
+      if (!paymentDate) {
+        alert('Please enter the date of payment before marking as paid.');
+        return;
+      }
+      setStageSaving(row.id);
+      try {
+        const updatedRows = rows.map(r => r.id===row.id ? {...r, paid:true, paidAt:Date.now(), datePaid:paymentDate} : r);
+        setRows(updatedRows);
+        await syncStageToModules({...row, paid:true}, parentDoc, parentType, updatedRows, setRows, paymentDate);
+        if (onStagePaid) onStagePaid(updatedRows);
+        // Clear the date input for this stage
+        setPayDateInputs(p=>({...p,[row.id]:''}));
+      } catch(e) { console.error(e); alert('Could not update stage: '+e.message); }
+      finally { setStageSaving(null); }
+    } else {
+      setStageSaving(row.id);
+      try {
+        const updatedRows = rows.map(r => r.id===row.id ? {...r, paid:false, paidAt:null, datePaid:''} : r);
+        setRows(updatedRows);
+        await syncStageToModules({...row, paid:false}, parentDoc, parentType, updatedRows, setRows, '');
+        if (onStagePaid) onStagePaid(updatedRows);
+      } catch(e) { console.error(e); alert('Could not update stage: '+e.message); }
+      finally { setStageSaving(null); }
     }
-    setStageSaving(row.id);
-    try {
-      const updatedRows = rows.map(r => r.id===row.id ? {...r, paid:newPaid, paidAt:newPaid?Date.now():null, datePaid:newPaid?paymentDate:''} : r);
-      setRows(updatedRows);
-      await syncStageToModules({...row, paid:newPaid}, parentDoc, parentType, updatedRows, setRows, paymentDate);
-      if (onStagePaid) onStagePaid(updatedRows);
-    } catch(e) { console.error(e); alert('Could not update stage: '+e.message); }
-    finally { setStageSaving(null); }
   }
 
   function addRow() {
@@ -1091,21 +1101,27 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
                         placeholder={String(totalGstAmt||0)} />
                     ) : <span style={{fontSize:11,color:'var(--text-muted)',padding:'0 4px'}}>—</span>}
                   </td>
-                  <td style={{padding:3,textAlign:'center',width:90}}>
+                  <td style={{padding:3,width:220}}>
                     {stageSaving===r.id ? (
-                      <span style={{fontSize:10,color:'var(--text-muted)'}}>…</span>
+                      <span style={{fontSize:10,color:'var(--text-muted)',padding:'0 4px'}}>Saving…</span>
                     ) : r.paid ? (
-                      <div>
+                      <div style={{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}}>
                         <span style={{fontSize:10,background:'#D1FAE5',color:'var(--green)',borderRadius:3,padding:'2px 5px',fontWeight:600}}>✓ Paid</span>
-                        {parentDoc && <div style={{marginTop:2}}>
-                          <span onClick={()=>handleTogglePaid(r)} style={{fontSize:9,color:'var(--amber)',cursor:'pointer',textDecoration:'underline'}}>Unmark</span>
-                        </div>}
-                        {r.linkedEntryId && <span title="Linked" style={{fontSize:10,marginLeft:2}}>🔗</span>}
+                        {r.datePaid && <span style={{fontSize:10,color:'var(--text-muted)'}}>{fmt(r.datePaid)}</span>}
+                        {r.linkedEntryId && <span title="Linked" style={{fontSize:10}}>🔗</span>}
+                        {parentDoc && <span onClick={()=>handleTogglePaid(r)} style={{fontSize:9,color:'var(--amber)',cursor:'pointer',textDecoration:'underline',marginLeft:2}}>Unmark</span>}
                       </div>
                     ) : parentDoc ? (
-                      <button onClick={()=>handleTogglePaid(r)} className="btn btn-sm btn-primary" style={{fontSize:9,padding:'2px 6px',background:'var(--green)'}}>
-                        Mark Paid
-                      </button>
+                      <div style={{display:'flex',alignItems:'center',gap:4}}>
+                        <input type="date"
+                          value={payDateInputs[r.id]||''}
+                          onChange={e=>setPayDateInputs(p=>({...p,[r.id]:e.target.value}))}
+                          style={{fontSize:11,padding:'3px 4px',border:'1px solid var(--border)',borderRadius:4,width:120,color:payDateInputs[r.id]?'var(--text)':'var(--text-muted)'}} />
+                        <button onClick={()=>handleTogglePaid(r)} className="btn btn-sm btn-primary"
+                          style={{fontSize:9,padding:'3px 6px',background:'var(--green)',whiteSpace:'nowrap',opacity:payDateInputs[r.id]?1:0.5}}>
+                          Mark Paid
+                        </button>
+                      </div>
                     ) : (
                       <span style={{fontSize:11,color:'var(--text-muted)'}}>—</span>
                     )}
@@ -2419,30 +2435,39 @@ function POWOScheduleModal({ doc, parentType, onClose, onScheduleUpdate }) {
   const paidAmt   = stages.filter(s=>s.paid).reduce((s,r)=>s+Number(r.amount||0),0);
   const unpaidAmt = stages.filter(s=>!s.paid).reduce((s,r)=>s+Number(r.amount||0),0);
 
+  const [payDates, setPayDates] = useState({});
+
   async function toggleStage(stage) {
     const newPaid = !stage.paid;
-    let paymentDate = stage.date || new Date().toISOString().slice(0,10);
     if (newPaid) {
-      const input = window.prompt(
-        `Date of payment for "${stage.stageType||'Stage'}" — ${inr(stage.amount||0)}:\nFormat: YYYY-MM-DD`,
-        paymentDate
-      );
-      if (input === null) return; // cancelled
-      if (input.trim()) paymentDate = input.trim();
+      const paymentDate = payDates[stage.id] || '';
+      if (!paymentDate) {
+        alert('Please select a payment date before marking as paid.');
+        return;
+      }
+      setSaving(stage.id);
+      try {
+        const updatedStages = stages.map(s => s.id===stage.id ? {...s, paid:true, paidAt:Date.now(), datePaid:paymentDate} : s);
+        setStages(updatedStages);
+        await syncStageToModules({...stage, paid:true}, doc, parentType, updatedStages, setStages, paymentDate);
+        const col = parentType==='wo' ? WO_COLLECTION : PO_COLLECTION;
+        const { updateDoc } = window.fb;
+        await updateDoc(userDoc(col, doc.docId), {paymentSchedule: updatedStages});
+        setPayDates(p=>({...p,[stage.id]:''}));
+      } catch(e) { console.error(e); alert('Error: '+e.message); setStages(stages); }
+      finally { setSaving(null); }
+    } else {
+      setSaving(stage.id);
+      try {
+        const updatedStages = stages.map(s => s.id===stage.id ? {...s, paid:false, paidAt:null, datePaid:''} : s);
+        setStages(updatedStages);
+        await syncStageToModules({...stage, paid:false}, doc, parentType, updatedStages, setStages, '');
+        const col = parentType==='wo' ? WO_COLLECTION : PO_COLLECTION;
+        const { updateDoc } = window.fb;
+        await updateDoc(userDoc(col, doc.docId), {paymentSchedule: updatedStages});
+      } catch(e) { console.error(e); alert('Error: '+e.message); setStages(stages); }
+      finally { setSaving(null); }
     }
-    setSaving(stage.id);
-    try {
-      const updatedStages = stages.map(s => s.id===stage.id ? {...s, paid:newPaid, paidAt:newPaid?Date.now():null, datePaid:newPaid?paymentDate:''} : s);
-      setStages(updatedStages);
-      await syncStageToModules({...stage, paid:newPaid}, doc, parentType, updatedStages, setStages, paymentDate);
-      const col = parentType==='wo' ? WO_COLLECTION : PO_COLLECTION;
-      const { updateDoc } = window.fb;
-      await updateDoc(userDoc(col, doc.docId), {paymentSchedule: updatedStages});
-    } catch(e) {
-      console.error(e);
-      alert('Error: ' + e.message);
-      setStages(stages);
-    } finally { setSaving(null); }
   }
 
   return (
@@ -2505,15 +2530,21 @@ function POWOScheduleModal({ doc, parentType, onClose, onScheduleUpdate }) {
                       ? <span title={`Linked to ${s.stageType==='Advance'?'Advance':'Bill'}: ${s.linkedEntryId}`} style={{color:'var(--green)'}}>🔗</span>
                       : <span style={{color:'var(--text-muted)'}}>—</span>}
                   </td>
-                  <td style={{padding:'10px',textAlign:'center'}}>
+                  <td style={{padding:'8px 10px'}}>
                     {saving===s.id ? (
                       <span style={{fontSize:11,color:'var(--text-muted)'}}>Saving…</span>
                     ) : s.paid ? (
                       <button className="btn btn-sm btn-ghost" style={{color:'var(--amber)',border:'1px solid var(--amber)',fontSize:11}}
                         onClick={()=>toggleStage(s)}>↩ Unmark</button>
                     ) : (
-                      <button className="btn btn-sm btn-primary" style={{fontSize:11}}
-                        onClick={()=>toggleStage(s)}>Mark Paid</button>
+                      <div style={{display:'flex',alignItems:'center',gap:6}}>
+                        <input type="date"
+                          value={payDates[s.id]||''}
+                          onChange={e=>setPayDates(p=>({...p,[s.id]:e.target.value}))}
+                          style={{fontSize:11,padding:'3px 5px',border:`1px solid ${payDates[s.id]?'var(--primary)':'var(--border)'}`,borderRadius:4,width:130}} />
+                        <button className="btn btn-sm btn-primary" style={{fontSize:11,whiteSpace:'nowrap',opacity:payDates[s.id]?1:0.5}}
+                          onClick={()=>toggleStage(s)}>Mark Paid</button>
+                      </div>
                     )}
                   </td>
                 </tr>
