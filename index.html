@@ -2302,8 +2302,10 @@ function CashFlow() {
             const stageDate = stage.date||b.due||'';
             if (stageDate) {
               const d = new Date(stageDate);
-              d.setMonth(d.getMonth()+1);
-              const itcDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-20`;
+              const nextMonth = d.getMonth() + 1; // 0-indexed + 1 = next month (1-indexed)
+              const nextYear = nextMonth > 11 ? d.getFullYear() + 1 : d.getFullYear();
+              const itcMonth = nextMonth > 11 ? 1 : nextMonth + 1; // convert to 1-indexed display
+              const itcDate = `${nextYear}-${String(itcMonth).padStart(2,'0')}-20`;
               rows.push({
                 date: itcDate, label: `ITC Recovery — ${b.payee} (GST Refund)`,
                 cat: 'GST ITC Recovery', subcat: 'Input Tax Credit',
@@ -2346,8 +2348,10 @@ function CashFlow() {
               ref: p.po||'', isPast: (stage.date||'') < todayStr,
             });
             const d = new Date(stage.date||todayStr);
-            d.setMonth(d.getMonth()+1);
-            const itcDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-20`;
+            const nextMonth = d.getMonth() + 1;
+            const nextYear = nextMonth > 11 ? d.getFullYear() + 1 : d.getFullYear();
+            const itcMonth = nextMonth > 11 ? 1 : nextMonth + 1;
+            const itcDate = `${nextYear}-${String(itcMonth).padStart(2,'0')}-20`;
             rows.push({
               date: itcDate, label: `ITC Recovery — ${p.vendorName} (${p.po})`,
               cat: 'GST ITC Recovery', subcat: 'Input Tax Credit',
@@ -2378,8 +2382,10 @@ function CashFlow() {
               ref: w.wo||'', isPast: (stage.date||'') < todayStr,
             });
             const d = new Date(stage.date||todayStr);
-            d.setMonth(d.getMonth()+1);
-            const itcDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-20`;
+            const nextMonth = d.getMonth() + 1;
+            const nextYear = nextMonth > 11 ? d.getFullYear() + 1 : d.getFullYear();
+            const itcMonth = nextMonth > 11 ? 1 : nextMonth + 1;
+            const itcDate = `${nextYear}-${String(itcMonth).padStart(2,'0')}-20`;
             rows.push({
               date: itcDate, label: `ITC Recovery — ${w.vendorName} (${w.wo})`,
               cat: 'GST ITC Recovery', subcat: 'Input Tax Credit',
