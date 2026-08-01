@@ -969,47 +969,439 @@ function ClearDataCard({ item }) {
 }
 
 // ─── PaymentScheduleEditor ────────────────────────────
-const STAGE_TYPES = ['Advance', 'Against Dispatch', 'Against Delivery', 'Retention', 'Other'];
-const STAGE_TYPE_COLOR = { 'Advance':'amber', 'Against Dispatch':'blue', 'Against Delivery':'teal', 'Retention':'grey', 'Other':'grey' };
+const STAGE_TYPES = ['Advance', 'Against Delivery'];
+const STAGE_TYPE_COLOR = { 'Advance': 'amber', 'Against Delivery': 'teal' };
 
+// ─── Core sync: create/update/delete linked Advance or Bill ──
+async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule, setScheduleParent, paymentDate) {
+  const { addDoc, deleteDoc, updateDoc } = window.fb;
+  const sType = (stage.stageType || 'Against Delivery').trim();
+  const isAdvance = sType === 'Advance';
+  const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
+  const paidDate = paymentDate || stage.datePaid || stage.date || new Date().toISOString().slice(0,10);
+  const refNo = parentType === 'po' ? (parentDoc.po||'') : (parentDoc.wo||'');
+
+  if (stage.paid) {
+    const baseAmt = Number(stage.amount)||0;
+    const gstAmt  = stage.includesGst ? Number(stage.gstAmount||0) : 0;
+
+    // Find linked advances from same PO/WO to auto-adjust
+    let advanceDeducted = 0, advanceEntryId = '';
+    if (!isAdvance) {
+      try {
+        const { getDocs, query, where } = window.fb;
+        const advSnap = await getDocs(userCol(ADVANCES_COLLECTION));
+        const linked = advSnap.docs.filter(d => {
+          const a = d.data();
+          return a.fromSchedule && (a.linkedPO === refNo || a.linkedWO === refNo) && a.status !== 'Fully Adjusted';
+        });
+        if (linked.length > 0) {
+          const adv = linked[0];
+          const advAmt = Number(adv.data().balanceAmount || adv.data().amount || 0);
+          advanceDeducted = Math.min(advAmt, baseAmt + gstAmt);
+          advanceEntryId = adv.id;
+        }
+      } catch(e) { console.warn('Could not find linked advances:', e.message); }
+    }
+
+    const entryData = isAdvance ? {
+      vendor:        parentDoc.vendorName||'',
+      amount:        baseAmt,
+      datePaid:      paidDate,
+      paymentMode:   'NEFT',
+      refNumber:     stage.invoiceNo||'',
+      narration:     `Advance — ${refNo}`,
+      linkedPO:      parentType==='po' ? refNo : '',
+      linkedWO:      parentType==='wo' ? refNo : '',
+      project:       parentDoc.project||'',
+      split:         parentDoc.split||{pontoon:50,wtp:50},
+      status:        'Unadjusted',
+      balanceAmount: baseAmt,
+      fromSchedule:  true,
+    } : {
+      payee:            parentDoc.vendorName||'',
+      category:         'Vendor',
+      invoiceNo:        stage.invoiceNo||refNo,
+      invoiceDate:      paidDate,
+      due:              paidDate,
+      amount:           baseAmt + gstAmt,
+      advanceDeducted:  advanceDeducted,
+      notes:            `Against Delivery — ${refNo}`,
+      linkedPO:         parentType==='po' ? refNo : '',
+      linkedWO:         parentType==='wo' ? refNo : '',
+      project:          parentDoc.project||'',
+      split:            parentDoc.split||{pontoon:50,wtp:50},
+      gstPct:           parentDoc.gstPct||'',
+      paid:             false,
+      fromSchedule:     true,
+    };
+
+    if (stage.linkedEntryId) {
+      try { await updateDoc(userDoc(col, stage.linkedEntryId), entryData); }
+      catch(e) { console.warn('Could not update linked entry:', e.message); }
+    } else {
+      try {
+        const ref = await addDoc(userCol(col), {...entryData, createdAt: Date.now()});
+        // Auto-adjust linked advance
+        if (!isAdvance && advanceEntryId && advanceDeducted > 0) {
+          const advSnap = await (window.fb.getDoc)(userDoc(ADVANCES_COLLECTION, advanceEntryId));
+          const advData = advSnap.data();
+          const remaining = Number(advData.balanceAmount||advData.amount||0) - advanceDeducted;
+          await updateDoc(userDoc(ADVANCES_COLLECTION, advanceEntryId), {
+            adjustedAmount: advanceDeducted,
+            balanceAmount:  Math.max(0, remaining),
+            status:         remaining <= 0 ? 'Fully Adjusted' : 'Partially Adjusted',
+            adjustedAgainst: ref.id,
+          });
+        }
+        const newSchedule = updatedSchedule.map(s =>
+          s.id === stage.id ? {...s, linkedEntryId: ref.id} : s
+        );
+        const parentCol = parentType==='po' ? PO_COLLECTION : WO_COLLECTION;
+        await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: newSchedule});
+        if (setScheduleParent) setScheduleParent(newSchedule);
+      } catch(e) { console.error('Could not create linked entry:', e); alert('Error: '+e.message); }
+    }
+  } else {
+    // Unmark → delete linked entry, restore advance if it was adjusted
+    if (stage.linkedEntryId) {
+      const altCol = isAdvance ? BILLS_COLLECTION : ADVANCES_COLLECTION;
+      let deleted = false;
+      try { await deleteDoc(userDoc(col, stage.linkedEntryId)); deleted = true; } catch(e) {}
+      if (!deleted) { try { await deleteDoc(userDoc(altCol, stage.linkedEntryId)); } catch(e) {} }
+      // Restore advance adjustment
+      if (!isAdvance) {
+        try {
+          const { getDocs } = window.fb;
+          const advSnap = await getDocs(userCol(ADVANCES_COLLECTION));
+          const adjusted = advSnap.docs.filter(d => d.data().adjustedAgainst === stage.linkedEntryId);
+          for (let i = 0; i < adjusted.length; i++) {
+            const a = adjusted[i].data();
+            await updateDoc(userDoc(ADVANCES_COLLECTION, adjusted[i].id), {
+              status: 'Unadjusted', balanceAmount: Number(a.amount||0), adjustedAmount: 0, adjustedAgainst: '',
+            });
+          }
+        } catch(e) { console.warn('Could not restore advance:', e.message); }
+      }
+      const newSchedule = updatedSchedule.map(s =>
+        s.id === stage.id ? {...s, linkedEntryId: '', paid: false, paidAt: null, datePaid: '', invoiceNo: ''} : s
+      );
+      const parentCol = parentType==='po' ? PO_COLLECTION : WO_COLLECTION;
+      await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: newSchedule});
+      if (setScheduleParent) setScheduleParent(newSchedule);
+    }
+  }
+}
+
+// ─── Sync PO/WO edits to linked entries ───────────────
+async function syncScheduleChanges(schedule, parentDoc, parentType) {
+  if (!schedule || !schedule.length) return;
+  const { updateDoc, deleteDoc } = window.fb;
+  for (let i = 0; i < schedule.length; i++) {
+    const stage = schedule[i];
+    if (!stage.linkedEntryId || !stage.paid) continue;
+    const isAdvance = (stage.stageType||'Against Delivery') === 'Advance';
+    const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
+    const refNo = parentType==='po' ? (parentDoc.po||'') : (parentDoc.wo||'');
+    try {
+      if (isAdvance) {
+        await updateDoc(userDoc(col, stage.linkedEntryId), {
+          vendor: parentDoc.vendorName||'', amount: Number(stage.amount||0),
+          balanceAmount: Number(stage.amount||0), project: parentDoc.project||'',
+        });
+      } else {
+        await updateDoc(userDoc(col, stage.linkedEntryId), {
+          payee: parentDoc.vendorName||'', project: parentDoc.project||'',
+          due: stage.datePaid||stage.date||'', invoiceDate: stage.datePaid||stage.date||'',
+          amount: Number(stage.amount||0)+(stage.includesGst?Number(stage.gstAmount||0):0),
+        });
+      }
+    } catch(e) { console.warn('Could not sync stage change:', e.message); }
+  }
+}
+
+// ─── PaymentScheduleEditor ────────────────────────────
 function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChange, parentDoc, parentType, onStagePaid }) {
   const baseAmt = Number(totalValue)||0;
   const gstRate = parseFloat(gstPct)||0;
   const totalGstAmt = Math.round(baseAmt * gstRate / 100);
   const [stageSaving, setStageSaving] = useState(null);
+  const [payDateInputs, setPayDateInputs] = useState({});
 
-  const [payDateInputs, setPayDateInputs] = useState({}); // stageId → date string
+  function addRow() {
+    setRows(r=>[...r, {id:genRowId(), stageType:'Advance', pct:'', amount:'', date:'', includesGst:false, gstAmount:'', linkedEntryId:'', paid:false}]);
+  }
+  function removeRow(id) { setRows(r=>r.filter(x=>x.id!==id)); }
+  function updateRow(id, field, value) {
+    setRows(r=>r.map(x=>{
+      if (x.id!==id) return x;
+      const next = {...x, [field]:value};
+      if (field==='pct' && baseAmt) next.amount = String(Math.round((parseFloat(value)||0)/100*baseAmt));
+      if (field==='amount' && baseAmt>0) next.pct = String(Math.round((Number(value)||0)/baseAmt*100));
+      if (field==='includesGst') {
+        if (value && !next.gstAmount && totalGstAmt>0) next.gstAmount = String(totalGstAmt);
+        if (!value) next.gstAmount = '';
+      }
+      return next;
+    }));
+  }
 
   async function handleTogglePaid(row) {
     if (!parentDoc || !onStagePaid) return;
     const newPaid = !row.paid;
     if (newPaid) {
-      const paymentDate = payDateInputs[row.id] || '';
-      if (!paymentDate) {
-        alert('Please enter the date of payment before marking as paid.');
-        return;
-      }
+      const paymentDate = payDateInputs[row.id]||'';
+      if (!paymentDate) { alert('Please select a payment date.'); return; }
+      if (row.stageType === 'Against Delivery' && !row.invoiceNo) { alert('Please enter an invoice number for Against Delivery.'); return; }
       setStageSaving(row.id);
       try {
         const updatedRows = rows.map(r => r.id===row.id ? {...r, paid:true, paidAt:Date.now(), datePaid:paymentDate} : r);
         setRows(updatedRows);
         await syncStageToModules({...row, paid:true}, parentDoc, parentType, updatedRows, setRows, paymentDate);
         if (onStagePaid) onStagePaid(updatedRows);
-        // Clear the date input for this stage
-        setPayDateInputs(p=>({...p,[row.id]:''}));
-      } catch(e) { console.error(e); alert('Could not update stage: '+e.message); }
+        setPayDateInputs(p=>({...p, [row.id]:''}));
+      } catch(e) { console.error(e); alert('Error: '+e.message); }
       finally { setStageSaving(null); }
     } else {
       setStageSaving(row.id);
       try {
-        const updatedRows = rows.map(r => r.id===row.id ? {...r, paid:false, paidAt:null, datePaid:''} : r);
+        const updatedRows = rows.map(r => r.id===row.id ? {...r, paid:false, paidAt:null, datePaid:'', invoiceNo:''} : r);
         setRows(updatedRows);
         await syncStageToModules({...row, paid:false}, parentDoc, parentType, updatedRows, setRows, '');
         if (onStagePaid) onStagePaid(updatedRows);
-      } catch(e) { console.error(e); alert('Could not update stage: '+e.message); }
+      } catch(e) { console.error(e); }
       finally { setStageSaving(null); }
     }
   }
+
+  const stageTotal = rows.reduce((s,r)=>s+(parseFloat(r.pct)||0), 0);
+  const stageAmtTotal = rows.reduce((s,r)=>s+(Number(r.amount||0)), 0);
+
+  return (
+    <div className="form-group">
+      <label className="form-label">Payment Schedule <span style={{color:'var(--text-muted)',fontWeight:400,fontSize:11}}>(optional)</span></label>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,padding:'8px 10px',background:'var(--grey-50)',borderRadius:6,border:'1px solid var(--border)'}}>
+        <span style={{fontSize:12,fontWeight:600,color:'var(--text-secondary)',whiteSpace:'nowrap'}}>GST %</span>
+        <input className="form-input font-mono" style={{width:70,fontSize:12,padding:'4px 8px'}}
+          value={gstPct||''} onChange={e=>onGstPctChange&&onGstPctChange(e.target.value)} placeholder="18" />
+        {gstRate>0&&baseAmt>0&&<span style={{fontSize:11,color:'var(--text-muted)'}}>
+          GST = <strong style={{color:'var(--primary)'}}>{inr(totalGstAmt)}</strong> · ITC on 20th of next month
+        </span>}
+      </div>
+      {rows.length>0&&(
+        <div style={{border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',marginBottom:8}}>
+          <table style={{width:'100%'}}>
+            <thead>
+              <tr style={{background:'var(--grey-50)'}}>
+                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>Type</th>
+                <th style={{fontSize:10,padding:'5px 8px',color:'var(--text-muted)'}}>%</th>
+                <th style={{fontSize:10,padding:'5px 8px',color:'var(--text-muted)'}}>Amount (₹)</th>
+                <th style={{fontSize:10,padding:'5px 8px',color:'var(--text-muted)'}}>Due Date</th>
+                <th style={{fontSize:10,padding:'5px 8px',textAlign:'center',color:'var(--primary)'}}>GST?</th>
+                <th style={{fontSize:10,padding:'5px 8px',color:'var(--primary)'}}>GST Amt</th>
+                <th style={{fontSize:10,padding:'5px 8px',color:'var(--green)',minWidth:240}}>Paid?</th>
+                <th style={{width:20}}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r=>(
+                <tr key={r.id} style={{borderTop:'1px solid var(--grey-50)',background:r.paid?'#F0FFF4':r.includesGst?'#EFF6FF':''}}>
+                  <td style={{padding:3,width:140}}>
+                    <select className="form-input form-select" style={{fontSize:11,padding:'3px 4px'}} value={r.stageType||'Against Delivery'} onChange={e=>updateRow(r.id,'stageType',e.target.value)} disabled={r.paid}>
+                      {STAGE_TYPES.map(t=><option key={t}>{t}</option>)}
+                    </select>
+                  </td>
+                  <td style={{padding:3,width:50}}><input className="form-input font-mono" style={{fontSize:11,padding:'3px 5px'}} value={r.pct} onChange={e=>updateRow(r.id,'pct',e.target.value)} placeholder="30" disabled={r.paid} /></td>
+                  <td style={{padding:3,width:100}}><input className="form-input font-mono" style={{fontSize:11,padding:'3px 5px'}} value={r.amount} onChange={e=>updateRow(r.id,'amount',e.target.value)} placeholder="0" disabled={r.paid} /></td>
+                  <td style={{padding:3,width:120}}><input className="form-input" type="date" style={{fontSize:11,padding:'3px 5px'}} value={r.date} onChange={e=>updateRow(r.id,'date',e.target.value)} disabled={r.paid} /></td>
+                  <td style={{padding:3,textAlign:'center',width:36}}>
+                    <input type="checkbox" checked={!!r.includesGst} onChange={e=>updateRow(r.id,'includesGst',e.target.checked)} disabled={r.paid} style={{width:14,height:14,cursor:'pointer',accentColor:'var(--primary)'}} />
+                  </td>
+                  <td style={{padding:3,width:90}}>
+                    {r.includesGst ? <input className="form-input font-mono" style={{fontSize:11,padding:'3px 5px',background:'#EFF6FF',borderColor:'var(--primary)'}} value={r.gstAmount} onChange={e=>updateRow(r.id,'gstAmount',e.target.value)} placeholder={String(totalGstAmt||0)} disabled={r.paid} />
+                      : <span style={{fontSize:11,color:'var(--text-muted)',padding:'0 4px'}}>—</span>}
+                  </td>
+                  <td style={{padding:3,minWidth:240}}>
+                    {stageSaving===r.id ? <span style={{fontSize:10,color:'var(--text-muted)'}}>Saving…</span>
+                    : r.paid ? (
+                      <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                        <span style={{fontSize:10,background:'#D1FAE5',color:'var(--green)',borderRadius:3,padding:'2px 6px',fontWeight:600}}>✓ Paid {r.datePaid?fmt(r.datePaid):''}</span>
+                        {r.linkedEntryId&&<span style={{fontSize:10}}>🔗</span>}
+                        {parentDoc&&<span onClick={()=>handleTogglePaid(r)} style={{fontSize:9,color:'var(--amber)',cursor:'pointer',textDecoration:'underline'}}>Unmark</span>}
+                      </div>
+                    ) : parentDoc ? (
+                      <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                        <div style={{display:'flex',gap:4,alignItems:'center'}}>
+                          <input type="date" value={payDateInputs[r.id]||''} onChange={e=>setPayDateInputs(p=>({...p,[r.id]:e.target.value}))}
+                            style={{fontSize:11,padding:'3px 4px',border:'1px solid var(--border)',borderRadius:4,width:120}} />
+                          <button onClick={()=>handleTogglePaid(r)} className="btn btn-sm btn-primary"
+                            style={{fontSize:9,padding:'3px 6px',background:'var(--green)',opacity:payDateInputs[r.id]?1:0.5}}>Mark Paid</button>
+                        </div>
+                        {r.stageType==='Against Delivery'&&(
+                          <input className="form-input font-mono" style={{fontSize:10,padding:'3px 5px'}}
+                            value={r.invoiceNo||''} onChange={e=>updateRow(r.id,'invoiceNo',e.target.value)}
+                            placeholder="Invoice number (required)" />
+                        )}
+                      </div>
+                    ) : <span style={{fontSize:10,color:'var(--text-muted)'}}>Save PO first to mark paid</span>}
+                  </td>
+                  <td style={{padding:3,textAlign:'center'}}>{!r.paid&&<span onClick={()=>removeRow(r.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{padding:'5px 8px',fontSize:11,background:'var(--grey-50)',display:'flex',gap:16,flexWrap:'wrap'}}>
+            <span style={{color:Math.abs(stageTotal-100)<1?'var(--green)':'var(--amber)'}}>Stages: {stageTotal}%{Math.abs(stageTotal-100)<1?' ✓':' (should = 100%)'}</span>
+            <span style={{color:'var(--text-muted)'}}>Base: {inr(stageAmtTotal)}</span>
+            {gstRate>0&&<span style={{color:'var(--text-muted)'}}>Total incl. GST: {inr(stageAmtTotal+totalGstAmt)}</span>}
+          </div>
+        </div>
+      )}
+      <button type="button" onClick={addRow} className="btn btn-sm btn-outline">+ Add Stage</button>
+    </div>
+  );
+}
+// ─── PO/WO Schedule Modal ─────────────────────────────
+function POWOScheduleModal({ doc, parentType, onClose }) {
+  const [stages, setStages] = useState((doc.paymentSchedule||[]).map(s=>({...s})));
+  const [saving, setSaving] = useState(null);
+  const [payDates, setPayDates] = useState({});
+  const [invoiceNos, setInvoiceNos] = useState({});
+
+  const paidAmt   = stages.filter(s=>s.paid).reduce((s,r)=>s+Number(r.amount||0)+(r.includesGst?Number(r.gstAmount||0):0), 0);
+  const unpaidAmt = stages.filter(s=>!s.paid).reduce((s,r)=>s+Number(r.amount||0)+(r.includesGst?Number(r.gstAmount||0):0), 0);
+
+  async function toggleStage(stage) {
+    const newPaid = !stage.paid;
+    if (newPaid) {
+      if (!payDates[stage.id]) { alert('Please select a payment date.'); return; }
+      if (stage.stageType==='Against Delivery' && !invoiceNos[stage.id]) { alert('Invoice number is required for Against Delivery.'); return; }
+      setSaving(stage.id);
+      try {
+        const stageWithInvoice = {...stage, paid:true, paidAt:Date.now(), datePaid:payDates[stage.id], invoiceNo:invoiceNos[stage.id]||''};
+        const updatedStages = stages.map(s => s.id===stage.id ? stageWithInvoice : s);
+        setStages(updatedStages);
+        await syncStageToModules(stageWithInvoice, doc, parentType, updatedStages, setStages, payDates[stage.id]);
+        setPayDates(p=>({...p,[stage.id]:''}));
+        setInvoiceNos(p=>({...p,[stage.id]:''}));
+      } catch(e) { console.error(e); alert('Error: '+e.message); }
+      finally { setSaving(null); }
+    } else {
+      setSaving(stage.id);
+      try {
+        const updatedStages = stages.map(s => s.id===stage.id ? {...s, paid:false, paidAt:null, datePaid:'', invoiceNo:''} : s);
+        setStages(updatedStages);
+        await syncStageToModules({...stage, paid:false}, doc, parentType, updatedStages, setStages, '');
+      } catch(e) { console.error(e); alert('Error: '+e.message); }
+      finally { setSaving(null); }
+    }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:640,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
+          <div style={{fontWeight:700,fontSize:14,color:'#fff'}}>{doc.po||doc.wo} · {doc.vendorName}</div>
+          <div style={{fontSize:11,color:'rgba(255,255,255,.7)',marginTop:2}}>Advance → Advance Payments · Against Delivery → Bills & Invoices (with invoice#) · auto-adjusts advance</div>
+        </div>
+        <div style={{padding:'16px 20px'}}>
+          <div style={{display:'flex',gap:12,marginBottom:16}}>
+            <div style={{flex:1,padding:'10px 14px',background:'#F0FFF4',borderRadius:6,border:'1px solid var(--green)'}}>
+              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Paid</div>
+              <div className="amount" style={{fontSize:16,fontWeight:700,color:'var(--green)'}}>{inr(paidAmt)}</div>
+            </div>
+            <div style={{flex:1,padding:'10px 14px',background:'#FFF7ED',borderRadius:6,border:'1px solid var(--amber)'}}>
+              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Remaining</div>
+              <div className="amount" style={{fontSize:16,fontWeight:700,color:'var(--amber)'}}>{inr(unpaidAmt)}</div>
+            </div>
+            <div style={{flex:1,padding:'10px 14px',background:'var(--grey-50)',borderRadius:6,border:'1px solid var(--border)'}}>
+              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>PO Value</div>
+              <div className="amount" style={{fontSize:16,fontWeight:700}}>{inr(doc.value||0)}</div>
+            </div>
+          </div>
+          {stages.length===0 ? (
+            <div style={{textAlign:'center',padding:'30px',color:'var(--text-muted)'}}>No payment schedule defined for this PO/WO.</div>
+          ) : stages.map(s=>(
+            <div key={s.id} style={{border:'1px solid var(--border)',borderRadius:8,padding:'14px 16px',marginBottom:12,background:s.paid?'#F0FFF4':'var(--surface)'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8}}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <span className={`badge ${STAGE_TYPE_COLOR[s.stageType||'Against Delivery']||'grey'}`}>{s.stageType||'Against Delivery'}</span>
+                  <span className="amount" style={{fontWeight:700,fontSize:14}}>{inr(Number(s.amount||0)+(s.includesGst?Number(s.gstAmount||0):0))}</span>
+                  {s.includesGst&&Number(s.gstAmount)>0&&<span style={{fontSize:11,color:'var(--primary)'}}>incl. GST {inr(s.gstAmount)}</span>}
+                  {s.pct&&<span style={{fontSize:11,color:'var(--text-muted)'}}>{s.pct}%</span>}
+                </div>
+                <div style={{textAlign:'right'}}>
+                  {s.paid ? (
+                    <div>
+                      <span className="badge green">✓ Paid — {fmt(s.datePaid)}</span>
+                      {s.linkedEntryId&&<span style={{fontSize:10,marginLeft:4}}>🔗</span>}
+                      {s.invoiceNo&&<div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>Invoice: {s.invoiceNo}</div>}
+                    </div>
+                  ) : s.date ? (
+                    <span style={{fontSize:11,color:'var(--text-muted)'}}>Due: {fmt(s.date)}</span>
+                  ) : null}
+                </div>
+              </div>
+              {saving===s.id ? (
+                <div style={{fontSize:11,color:'var(--text-muted)'}}>Saving…</div>
+              ) : s.paid ? (
+                <button className="btn btn-sm btn-ghost" style={{color:'var(--amber)',border:'1px solid var(--amber)',fontSize:11}} onClick={()=>toggleStage(s)}>↩ Unmark Paid</button>
+              ) : (
+                <div style={{display:'flex',gap:8,alignItems:'flex-end',flexWrap:'wrap'}}>
+                  <div>
+                    <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:3}}>Date of Payment *</div>
+                    <input type="date" value={payDates[s.id]||''} onChange={e=>setPayDates(p=>({...p,[s.id]:e.target.value}))}
+                      style={{fontSize:12,padding:'5px 8px',border:`1px solid ${payDates[s.id]?'var(--primary)':'var(--border)'}`,borderRadius:4,width:140}} />
+                  </div>
+                  {s.stageType==='Against Delivery'&&(
+                    <div>
+                      <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:3}}>Invoice Number *</div>
+                      <input className="form-input font-mono" style={{fontSize:12,padding:'5px 8px',width:160}}
+                        value={invoiceNos[s.id]||''} onChange={e=>setInvoiceNos(p=>({...p,[s.id]:e.target.value}))}
+                        placeholder="e.g. INV/2026/001" />
+                    </div>
+                  )}
+                  <button className="btn btn-primary" style={{fontSize:12,padding:'6px 14px',background:'var(--green)',
+                    opacity:(payDates[s.id]&&(s.stageType!=='Against Delivery'||invoiceNos[s.id]))?1:0.5}}
+                    onClick={()=>toggleStage(s)}>Mark Paid</button>
+                </div>
+              )}
+            </div>
+          ))}
+          <div style={{fontSize:11,color:'var(--text-muted)',background:'var(--grey-50)',padding:'8px 12px',borderRadius:4,marginTop:8}}>
+            💡 Advance payments auto-adjust when Against Delivery is marked paid.
+          </div>
+        </div>
+        <div style={{padding:'0 20px 16px',display:'flex',justifyContent:'flex-end'}}>
+          <button className="btn btn-ghost" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Manual entry → PO/WO stage link ─────────────────
+async function syncManualEntryToPOWO(entryId, entryType, linkedPO, linkedWO, amount, date) {
+  const { getDocs, updateDoc } = window.fb;
+  const isAdvance = entryType === 'advance';
+  let parentDoc = null, parentCol = null, parentId = null;
+  if (linkedPO) {
+    const snap = await getDocs(userCol(PO_COLLECTION));
+    const match = snap.docs.find(d => d.data().po === linkedPO);
+    if (match) { parentDoc = match.data(); parentCol = PO_COLLECTION; parentId = match.id; }
+  } else if (linkedWO) {
+    const snap = await getDocs(userCol(WO_COLLECTION));
+    const match = snap.docs.find(d => d.data().wo === linkedWO);
+    if (match) { parentDoc = match.data(); parentCol = WO_COLLECTION; parentId = match.id; }
+  }
+  if (!parentDoc || !parentDoc.paymentSchedule) return;
+  const targetTypes = isAdvance ? ['Advance'] : ['Against Delivery'];
+  const schedule = parentDoc.paymentSchedule;
+  const matchIdx = schedule.findIndex(s => targetTypes.includes(s.stageType||'Against Delivery') && !s.linkedEntryId && Math.abs(Number(s.amount||0)-amount)<1);
+  if (matchIdx === -1) return;
+  const newSchedule = schedule.map((s,i) => i===matchIdx ? {...s, linkedEntryId: entryId, paid:true, paidAt:Date.now()} : s);
+  await updateDoc(userDoc(parentCol, parentId), {paymentSchedule: newSchedule});
+}
 
   function addRow() {
     setRows(r=>[...r,{id:genRowId(),stageType:'Advance',pct:'',amount:'',date:'',includesGst:false,gstAmount:'',linkedEntryId:''}]);
@@ -1028,134 +1420,6 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
       return next;
     }));
   }
-
-  const stageTotal    = rows.reduce((s,r)=>s+(parseFloat(r.pct)||0),0);
-  const stageAmtTotal = rows.reduce((s,r)=>s+(Number(r.amount)||0),0);
-  const gstAssigned   = rows.filter(r=>r.includesGst).reduce((s,r)=>s+(Number(r.gstAmount)||0),0);
-
-  return (
-    <div className="form-group">
-      <label className="form-label">
-        Payment Schedule <span style={{color:'var(--text-muted)',fontWeight:400,fontSize:11}}>(optional)</span>
-      </label>
-
-      {/* GST rate field */}
-      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,padding:'8px 10px',background:'var(--grey-50)',borderRadius:6,border:'1px solid var(--border)'}}>
-        <span style={{fontSize:12,color:'var(--text-secondary)',whiteSpace:'nowrap',fontWeight:600}}>GST %</span>
-        <input className="form-input font-mono" style={{width:70,fontSize:12,padding:'4px 8px'}}
-          value={gstPct||''} onChange={e=>onGstPctChange&&onGstPctChange(e.target.value)}
-          placeholder="18" />
-        {gstRate>0&&baseAmt>0&&(
-          <span style={{fontSize:11,color:'var(--text-muted)'}}>
-            GST = <strong style={{color:'var(--primary)'}}>{inr(totalGstAmt)}</strong>
-            &nbsp;· Tick "GST" on applicable stage · ITC on 20th of next month
-          </span>
-        )}
-      </div>
-
-      {rows.length>0 && (
-        <div style={{border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',marginBottom:8}}>
-          <table style={{width:'100%'}}>
-            <thead>
-              <tr style={{background:'var(--grey-50)'}}>
-                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>Type</th>
-                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>%</th>
-                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>Amount (₹)</th>
-                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>Due Date</th>
-                <th style={{fontSize:10,padding:'5px 8px',textAlign:'center',color:'var(--primary)'}}>GST?</th>
-                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--primary)'}}>GST Amt</th>
-                <th style={{fontSize:10,padding:'5px 8px',textAlign:'center',color:'var(--green)'}}>Paid?</th>
-                <th style={{fontSize:10,padding:'5px 8px',width:20}}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(r=>(
-                <tr key={r.id} style={{borderTop:'1px solid var(--grey-50)',background:r.paid?'#F0FFF4':r.includesGst?'#EFF6FF':''}}>
-                  <td style={{padding:3,width:140}}>
-                    <select className="form-input form-select" style={{fontSize:11,padding:'3px 4px'}}
-                      value={r.stageType||'Advance'} onChange={e=>updateRow(r.id,'stageType',e.target.value)}>
-                      {STAGE_TYPES.map(t=><option key={t}>{t}</option>)}
-                    </select>
-                  </td>
-                  <td style={{padding:3,width:50}}>
-                    <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px'}}
-                      value={r.pct} onChange={e=>updateRow(r.id,'pct',e.target.value)} placeholder="30" />
-                  </td>
-                  <td style={{padding:3,width:105}}>
-                    <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px'}}
-                      value={r.amount} onChange={e=>updateRow(r.id,'amount',e.target.value)} placeholder="0" />
-                  </td>
-                  <td style={{padding:3,width:120}}>
-                    <input className="form-input" type="date" style={{fontSize:11.5,padding:'4px 6px'}}
-                      value={r.date} onChange={e=>updateRow(r.id,'date',e.target.value)} />
-                  </td>
-                  <td style={{padding:3,textAlign:'center',width:36}}>
-                    <input type="checkbox" checked={!!r.includesGst}
-                      onChange={e=>updateRow(r.id,'includesGst',e.target.checked)}
-                      style={{width:14,height:14,cursor:'pointer',accentColor:'var(--primary)'}} />
-                  </td>
-                  <td style={{padding:3,width:95}}>
-                    {r.includesGst ? (
-                      <input className="form-input font-mono" style={{fontSize:11,padding:'3px 5px',background:'#EFF6FF',borderColor:'var(--primary)'}}
-                        value={r.gstAmount} onChange={e=>updateRow(r.id,'gstAmount',e.target.value)}
-                        placeholder={String(totalGstAmt||0)} />
-                    ) : <span style={{fontSize:11,color:'var(--text-muted)',padding:'0 4px'}}>—</span>}
-                  </td>
-                  <td style={{padding:3,width:220}}>
-                    {stageSaving===r.id ? (
-                      <span style={{fontSize:10,color:'var(--text-muted)',padding:'0 4px'}}>Saving…</span>
-                    ) : r.paid ? (
-                      <div style={{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}}>
-                        <span style={{fontSize:10,background:'#D1FAE5',color:'var(--green)',borderRadius:3,padding:'2px 5px',fontWeight:600}}>✓ Paid</span>
-                        {r.datePaid && <span style={{fontSize:10,color:'var(--text-muted)'}}>{fmt(r.datePaid)}</span>}
-                        {r.linkedEntryId && <span title="Linked" style={{fontSize:10}}>🔗</span>}
-                        {parentDoc && <span onClick={()=>handleTogglePaid(r)} style={{fontSize:9,color:'var(--amber)',cursor:'pointer',textDecoration:'underline',marginLeft:2}}>Unmark</span>}
-                      </div>
-                    ) : parentDoc ? (
-                      <div style={{display:'flex',alignItems:'center',gap:4}}>
-                        <input type="date"
-                          value={payDateInputs[r.id]||''}
-                          onChange={e=>setPayDateInputs(p=>({...p,[r.id]:e.target.value}))}
-                          style={{fontSize:11,padding:'3px 4px',border:'1px solid var(--border)',borderRadius:4,width:120,color:payDateInputs[r.id]?'var(--text)':'var(--text-muted)'}} />
-                        <button onClick={()=>handleTogglePaid(r)} className="btn btn-sm btn-primary"
-                          style={{fontSize:9,padding:'3px 6px',background:'var(--green)',whiteSpace:'nowrap',opacity:payDateInputs[r.id]?1:0.5}}>
-                          Mark Paid
-                        </button>
-                      </div>
-                    ) : (
-                      <span style={{fontSize:11,color:'var(--text-muted)'}}>—</span>
-                    )}
-                  </td>
-                  <td style={{padding:3,textAlign:'center'}}>
-                    <span onClick={()=>removeRow(r.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div style={{padding:'5px 8px',fontSize:11,background:'var(--grey-50)',display:'flex',gap:16,flexWrap:'wrap'}}>
-            <span style={{color:Math.abs(stageTotal-100)<1?'var(--green)':'var(--amber)'}}>
-              Stages: {stageTotal}%{Math.abs(stageTotal-100)<1?' ✓':' (should = 100%)'}
-            </span>
-            <span style={{color:'var(--text-muted)'}}>Base: {inr(stageAmtTotal)}</span>
-            {gstRate>0&&(
-              <span style={{color:gstAssigned>0?'var(--primary)':'var(--text-muted)'}}>
-                GST assigned: {inr(gstAssigned)}/{inr(totalGstAmt)}
-              </span>
-            )}
-            <span style={{color:'var(--text-muted)',fontSize:10}}>
-              💡 Advance type → auto-creates Advance entry when marked paid · Dispatch/Delivery → auto-creates Bill
-            </span>
-          </div>
-        </div>
-      )}
-      <button type="button" onClick={addRow} className="btn btn-sm btn-outline">+ Add Stage</button>
-    </div>
-  );
-}
-
-// ─── useRequisitions stub ─────────────────────────────
-function useRequisitions() { return { items: [], loading: false }; }
 
 // ─── IssuePOModal — from approved quotation ───────────
 // ─── XRefBadge ────────────────────────────────────────
@@ -1374,1681 +1638,6 @@ function NewWOModal({ onClose, existing, quotations }) {
   );
 }
 
-// ─── Manual entry → PO/WO stage link ─────────────────
-// When a manually created Advance or Bill is linked to a PO/WO,
-// find the best matching unlinked stage and store the entry ID there
-async function syncManualEntryToPOWO(entryId, entryType, linkedPO, linkedWO, amount, date) {
-  const { getDocs, updateDoc } = window.fb;
-  const isAdvance = entryType === 'advance';
-
-  // Find the PO or WO document
-  let parentDoc = null, parentCol = null, parentId = null;
-  if (linkedPO) {
-    const snap = await getDocs(userCol(PO_COLLECTION));
-    const match = snap.docs.find(d => d.data().po === linkedPO);
-    if (match) { parentDoc = match.data(); parentCol = PO_COLLECTION; parentId = match.id; }
-  } else if (linkedWO) {
-    const snap = await getDocs(userCol(WO_COLLECTION));
-    const match = snap.docs.find(d => d.data().wo === linkedWO);
-    if (match) { parentDoc = match.data(); parentCol = WO_COLLECTION; parentId = match.id; }
-  }
-  if (!parentDoc || !parentDoc.paymentSchedule) return;
-
-  // Find the best matching unlinked stage of the right type
-  const targetTypes = isAdvance ? ['Advance'] : ['Against Dispatch','Against Delivery','Retention','Other'];
-  const schedule = parentDoc.paymentSchedule;
-  const matchIdx = schedule.findIndex(s =>
-    targetTypes.includes(s.stageType||'Other') &&
-    !s.linkedEntryId &&
-    (Math.abs(Number(s.amount||0) - amount) < 1 || !s.amount)
-  );
-
-  if (matchIdx === -1) {
-    // No matching stage found — just log, don't force-link
-    console.log('No matching unlinked stage found for manual entry, linking skipped');
-    return;
-  }
-
-  // Store the entry ID in the matched stage
-  const newSchedule = schedule.map((s,i) =>
-    i === matchIdx ? {...s, linkedEntryId: entryId, paid: true, paidAt: Date.now()} : s
-  );
-  await updateDoc(userDoc(parentCol, parentId), { paymentSchedule: newSchedule });
-  console.log(`Linked manual ${entryType} to stage ${schedule[matchIdx].name} in ${linkedPO||linkedWO}`);
-}
-
-// ─── Sync all schedule changes to linked entries ──────
-// Called when PO/WO is saved — updates or deletes linked Advance/Bill entries
-async function syncScheduleChanges(schedule, parentDoc, parentType) {
-  if (!schedule || !schedule.length) return;
-  const { updateDoc, deleteDoc } = window.fb;
-
-  for (let i = 0; i < schedule.length; i++) {
-    const stage = schedule[i];
-    if (!stage.linkedEntryId) continue;
-
-    const sType = (stage.stageType || stage.name || 'Other').trim();
-    const isAdvance = sType.toLowerCase() === 'advance';
-    const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
-    const refNo = parentType==='po' ? (parentDoc.po||'') : (parentDoc.wo||'');
-    const paidDate = stage.datePaid || stage.date || '';
-
-    if (!stage.paid) {
-      // Stage unmarked as paid — delete the linked entry from either collection
-      const altCol2 = isAdvance ? BILLS_COLLECTION : ADVANCES_COLLECTION;
-      let deleted = false;
-      try { await deleteDoc(userDoc(col, stage.linkedEntryId)); deleted = true; } catch(e) {}
-      if (!deleted) { try { await deleteDoc(userDoc(altCol2, stage.linkedEntryId)); } catch(e) { console.warn('Could not delete:', e.message); } }
-      schedule[i] = {...stage, linkedEntryId: '', paid: false, paidAt: null};
-    } else {
-      // Stage still paid — update amount/date in case they changed
-      try {
-        const baseAmt = Number(stage.amount)||0;
-        const gstAmt = stage.includesGst ? Number(stage.gstAmount||0) : 0;
-        if (isAdvance) {
-          await updateDoc(userDoc(ADVANCES_COLLECTION, stage.linkedEntryId), {
-            amount: baseAmt, balanceAmount: baseAmt,
-            datePaid: paidDate, narration: `${sType} — ${refNo}`,
-            vendorName: parentDoc.vendorName||'', project: parentDoc.project||'',
-          });
-        } else {
-          await updateDoc(userDoc(BILLS_COLLECTION, stage.linkedEntryId), {
-            amount: baseAmt + gstAmt,
-            due: paidDate, invoiceDate: paidDate,
-            notes: `${sType} — ${refNo}`,
-            payee: parentDoc.vendorName||'', project: parentDoc.project||'',
-          });
-        }
-      } catch(e) { console.warn('Could not update linked entry:', e.message); }
-    }
-  }
-
-  // Save back updated schedule (with cleared linkedEntryIds for unmarked stages)
-  const parentCol = parentType==='po' ? PO_COLLECTION : WO_COLLECTION;
-  const hasChanges = schedule.some(s => !s.paid && s.linkedEntryId === '');
-  if (hasChanges) {
-    try { await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: schedule}); }
-    catch(e) { console.warn('Could not update schedule:', e.message); }
-  }
-}
-
-// ─── Stage → Advance / Bill auto-sync ────────────────
-async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule, setScheduleParent, paymentDate) {
-  const { addDoc, deleteDoc, updateDoc } = window.fb;
-  const sType = (stage.stageType || '').trim() || (stage.name || '').trim() || 'Other';
-  const isAdvance = sType.toLowerCase() === 'advance';
-  const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
-  const paidDate = paymentDate || stage.datePaid || stage.date || new Date().toISOString().slice(0,10);
-  const refNo = parentType==='po' ? (parentDoc.po||'') : (parentDoc.wo||'');
-  console.log(`syncStageToModules: stageType="${stage.stageType}" name="${stage.name}" resolved="${sType}" isAdvance=${isAdvance} col=${col} paid=${stage.paid} linkedEntryId=${stage.linkedEntryId}`);
-
-  if (stage.paid) {
-    const baseAmt = Number(stage.amount)||0;
-    const gstAmt  = stage.includesGst ? Number(stage.gstAmount||0) : 0;
-
-    const advanceData = {
-      vendor:        parentDoc.vendorName || '',
-      amount:        baseAmt,
-      datePaid:      paidDate,
-      paymentMode:   'NEFT',
-      refNumber:     '',
-      narration:     `${sType} — ${refNo}`,
-      linkedPO:      parentType==='po' ? refNo : '',
-      linkedWO:      parentType==='wo' ? refNo : '',
-      project:       parentDoc.project||'',
-      split:         parentDoc.split||{pontoon:50,wtp:50},
-      status:        'Unadjusted',
-      balanceAmount: baseAmt,
-      fromSchedule:  true,
-    };
-
-    const billData = {
-      payee:         parentDoc.vendorName||'',
-      category:      'Vendor',
-      invoiceNo:     refNo,
-      invoiceDate:   paidDate,
-      due:           paidDate,
-      amount:        baseAmt + gstAmt,
-      notes:         `${sType} — ${refNo}`,
-      linkedPO:      parentType==='po' ? refNo : '',
-      linkedWO:      parentType==='wo' ? refNo : '',
-      project:       parentDoc.project||'',
-      split:         parentDoc.split||{pontoon:50,wtp:50},
-      gstPct:        stage.includesGst && baseAmt > 0 ? ((gstAmt/baseAmt)*100).toFixed(0) : '',
-      fromSchedule:  true,
-    };
-
-    const entryData = isAdvance ? advanceData : {...billData, paid: true, paidAt: Date.now()};
-    // col is already defined above — do not redeclare
-
-    if (stage.linkedEntryId) {
-      try { await updateDoc(userDoc(col, stage.linkedEntryId), entryData); }
-      catch(e) { console.warn('Could not update linked entry:', e.message); }
-    } else {
-      try {
-        const ref = await addDoc(userCol(col), {...entryData, createdAt: Date.now()});
-        console.log(`✓ Created ${isAdvance?'Advance':'Bill'} entry in ${col} id:`, ref.id);
-        const newSchedule = updatedSchedule.map(s =>
-          s.id === stage.id ? {...s, linkedEntryId: ref.id} : s
-        );
-        const parentCol = parentType==='po' ? PO_COLLECTION : WO_COLLECTION;
-        await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: newSchedule});
-        console.log(`✓ Saved linkedEntryId back to ${parentCol}`);
-        if (setScheduleParent) setScheduleParent(newSchedule);
-      } catch(e) { console.error('✗ Could not create linked entry:', e); alert('Error creating entry: ' + e.message); }
-    }
-  } else {
-    // Unmark paid → delete linked entry
-    if (stage.linkedEntryId) {
-      // Try deleting from correct collection first, then fallback to the other
-      const altCol = isAdvance ? BILLS_COLLECTION : ADVANCES_COLLECTION;
-      let deleted = false;
-      try {
-        await deleteDoc(userDoc(col, stage.linkedEntryId));
-        deleted = true;
-        console.log(`Deleted from ${col}:`, stage.linkedEntryId);
-      } catch(e) { console.warn(`Not found in ${col}, trying ${altCol}...`); }
-      if (!deleted) {
-        try {
-          await deleteDoc(userDoc(altCol, stage.linkedEntryId));
-          console.log(`Deleted from fallback ${altCol}:`, stage.linkedEntryId);
-        } catch(e) { console.warn('Could not delete from either collection:', e.message); }
-      }
-      const newSchedule = updatedSchedule.map(s =>
-        s.id === stage.id ? {...s, linkedEntryId: '', paid: false, paidAt: null} : s
-      );
-      const parentCol = parentType==='po' ? PO_COLLECTION : WO_COLLECTION;
-      await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: newSchedule});
-      if (setScheduleParent) setScheduleParent(newSchedule);
-    }
-  }
-}
-
-function IssuePOModal({ quotation, onClose, onIssued }) {
-  const knownNames = useKnownNames();
-  const [form, setForm] = useState({
-    po: '', vendorName: quotation?.vendorName||'',
-    description: quotation?.description||'',
-    value: quotation?.value ? String(quotation.value) : '',
-    linkedQuotation: quotation?.docId||'',
-    stage: 'Draft',
-    project: quotation?.project||'',
-    split: quotation?.split||{pontoon:50,wtp:50},
-  });
-  const [schedule, setSchedule] = useState(quotation?.paymentSchedule ? quotation.paymentSchedule.map(r=>({...r,id:genRowId()})) : []);
-  const [saving, setSaving] = useState(false);
-  function set(f,v){setForm(s=>({...s,[f]:v}));}
-
-  async function handleIssue() {
-    if (!form.vendorName.trim()||!form.value) return;
-    setSaving(true);
-    try {
-      const { addDoc, updateDoc } = window.fb;
-      // Create PO
-      await addDoc(userCol(PO_COLLECTION), {...form, value:Number(form.value), paymentSchedule:schedule, createdAt:Date.now()});
-      // Mark quotation as issued
-      await updateDoc(userDoc(QUOTATIONS_COLLECTION, quotation.docId), {stage:'Finalized', issued:true});
-      onIssued && onIssued();
-    } catch(e){ console.error(e); alert('Could not issue PO.'); }
-    finally{ setSaving(false); }
-  }
-
-  return (
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:580,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
-        <div style={{background:'var(--green)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Issue Purchase Order from Quotation</span>
-        </div>
-        <div style={{padding:'18px 20px'}}>
-          <div style={{background:'var(--green-50)',border:'1px solid #C8E6C9',borderRadius:6,padding:'8px 12px',fontSize:12,marginBottom:14}}>
-            Issuing PO against: <strong>{quotation?.vendorName}</strong> · {inr(quotation?.value||0)}
-          </div>
-          <div className="form-group">
-            <label className="form-label">PO Number</label>
-            <input className="form-input font-mono" value={form.po} onChange={e=>set('po',e.target.value)} placeholder="NWTS/PO/2026-27/001" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Vendor Name</label>
-            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={knownNames.vendors} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Description</label>
-            <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Value (₹)</label>
-            <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} />
-          </div>
-          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} gstPct={gstPct} onGstPctChange={setGstPct} parentDoc={isEdit?{...existing,...form,docId:existing.docId}:null} parentType="wo" onStagePaid={s=>setSchedule(s)} />
-          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
-        </div>
-        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
-          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleIssue} disabled={saving||!form.vendorName.trim()||!form.value} className="btn btn-primary"
-            style={{background:'var(--green)',opacity:saving||!form.vendorName.trim()||!form.value?.6:1}}>
-            {saving?'Issuing…':'✓ Issue PO'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Tasks ────────────────────────────────────────────
-const TASKS_COLLECTION = 'tasks';
-const PRIO_COLOR = { Critical:'red', High:'amber', Medium:'blue', Low:'grey' };
-function useTasks() {
-  const [tasks, setTasks] = useState([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    function start() {
-      const { query, orderBy, onSnapshot } = window.fb;
-      const unsub = onSnapshot(
-        query(userCol(TASKS_COLLECTION), orderBy('createdAt','desc')),
-        snap => { setTasks(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
-        err  => { console.error('Tasks listener',err); setLoading(false); }
-      );
-      return unsub;
-    }
-    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
-    let u;
-    const h=()=>{ if(getUserUID()) u=start(); };
-    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
-    window.addEventListener('firebase-ready',h,{once:true});
-    window.addEventListener('user-ready',hu,{once:true});
-    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u)u(); };
-  },[]);
-  return {tasks,loading};
-}
-async function addTask(data) { const { addDoc } = window.fb; await addDoc(userCol(TASKS_COLLECTION), {...data, createdAt:Date.now()}); }
-async function updateTask(docId, data) { const { updateDoc } = window.fb; await updateDoc(userDoc(TASKS_COLLECTION, docId), data); }
-async function deleteTask(docId) { const { deleteDoc } = window.fb; await deleteDoc(userDoc(TASKS_COLLECTION, docId)); }
-async function clearAllTasks() {
-  const { getDocs, writeBatch, db } = window.fb;
-  const snap = await getDocs(userCol(TASKS_COLLECTION));
-  const batch = writeBatch(db); snap.docs.forEach(d=>batch.delete(d.ref)); await batch.commit();
-}
-
-// ─── Quotations ───────────────────────────────────────
-const QUOTATIONS_COLLECTION = 'quotations';
-const QUOTE_STAGES = ['Receipt of Quotation','Finalized'];
-const STAGE_COLOR = { 'Receipt of Quotation':'grey', 'Finalized':'green' };
-function useQuotations() {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    function start() {
-      const { query, orderBy, onSnapshot } = window.fb;
-      const unsub = onSnapshot(
-        query(userCol(QUOTATIONS_COLLECTION), orderBy('createdAt','desc')),
-        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
-        err  => { console.error('Quotations listener',err); setLoading(false); }
-      );
-      return unsub;
-    }
-    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
-    let u;
-    const h=()=>{ if(getUserUID()) u=start(); };
-    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
-    window.addEventListener('firebase-ready',h,{once:true});
-    window.addEventListener('user-ready',hu,{once:true});
-    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u)u(); };
-  },[]);
-  return {items,loading};
-}
-async function addQuotation(data) { const { addDoc } = window.fb; await addDoc(userCol(QUOTATIONS_COLLECTION), {...data, createdAt:Date.now()}); }
-async function updateQuotation(docId, data) {
-  const { updateDoc, getDocs } = window.fb;
-  // Save the quotation
-  await updateDoc(userDoc(QUOTATIONS_COLLECTION, docId), data);
-
-  // Auto-sync fields to any linked POs and WOs
-  // Fields that should propagate: vendorName, description, value, project, split, paymentSchedule, gstPct
-  const syncFields = {};
-  if (data.vendorName  !== undefined) syncFields.vendorName   = data.vendorName;
-  if (data.description !== undefined) syncFields.description  = data.description;
-  if (data.value       !== undefined) syncFields.value        = data.value;
-  if (data.project     !== undefined) syncFields.project      = data.project;
-  if (data.split       !== undefined) syncFields.split        = data.split;
-  if (data.paymentSchedule !== undefined) syncFields.paymentSchedule = data.paymentSchedule;
-  if (data.gstPct      !== undefined) syncFields.gstPct       = data.gstPct;
-  if (!Object.keys(syncFields).length) return;
-
-  // Find linked POs
-  try {
-    const poSnap = await getDocs(userCol(PO_COLLECTION));
-    const linkedPOs = poSnap.docs.filter(d => d.data().linkedQuotation === docId);
-    await Promise.all(linkedPOs.map(d => updateDoc(d.ref, {...syncFields, quotationSyncedAt: Date.now()})));
-    if (linkedPOs.length) console.log(`Synced ${linkedPOs.length} PO(s) from quotation`);
-  } catch(e) { console.warn('PO sync failed:', e.message); }
-
-  // Find linked WOs
-  try {
-    const woSnap = await getDocs(userCol(WO_COLLECTION));
-    const linkedWOs = woSnap.docs.filter(d => d.data().linkedQuotation === docId);
-    await Promise.all(linkedWOs.map(d => updateDoc(d.ref, {...syncFields, quotationSyncedAt: Date.now()})));
-    if (linkedWOs.length) console.log(`Synced ${linkedWOs.length} WO(s) from quotation`);
-  } catch(e) { console.warn('WO sync failed:', e.message); }
-}
-async function deleteQuotation(docId) { const { deleteDoc } = window.fb; await deleteDoc(userDoc(QUOTATIONS_COLLECTION, docId)); }
-async function clearAllQuotations() {
-  const { getDocs, writeBatch, db } = window.fb;
-  const snap = await getDocs(userCol(QUOTATIONS_COLLECTION));
-  const batch = writeBatch(db); snap.docs.forEach(d=>batch.delete(d.ref)); await batch.commit();
-}
-function finalizedQuotations(quotes) { return (quotes||[]).filter(q=>q.stage==='Finalized'); }
-
-// ─── Milestones (billing) ─────────────────────────────
-const MILESTONES_COLLECTION = 'milestones';
-function useMilestones() {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    function start() {
-      const { query, orderBy, onSnapshot } = window.fb;
-      const unsub = onSnapshot(
-        query(userCol(MILESTONES_COLLECTION), orderBy('createdAt','desc')),
-        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
-        err  => { console.error('Milestones listener',err); setLoading(false); }
-      );
-      return unsub;
-    }
-    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
-    let u;
-    const h=()=>{ if(getUserUID()) u=start(); };
-    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
-    window.addEventListener('firebase-ready',h,{once:true});
-    window.addEventListener('user-ready',hu,{once:true});
-    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u)u(); };
-  },[]);
-  return {items,loading};
-}
-async function addMilestone(data) { const { addDoc } = window.fb; await addDoc(userCol(MILESTONES_COLLECTION), {...data, createdAt:Date.now()}); }
-async function updateMilestone(docId, data) { const { updateDoc } = window.fb; await updateDoc(userDoc(MILESTONES_COLLECTION, docId), data); }
-async function clearAllMilestones() {
-  const { getDocs, writeBatch, db } = window.fb;
-  const snap = await getDocs(userCol(MILESTONES_COLLECTION));
-  const batch = writeBatch(db); snap.docs.forEach(d=>batch.delete(d.ref)); await batch.commit();
-}
-
-// ─── WO helpers ──────────────────────────────────────
-async function deleteWorkOrder(docId) { const { deleteDoc } = window.fb; await deleteDoc(userDoc(WO_COLLECTION, docId)); }
-function nextPONumber(count) {
-  const fy = `${new Date().getFullYear()}-${String(new Date().getFullYear()+1).slice(2)}`;
-  return `NWTS/PO/${fy}/${String(count+1).padStart(3,'0')}`;
-}
-
-// ─── Work Orders ──────────────────────────────────────
-const WO_COLLECTION = 'workorders';
-const WO_STAGES = ['Draft','Issued','In Progress','Completed','Cancelled'];
-const WO_STAGE_COLOR = { Draft:'grey', Issued:'blue', 'In Progress':'teal', Completed:'green', Cancelled:'red' };
-
-function useWorkOrders() {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    function start() {
-      const { query, orderBy, onSnapshot } = window.fb;
-      const unsub = onSnapshot(
-        query(userCol(WO_COLLECTION), orderBy('createdAt','desc')),
-        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
-        err  => { console.error('WO listener',err); setLoading(false); }
-      );
-      return unsub;
-    }
-    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
-    let u;
-    const h=()=>{ if(getUserUID()) u=start(); };
-    const hu=()=>{ if(u) u(); if(window.fb) u=start(); };
-    window.addEventListener('firebase-ready',h,{once:true});
-    window.addEventListener('user-ready',hu,{once:true});
-    return ()=>{ window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u)u(); };
-  },[]);
-  return {items,loading};
-}
-async function updateWorkOrder(docId, data) {
-  const { updateDoc } = window.fb;
-  await updateDoc(userDoc(WO_COLLECTION, docId), data);
-}
-async function clearAllWorkOrders() {
-  const { getDocs, writeBatch, db } = window.fb;
-  const snap = await getDocs(userCol(WO_COLLECTION));
-  const batch = writeBatch(db);
-  snap.docs.forEach(d=>batch.delete(d.ref));
-  await batch.commit();
-}
-function nextWONumber(count) {
-  return `NWTS/WO/${new Date().getFullYear()}-${String(new Date().getFullYear()+1).slice(2)}/${String(count+1).padStart(3,'0')}`;
-}
-
-// ─── Dashboard ────────────────────────────────────────
-function Dashboard({ setActive }) {
-  const { items: bills }    = useBills();
-  const { items: advances } = useAdvances();
-  const { items: wos }      = useWorkOrders();
-  const { items: pos }      = usePurchaseOrders();
-  const { items: quotes }   = useQuotations();
-  const { items: receipts } = useReceipts();
-  const { items: expenses } = useExpenses();
-  const { items: petty }    = usePettyCash();
-
-  const today = new Date().toISOString().slice(0,10);
-
-  // Key metrics
-  const overdueBills = bills.filter(b => !b.paid && b.due && b.due < today);
-  const overdueAmt   = overdueBills.reduce((s,b) => s+Number(b.amount||0), 0);
-  const dueTodayBills = bills.filter(b => !b.paid && b.due === today);
-  const activeWOs    = wos.filter(w => w.stage === 'In Progress' || w.stage === 'Issued');
-  const pendingPOs   = pos.filter(p => p.stage !== 'Closed' && p.stage !== 'Fully Received');
-  const unadjAdv     = advances.filter(a => a.status !== 'Fully Adjusted');
-  const unadjAmt     = unadjAdv.reduce((s,a) => s+Number(a.amount||0), 0);
-  const thisMonth    = today.slice(0,7);
-  const monthExpenses = [...expenses,...petty].filter(i=>(i.date||'').startsWith(thisMonth)).reduce((s,i)=>s+Number(i.amount||0),0);
-  const monthReceipts = receipts.filter(r=>(r.dateReceived||'').startsWith(thisMonth)).reduce((s,r)=>s+Number(r.amountReceived||0),0);
-  const pendingQuotes = quotes.filter(q=>!q.approved);
-
-  const alerts = [];
-  if (overdueBills.length) alerts.push({ type:'red', msg:`${overdueBills.length} overdue bill${overdueBills.length>1?'s':''} — ${inr(overdueAmt)} pending` });
-  if (dueTodayBills.length) alerts.push({ type:'amber', msg:`${dueTodayBills.length} bill${dueTodayBills.length>1?'s':''} due today` });
-  if (unadjAdv.length) alerts.push({ type:'amber', msg:`${unadjAdv.length} unadjusted advance${unadjAdv.length>1?'s':''} — ${inr(unadjAmt)}` });
-  if (pendingQuotes.length) alerts.push({ type:'blue', msg:`${pendingQuotes.length} quotation${pendingQuotes.length>1?'s':''} pending approval` });
-
-  const quickLinks = [
-    { icon:'📋', label:'Quotations',       id:'quotations' },
-    { icon:'🔧', label:'Work Orders',      id:'workorders' },
-    { icon:'📦', label:'Purchase Orders',  id:'purchaseorders' },
-    { icon:'📑', label:'Bill Payments',    id:'billpayments' },
-    { icon:'📈', label:'Cash Flow',        id:'cashflow' },
-    { icon:'📊', label:'Project P&L',      id:'projectpnl' },
-    { icon:'📥', label:'Receipts',         id:'receipts' },
-    { icon:'⚙',  label:'Settings',         id:'settings' },
-  ];
-
-  return (
-    <div>
-      <div className="section-header">
-        <div>
-          <div className="section-title">Dashboard</div>
-          <div className="section-sub">{new Date().toLocaleDateString('en-IN',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div>
-        </div>
-      </div>
-
-      {alerts.map((a,i) => (
-        <div key={i} style={{background:a.type==='red'?'#FEE2E2':a.type==='amber'?'#FEF3C7':'#DBEAFE',borderLeft:`4px solid var(--${a.type})`,padding:'10px 14px',borderRadius:6,marginBottom:8,fontSize:13,color:'var(--text)'}}>
-          {a.type==='red'?'🚨':a.type==='amber'?'⚠️':'ℹ️'} {a.msg}
-        </div>
-      ))}
-
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginTop:16}}>
-        <div className="stat-card" style={{cursor:'pointer'}} onClick={()=>setActive('billpayments')}>
-          <div className="stat-label">Overdue Bills</div>
-          <div className="stat-value red">{overdueBills.length}</div>
-          <div className="stat-sub">{inr(overdueAmt)}</div>
-        </div>
-        <div className="stat-card" style={{cursor:'pointer'}} onClick={()=>setActive('workorders')}>
-          <div className="stat-label">Active Work Orders</div>
-          <div className="stat-value blue">{activeWOs.length}</div>
-          <div className="stat-sub">{pendingPOs.length} POs pending</div>
-        </div>
-        <div className="stat-card" style={{cursor:'pointer'}} onClick={()=>setActive('receipts')}>
-          <div className="stat-label">This Month Receipts</div>
-          <div className="stat-value green">{inr(monthReceipts)}</div>
-          <div className="stat-sub">{thisMonth}</div>
-        </div>
-        <div className="stat-card" style={{cursor:'pointer'}} onClick={()=>setActive('cashflow')}>
-          <div className="stat-label">This Month Expenses</div>
-          <div className="stat-value amber">{inr(monthExpenses)}</div>
-          <div className="stat-sub">Petty + General</div>
-        </div>
-      </div>
-
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginTop:14}}>
-        {/* Quick Links */}
-        <div className="card">
-          <div className="card-header"><span className="card-title">Quick Links</span></div>
-          <div className="card-body" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-            {quickLinks.map(l=>(
-              <button key={l.id} onClick={()=>setActive(l.id)}
-                style={{display:'flex',alignItems:'center',gap:8,padding:'10px 12px',background:'var(--grey-50)',border:'1px solid var(--border)',borderRadius:6,cursor:'pointer',fontSize:12.5,fontWeight:500,color:'var(--text)',textAlign:'left'}}>
-                <span style={{fontSize:16}}>{l.icon}</span>{l.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Recent Overdue Bills */}
-        <div className="card">
-          <div className="card-header"><span className="card-title">Overdue Bills</span></div>
-          {overdueBills.length === 0 ? (
-            <div style={{padding:'20px',textAlign:'center',color:'var(--text-muted)',fontSize:13}}>✓ No overdue bills</div>
-          ) : (
-            <table>
-              <thead><tr><th>Payee</th><th>Due</th><th>Amount</th></tr></thead>
-              <tbody>
-                {overdueBills.slice(0,5).map(b=>(
-                  <tr key={b.docId}>
-                    <td className="fw-600" style={{fontSize:12}}>{b.payee}</td>
-                    <td style={{fontSize:11,color:'var(--red)'}}>{fmt(b.due)}</td>
-                    <td className="amount" style={{fontSize:12,color:'var(--red)',fontWeight:700}}>{inr(b.amount||0)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginTop:14}}>
-        {/* Active WOs */}
-        <div className="card">
-          <div className="card-header"><span className="card-title">Active Work Orders</span></div>
-          {activeWOs.length === 0 ? (
-            <div style={{padding:'20px',textAlign:'center',color:'var(--text-muted)',fontSize:13}}>No active work orders</div>
-          ) : (
-            <table>
-              <thead><tr><th>WO #</th><th>Vendor</th><th>Stage</th><th>Value</th></tr></thead>
-              <tbody>
-                {activeWOs.slice(0,5).map(w=>(
-                  <tr key={w.docId}>
-                    <td className="mono" style={{fontSize:11}}>{w.wo}</td>
-                    <td style={{fontSize:12}}>{w.vendorName}</td>
-                    <td><span className={`badge ${WO_STAGE_COLOR[w.stage]||'grey'}`} style={{fontSize:10}}>{w.stage}</span></td>
-                    <td className="amount" style={{fontSize:12}}>{inr(w.value||0)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        {/* Recent Quotations */}
-        <div className="card">
-          <div className="card-header"><span className="card-title">Pending Quotations</span></div>
-          {pendingQuotes.length === 0 ? (
-            <div style={{padding:'20px',textAlign:'center',color:'var(--text-muted)',fontSize:13}}>No pending quotations</div>
-          ) : (
-            <table>
-              <thead><tr><th>Vendor</th><th>Value</th><th>Stage</th></tr></thead>
-              <tbody>
-                {pendingQuotes.slice(0,5).map(q=>(
-                  <tr key={q.docId}>
-                    <td style={{fontSize:12}} className="fw-600">{q.vendorName}</td>
-                    <td className="amount" style={{fontSize:12}}>{inr(q.value||0)}</td>
-                    <td><span className={`badge ${STAGE_COLOR[q.stage]||'grey'}`} style={{fontSize:10}}>{q.stage}</span></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function WorkOrders() {
-  const { items, loading } = useWorkOrders();
-  const { items: quotations } = useQuotations();
-  const [showNew, setShowNew] = useState(false);
-  const [viewSchedule, setViewSchedule] = useState(null);
-  const [stageFilter, setStageFilter] = useState('all');
-  const [projectFilter, setProjectFilter] = useState('all');
-  const [vendorFilter, setVendorFilter] = useState('all');
-  const [monthFilter, setMonthFilter] = useState('all');
-  const [woSortBy, setWOSortBy] = useState('date_desc');
-  const [editWO, setEditWO] = useState(null);
-
-  const nextNumber = nextWONumber(items.length);
-  const months = [...new Set(items.map(i=>i.due?.slice(0,7)).filter(Boolean))].sort().reverse();
-  const vendors = [...new Set(items.map(i=>i.vendorName).filter(Boolean))].sort();
-  const filtered = [...items].filter(w =>
-    (stageFilter==='all'||w.stage===stageFilter) &&
-    (projectFilter==='all'||w.project===projectFilter) &&
-    (vendorFilter==='all'||w.vendorName===vendorFilter) &&
-    (monthFilter==='all'||(w.due||'').startsWith(monthFilter))
-  ).sort((a,b)=>{
-    if(woSortBy==='date_asc')    return (a.issueDate||a.due||'').localeCompare(b.issueDate||b.due||'');
-    if(woSortBy==='amount_desc') return Number(b.value||0)-Number(a.value||0);
-    if(woSortBy==='amount_asc')  return Number(a.value||0)-Number(b.value||0);
-    if(woSortBy==='vendor_asc')  return (a.vendorName||'').localeCompare(b.vendorName||'');
-    return (b.issueDate||b.due||'').localeCompare(a.issueDate||a.due||'');
-  });
-  const totalValue = items.reduce((s,w) => s + Number(w.value||0), 0);
-  const activeCount = items.filter(w => w.stage === 'Issued' || w.stage === 'In Progress').length;
-
-  // Resolve quotation display name from docId
-  function quoteLabel(id) {
-    const q = quotations.find(q => q.docId === id);
-    return q ? `${q.vendorName}` : (id || '—');
-  }
-
-  async function advanceStage(w) {
-    const idx = WO_STAGES.indexOf(w.stage);
-    if (idx < WO_STAGES.length - 1) {
-      try { await updateWorkOrder(w.docId, { stage: WO_STAGES[idx+1] }); }
-      catch(e) { console.error(e); alert('Could not update stage.'); }
-    }
-  }
-
-  return (
-    <div style={{marginBottom:24}}>
-      <div className="section-header">
-        <div>
-          <div className="section-title">Work Orders</div>
-          <div className="section-sub">
-            {loading ? 'Loading from Firestore…' : `${items.length} WO${items.length===1?'':'s'} · ${activeCount} active · Next: ${nextNumber}`}
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <button className="btn btn-primary" style={{background:'var(--secondary)'}} onClick={() => setShowNew(true)}>+ Issue Work Order</button>
-          <ClearCollectionButton label="Clear All WOs" count={items.length} onClear={clearAllWorkOrders} />
-        </div>
-      </div>
-
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
-        <div className="stat-card"><div className="stat-label">Total WO Value</div><div className="stat-value red">{inr(totalValue)}</div></div>
-        <div className="stat-card"><div className="stat-label">Active</div><div className="stat-value blue">{activeCount}</div></div>
-        <div className="stat-card"><div className="stat-label">Completed</div><div className="stat-value green">{items.filter(w=>w.stage==='Completed').length}</div></div>
-      </div>
-
-      <div className="card" style={{marginBottom:14}}>
-        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
-          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
-            <select className="form-input form-select" style={{width:150}} value={stageFilter} onChange={e=>setStageFilter(e.target.value)}>
-              <option value="all">All Stages</option>
-              {WO_STAGES.map(s=><option key={s}>{s}</option>)}
-            </select>
-            <select className="form-input form-select" style={{width:130}} value={projectFilter} onChange={e=>setProjectFilter(e.target.value)}>
-              <option value="all">All Projects</option>
-              {PROJECTS.map(p=><option key={p}>{p}</option>)}
-            </select>
-            <select className="form-input form-select" style={{width:160}} value={vendorFilter} onChange={e=>setVendorFilter(e.target.value)}>
-              <option value="all">All Vendors</option>
-              {vendors.map(v=><option key={v}>{v}</option>)}
-            </select>
-            <select className="form-input form-select" style={{width:150}} value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}>
-              <option value="all">All Months</option>
-              {months.map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}</option>)}
-            </select>
-            <select className="form-input form-select" style={{width:180}} value={woSortBy} onChange={e=>setWOSortBy(e.target.value)}>
-              <option value="date_desc">↓ Due Date (Newest)</option>
-              <option value="date_asc">↑ Due Date (Oldest)</option>
-              <option value="amount_desc">↓ Value (Highest)</option>
-              <option value="amount_asc">↑ Value (Lowest)</option>
-              <option value="vendor_asc">A→Z Vendor</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        {loading ? (
-          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
-        ) : filtered.length === 0 ? (
-          <div className="module-coming">
-            <div className="big-icon">🔧</div>
-            <h3>No work orders yet</h3>
-            <p className="text-muted">Issue a WO to a vendor for services or labour. Link it to a finalized quotation.</p>
-          </div>
-        ) : (
-          <table>
-            <thead>
-              <tr><th>WO Number</th><th>Issue Date</th><th>Vendor</th><th>Project</th><th>Scope of Work</th><th>Value</th><th>Due</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              {filtered.map(w => (
-                <tr key={w.docId}>
-                  <td className="mono" style={{whiteSpace:'nowrap'}}>{w.wo}</td>
-                  <td style={{fontSize:12,color:'var(--text-muted)'}}>{fmt(w.issueDate)||'—'}</td>
-                  <td className="fw-600">{w.vendorName}</td>
-                  <td>{w.project?<span className={`badge ${PROJECT_COLOR[w.project]||'grey'}`}>{w.project}</span>:<span className="text-muted">—</span>}</td>
-                  <td style={{maxWidth:180}}>
-                    {w.description}
-                    {w.quotationSyncedAt && <span style={{fontSize:9,background:'#DBEAFE',color:'var(--primary)',borderRadius:3,padding:'1px 4px',marginLeft:4,verticalAlign:'middle'}}>↺ synced</span>}
-                  </td>
-                  <td className="amount fw-600">{inr(w.value||0)}</td>
-                  <td>{w.due || '—'}</td>
-                  <td>
-                    {w.paymentSchedule && w.paymentSchedule.length > 0 ? (
-                      <span className="btn btn-sm btn-ghost" style={{cursor:'pointer',whiteSpace:'nowrap'}} onClick={() => setViewSchedule({...w, label:w.wo, _type:'wo'})}>
-                        {w.paymentSchedule.length} stage{w.paymentSchedule.length===1?'':'s'}
-                      </span>
-                    ) : <span className="text-muted text-sm">—</span>}
-                  </td>
-                  <td><span className={`badge ${WO_STAGE_COLOR[w.stage]||'grey'}`}>{w.stage}</span></td>
-                  <td>
-                    <div className="flex gap-2">
-                      <button className="btn btn-sm btn-ghost" onClick={() => setEditWO(w)}>Edit</button>
-                      {w.stage !== 'Completed' && w.stage !== 'Cancelled' && (
-                        <button className="btn btn-sm btn-ghost" onClick={() => advanceStage(w)}>Advance →</button>
-                      )}
-                      <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this work order?')) deleteWorkOrder(w.docId); }}>Delete</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {showNew && <NewWOModal onClose={() => setShowNew(false)} nextNumber={nextNumber} quotations={quotations} />}
-      {editWO && <NewWOModal onClose={() => setEditWO(null)} nextNumber={nextNumber} quotations={quotations} existing={editWO} />}
-      {viewSchedule && (
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={() => setViewSchedule(null)}>
-          <div style={{background:'var(--surface)',borderRadius:10,width:440,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
-            <div style={{background:'var(--secondary)',padding:'14px 18px'}}>
-              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payment Schedule — {viewSchedule.label}</span>
-            </div>
-            <div style={{padding:'16px 20px'}}>
-              <table style={{width:'100%'}}>
-                <thead><tr>
-                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)',padding:'4px 0'}}>Stage</th>
-                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>%</th>
-                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Amount</th>
-                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Date</th>
-                </tr></thead>
-                <tbody>
-                  {(viewSchedule.paymentSchedule||[]).map((r,i) => (
-                    <tr key={i} style={{borderTop:'1px solid var(--grey-50)'}}>
-                      <td style={{padding:'6px 0',fontSize:12.5}}>{r.name}</td>
-                      <td style={{fontSize:12.5}}>{r.pct}%</td>
-                      <td className="amount" style={{fontSize:12.5}}>{inr(r.amount||0)}</td>
-                      <td style={{fontSize:12.5}}>{r.date || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{padding:'0 20px 16px',display:'flex',justifyContent:'flex-end'}}>
-              <button onClick={() => setViewSchedule(null)} className="btn btn-ghost">Close</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════
-// PURCHASE ORDERS — issued to vendors for materials/goods
-// Series: NWTS/PO/2026-27/001
-// ════════════════════════════════════════════════════
-const PO_COLLECTION = 'purchaseorders';
-const PO_STAGES = ['Draft','Issued','Goods In Transit','Partially Received','Fully Received','Closed'];
-
-function usePurchaseOrders() {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    function start() {
-      const { db, collection, query, orderBy, onSnapshot } = window.fb;
-      const q = query(userCol(PO_COLLECTION), orderBy('createdAt', 'desc'));
-      const unsub = onSnapshot(q, (snap) => {
-        setItems(snap.docs.map(d => ({ docId: d.id, ...d.data() })));
-        setLoading(false);
-      }, (err) => { console.error('PO listener error', err); setLoading(false); });
-      return unsub;
-    }
-    if (window.fb && getUserUID()) { const unsub = start(); return () => unsub && unsub(); }
-    let unsub;
-    const handler = () => { if(getUserUID()) { unsub = start(); } };
-    const userHandler = () => { if(unsub) unsub(); if(window.fb) unsub = start(); };
-    window.addEventListener('firebase-ready', handler, { once: true });
-    window.addEventListener('user-ready', userHandler, { once: true });
-    return () => {
-      window.removeEventListener('firebase-ready', handler);
-      window.removeEventListener('user-ready', userHandler);
-      if (unsub) unsub();
-    };
-  }, []);
-  return { items, loading };
-}
-async function addPO(data) {
-  const { db, collection, addDoc } = window.fb;
-  await addDoc(userCol(PO_COLLECTION), { ...data, createdAt: Date.now() });
-}
-async function updatePO(docId, data) {
-  const { db, doc, updateDoc } = window.fb;
-  await updateDoc(userDoc(PO_COLLECTION, docId), data);
-}
-async function deletePO(docId) {
-  const { db, doc, deleteDoc } = window.fb;
-  await deleteDoc(userDoc(PO_COLLECTION, docId));
-}
-async function clearAllPOs() {
-  const { db, collection, getDocs, writeBatch } = window.fb;
-  const snap = await getDocs(userCol(PO_COLLECTION));
-  const batch = writeBatch(db);
-  snap.docs.forEach(d => batch.delete(d.ref));
-  await batch.commit();
-}
-
-function NewPOModal({ onClose, nextNumber, quotations, prefill, existing }) {
-  const isEdit = !!existing;
-  const knownNames = useKnownNames();
-  const [form, setForm] = useState(isEdit ? {
-    po: existing.po||nextNumber, vendorName: existing.vendorName||'',
-    description: existing.description||'', value: existing.value ? String(existing.value) : '',
-    linkedQuotation: existing.linkedQuotation||'', stage: existing.stage||'Draft',
-    issueDate: existing.issueDate||'', project: existing.project||''
-  } : {
-    po: nextNumber, vendorName: prefill?.party || '', description: prefill?.description || '',
-    value: prefill?.value ? String(prefill.value) : '',
-    linkedQuotation: prefill?.fromQuotation || '',
-    stage: 'Draft', issueDate: new Date().toISOString().slice(0,10),
-    project: '', split:{pontoon:50,wtp:50}
-  });
-  const [schedule, setSchedule] = useState(
-    isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) :
-    prefill?.paymentSchedule ? prefill.paymentSchedule.map(r => ({...r, id: genRowId()})) : []
-  );
-  const [gstPct, setGstPct] = useState(isEdit ? (existing.gstPct||'') : (prefill?.gstPct||''));
-  const [saving, setSaving] = useState(false);
-  function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
-
-  function handleQuotationSelect(val) {
-    const q = quotations.find(q => q.docId === val);
-    set('linkedQuotation', val);
-    if (q) {
-      setForm(s => ({
-        ...s,
-        linkedQuotation: val,
-        vendorName: s.vendorName || q.vendorName || '',
-        description: s.description || q.description || '',
-        value: s.value || (q.value ? String(q.value) : ''),
-        project: s.project || q.project || '',
-        split: (s.project ? s.split : null) || q.split || {pontoon:50,wtp:50},
-      }));
-      if ((!schedule || schedule.length === 0) && q.paymentSchedule && q.paymentSchedule.length > 0) {
-        setSchedule(q.paymentSchedule.map(r => ({ ...r, id: genRowId() })));
-      }
-    }
-  }
-
-  async function handleSave() {
-    if (!form.vendorName.trim() || !form.value) return;
-    setSaving(true);
-    try {
-      if (isEdit) {
-        await updatePO(existing.docId, { ...form, value: Number(form.value), paymentSchedule: schedule, gstPct });
-        // Sync any changes to linked Advance/Bill entries
-        await syncScheduleChanges(schedule, {...existing, ...form, docId: existing.docId, value: Number(form.value)}, 'po');
-      } else {
-        await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule, gstPct });
-      }
-      onClose();
-    } catch (e) { console.error(e); alert('Could not save purchase order.'); }
-    finally { setSaving(false); }
-  }
-
-  const eligible = finalizedQuotations(quotations);
-
-  return (
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:620,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
-        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit ? '✏ Edit Purchase Order' : '+ Issue Purchase Order'}</span>
-        </div>
-        <div style={{padding:'18px 20px'}}>
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">PO Number</label>
-              <input className="form-input font-mono" value={form.po} onChange={e=>set('po', e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Issue Date</label>
-              <input className="form-input" type="date" value={form.issueDate} onChange={e=>set('issueDate', e.target.value)} />
-            </div>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Linked Quotation</label>
-            <select className="form-input form-select" value={form.linkedQuotation} onChange={e => handleQuotationSelect(e.target.value)}>
-              <option value="">Select finalized quotation…</option>
-              {eligible.map(q => (
-                <option key={q.docId} value={q.docId}>{q.vendorName} — {q.description ? q.description.slice(0,40) : ''} ({inr(q.value||0)})</option>
-              ))}
-              {eligible.length === 0 && <option disabled>No finalized quotations yet</option>}
-            </select>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Vendor Name</label>
-            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={knownNames.vendors} placeholder="Vendor name" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Description of Goods / Materials</label>
-            <input className="form-input" value={form.description} onChange={e=>set('description', e.target.value)} placeholder="e.g. RO membranes 4040 — 10 units" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Total Value (₹)</label>
-            <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
-          </div>
-          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} gstPct={gstPct} onGstPctChange={setGstPct} parentDoc={isEdit?{...existing,...form,docId:existing.docId}:null} parentType="po" onStagePaid={s=>setSchedule(s)} />
-          <div className="form-group">
-            <label className="form-label">Stage</label>
-            <select className="form-input form-select" value={form.stage} onChange={e=>set('stage', e.target.value)}>
-              {PO_STAGES.map(s => <option key={s}>{s}</option>)}
-            </select>
-          </div>
-          <ProjectSelect value={form.project||''} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
-        </div>
-        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
-          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleSave} disabled={saving || !form.vendorName.trim() || !form.value} className="btn btn-primary"
-            style={{opacity: saving || !form.vendorName.trim() || !form.value ? .6 : 1}}>
-            {saving ? 'Saving…' : 'Issue Purchase Order'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const PO_STAGE_COLOR = { 'Draft':'grey','Issued':'blue','Goods In Transit':'amber','Partially Received':'teal','Fully Received':'green','Closed':'grey' };
-
-function PurchaseOrders() {
-  const { items, loading } = usePurchaseOrders();
-  const { items: quotations } = useQuotations();
-  const [showNew, setShowNew] = useState(false);
-  const [editPO, setEditPO] = useState(null);
-  const [viewSchedule, setViewSchedule] = useState(null);
-  const [stageFilter, setStageFilter] = useState('all');
-  const [projectFilter, setPOProjectFilter] = useState('all');
-  const [vendorFilter, setPOVendorFilter] = useState('all');
-  const [monthFilter, setPOMonthFilter] = useState('all');
-  const [poSortBy, setPOSortBy] = useState('date_desc');
-
-  const nextNumber = nextPONumber(items.length);
-  const poVendors = [...new Set(items.map(p=>p.vendorName).filter(Boolean))].sort();
-  const poMonths = [...new Set(items.map(p=>p.createdAt?new Date(p.createdAt).toISOString().slice(0,7):null).filter(Boolean))].sort().reverse();
-  const filtered = [...items].filter(p=>
-    (stageFilter==='all'||p.stage===stageFilter) &&
-    (projectFilter==='all'||p.project===projectFilter) &&
-    (vendorFilter==='all'||p.vendorName===vendorFilter) &&
-    (monthFilter==='all'||(p.createdAt?new Date(p.createdAt).toISOString().slice(0,7):'')===monthFilter)
-  ).sort((a,b)=>{
-    if(poSortBy==='date_asc')    return (a.issueDate||'').localeCompare(b.issueDate||'');
-    if(poSortBy==='amount_desc') return Number(b.value||0)-Number(a.value||0);
-    if(poSortBy==='amount_asc')  return Number(a.value||0)-Number(b.value||0);
-    if(poSortBy==='vendor_asc')  return (a.vendorName||'').localeCompare(b.vendorName||'');
-    return (b.issueDate||'').localeCompare(a.issueDate||'');
-  });
-  const totalValue = items.reduce((s,p) => s + Number(p.value||0), 0);
-  const activeCount = items.filter(p => p.stage !== 'Closed' && p.stage !== 'Draft').length;
-
-  async function advanceStage(p) {
-    const idx = PO_STAGES.indexOf(p.stage);
-    if (idx < PO_STAGES.length - 1) {
-      try { await updatePO(p.docId, { stage: PO_STAGES[idx+1] }); }
-      catch(e) { console.error(e); alert('Could not update stage.'); }
-    }
-  }
-
-  return (
-    <div>
-      <div className="section-header">
-        <div>
-          <div className="section-title">Purchase Orders</div>
-          <div className="section-sub">
-            {loading ? 'Loading from Firestore…' : `${items.length} PO${items.length===1?'':'s'} · ${activeCount} active · Next: ${nextNumber}`}
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <button className="btn btn-primary" onClick={() => setShowNew(true)}>+ Issue Purchase Order</button>
-          <ClearCollectionButton label="Clear All POs" count={items.length} onClear={clearAllPOs} />
-        </div>
-      </div>
-
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
-        <div className="stat-card"><div className="stat-label">Total PO Value</div><div className="stat-value red">{inr(totalValue)}</div></div>
-        <div className="stat-card"><div className="stat-label">Active</div><div className="stat-value blue">{activeCount}</div></div>
-        <div className="stat-card"><div className="stat-label">Fully Received</div><div className="stat-value green">{items.filter(p=>p.stage==='Fully Received'||p.stage==='Closed').length}</div></div>
-      </div>
-
-      <div className="card" style={{marginBottom:14}}>
-        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
-          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
-            <select className="form-input form-select" style={{width:180}} value={stageFilter} onChange={e=>setStageFilter(e.target.value)}>
-              <option value="all">All Stages</option>
-              {PO_STAGES.map(s=><option key={s}>{s}</option>)}
-            </select>
-            <select className="form-input form-select" style={{width:130}} value={projectFilter} onChange={e=>setPOProjectFilter(e.target.value)}>
-              <option value="all">All Projects</option>
-              {PROJECTS.map(p=><option key={p}>{p}</option>)}
-            </select>
-            <select className="form-input form-select" style={{width:160}} value={vendorFilter} onChange={e=>setPOVendorFilter(e.target.value)}>
-              <option value="all">All Vendors</option>
-              {poVendors.map(v=><option key={v}>{v}</option>)}
-            </select>
-            <select className="form-input form-select" style={{width:140}} value={monthFilter} onChange={e=>setPOMonthFilter(e.target.value)}>
-              <option value="all">All Months</option>
-              {poMonths.map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('en-IN',{month:'long',year:'numeric'})}</option>)}
-            </select>
-            <select className="form-input form-select" style={{width:180}} value={poSortBy} onChange={e=>setPOSortBy(e.target.value)}>
-              <option value="date_desc">↓ Date (Newest)</option>
-              <option value="date_asc">↑ Date (Oldest)</option>
-              <option value="amount_desc">↓ Value (Highest)</option>
-              <option value="amount_asc">↑ Value (Lowest)</option>
-              <option value="vendor_asc">A→Z Vendor</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        {loading ? (
-          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Connecting to Firestore…</p></div>
-        ) : filtered.length === 0 ? (
-          <div className="module-coming">
-            <div className="big-icon">📦</div>
-            <h3>No purchase orders yet</h3>
-            <p className="text-muted">Issue a PO to a vendor for materials or goods. Link it to a finalized quotation.</p>
-          </div>
-        ) : (
-          <table>
-            <thead>
-              <tr><th>PO Number</th><th>Issue Date</th><th>Vendor</th><th>Project</th><th>Description</th><th>Value</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              {filtered.map(p => (
-                <tr key={p.docId}>
-                  <td className="mono" style={{whiteSpace:'nowrap'}}>{p.po}</td>
-                  <td style={{fontSize:12,color:'var(--text-muted)'}}>{fmt(p.issueDate)||'—'}</td>
-                  <td className="fw-600">{p.vendorName}</td>
-                  <td>{p.project?<span className={`badge ${PROJECT_COLOR[p.project]||'grey'}`}>{p.project}</span>:<span className="text-muted">—</span>}</td>
-                  <td style={{maxWidth:180}}>
-                    {p.description || '—'}
-                    {p.quotationSyncedAt && <span style={{fontSize:9,background:'#DBEAFE',color:'var(--primary)',borderRadius:3,padding:'1px 4px',marginLeft:4,verticalAlign:'middle'}}>↺ synced</span>}
-                  </td>
-                  <td className="amount fw-600">{inr(p.value||0)}</td>
-                  <td>
-                    {p.paymentSchedule && p.paymentSchedule.length > 0 ? (
-                      <span className="btn btn-sm btn-ghost" style={{cursor:'pointer',whiteSpace:'nowrap'}} onClick={() => setViewSchedule({...p, label:p.po, _type:'po'})}>
-                        {p.paymentSchedule.length} stage{p.paymentSchedule.length===1?'':'s'}
-                      </span>
-                    ) : <span className="text-muted text-sm">—</span>}
-                  </td>
-                  <td><span className={`badge ${PO_STAGE_COLOR[p.stage]||'grey'}`}>{p.stage}</span></td>
-                  <td>
-                    <div className="flex gap-2">
-                      <button className="btn btn-sm btn-ghost" onClick={() => setEditPO(p)}>Edit</button>
-                      {p.stage !== 'Closed' && (
-                        <button className="btn btn-sm btn-ghost" onClick={() => advanceStage(p)}>Advance →</button>
-                      )}
-                      <button className="btn btn-sm btn-ghost" onClick={() => { if(confirm('Delete this purchase order?')) deletePO(p.docId); }}>Delete</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {showNew && <NewPOModal onClose={() => setShowNew(false)} nextNumber={nextNumber} quotations={quotations} />}
-      {editPO && <NewPOModal onClose={() => setEditPO(null)} nextNumber={nextNumber} quotations={quotations} existing={editPO} />}
-      {viewSchedule && (
-        <POWOScheduleModal
-          doc={viewSchedule}
-          parentType={viewSchedule._type||'po'}
-          onClose={()=>setViewSchedule(null)}
-          onScheduleUpdate={async(newSchedule)=>{
-            const col = viewSchedule._type==='wo' ? WO_COLLECTION : PO_COLLECTION;
-            const { updateDoc } = window.fb;
-            await updateDoc(userDoc(col, viewSchedule.docId), {paymentSchedule:newSchedule});
-            setViewSchedule(null);
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-
-// ─── PO/WO Schedule Modal with Mark Paid + Auto-sync ──
-function POWOScheduleModal({ doc, parentType, onClose, onScheduleUpdate }) {
-  const [stages, setStages] = useState((doc.paymentSchedule||[]).map(s=>({...s})));
-  const [saving, setSaving] = useState(null); // stageId being processed
-
-  const paidAmt   = stages.filter(s=>s.paid).reduce((s,r)=>s+Number(r.amount||0),0);
-  const unpaidAmt = stages.filter(s=>!s.paid).reduce((s,r)=>s+Number(r.amount||0),0);
-
-  const [payDates, setPayDates] = useState({});
-
-  async function toggleStage(stage) {
-    const newPaid = !stage.paid;
-    if (newPaid) {
-      const paymentDate = payDates[stage.id] || '';
-      if (!paymentDate) {
-        alert('Please select a payment date before marking as paid.');
-        return;
-      }
-      setSaving(stage.id);
-      try {
-        const updatedStages = stages.map(s => s.id===stage.id ? {...s, paid:true, paidAt:Date.now(), datePaid:paymentDate} : s);
-        setStages(updatedStages);
-        await syncStageToModules({...stage, paid:true}, doc, parentType, updatedStages, setStages, paymentDate);
-        const col = parentType==='wo' ? WO_COLLECTION : PO_COLLECTION;
-        const { updateDoc } = window.fb;
-        await updateDoc(userDoc(col, doc.docId), {paymentSchedule: updatedStages});
-        setPayDates(p=>({...p,[stage.id]:''}));
-      } catch(e) { console.error(e); alert('Error: '+e.message); setStages(stages); }
-      finally { setSaving(null); }
-    } else {
-      setSaving(stage.id);
-      try {
-        const updatedStages = stages.map(s => s.id===stage.id ? {...s, paid:false, paidAt:null, datePaid:''} : s);
-        setStages(updatedStages);
-        await syncStageToModules({...stage, paid:false}, doc, parentType, updatedStages, setStages, '');
-        const col = parentType==='wo' ? WO_COLLECTION : PO_COLLECTION;
-        const { updateDoc } = window.fb;
-        await updateDoc(userDoc(col, doc.docId), {paymentSchedule: updatedStages});
-      } catch(e) { console.error(e); alert('Error: '+e.message); setStages(stages); }
-      finally { setSaving(null); }
-    }
-  }
-
-  return (
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:620,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
-        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
-          <div style={{fontWeight:700,fontSize:14,color:'#fff'}}>
-            Payment Schedule — {doc.po||doc.wo} · {doc.vendorName}
-          </div>
-          <div style={{fontSize:11,color:'rgba(255,255,255,.7)',marginTop:2}}>
-            Advance stages auto-create Advance entries · Dispatch/Delivery stages auto-create Bills
-          </div>
-        </div>
-        <div style={{padding:'16px 20px'}}>
-          <div style={{display:'flex',gap:12,marginBottom:14}}>
-            <div style={{flex:1,padding:'8px 12px',background:'#F0FFF4',borderRadius:6,border:'1px solid var(--green)'}}>
-              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Paid</div>
-              <div className="amount" style={{fontSize:15,fontWeight:700,color:'var(--green)'}}>{inr(paidAmt)}</div>
-            </div>
-            <div style={{flex:1,padding:'8px 12px',background:'#FFF7ED',borderRadius:6,border:'1px solid var(--amber)'}}>
-              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Remaining</div>
-              <div className="amount" style={{fontSize:15,fontWeight:700,color:'var(--amber)'}}>{inr(unpaidAmt)}</div>
-            </div>
-            <div style={{flex:1,padding:'8px 12px',background:'var(--grey-50)',borderRadius:6,border:'1px solid var(--border)'}}>
-              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Total Value</div>
-              <div className="amount" style={{fontSize:15,fontWeight:700}}>{inr(doc.value||0)}</div>
-            </div>
-          </div>
-          <table style={{width:'100%',borderCollapse:'collapse'}}>
-            <thead>
-              <tr style={{background:'var(--grey-50)'}}>
-                <th style={{padding:'7px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Type</th>
-                <th style={{padding:'7px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Stage</th>
-                <th style={{padding:'7px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Amount</th>
-                <th style={{padding:'7px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Due Date</th>
-                <th style={{padding:'7px 10px',fontSize:11,textAlign:'center',color:'var(--text-muted)'}}>Status</th>
-                <th style={{padding:'7px 10px',fontSize:11,textAlign:'center',color:'var(--text-muted)'}}>Linked</th>
-                <th style={{padding:'7px 10px',fontSize:11,textAlign:'center',color:'var(--text-muted)'}}>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stages.map(s=>(
-                <tr key={s.id} style={{borderTop:'1px solid var(--grey-50)',background:s.paid?'#F0FFF4':''}}>
-                  <td style={{padding:'10px'}}>
-                    <span className={`badge ${STAGE_TYPE_COLOR[s.stageType||'Other']||'grey'}`} style={{fontSize:10}}>
-                      {s.stageType||'Other'}
-                    </span>
-                  </td>
-                  <td style={{padding:'10px',fontSize:12.5,fontWeight:600}}>{s.stageType||s.name||'Stage'}</td>
-                  <td className="amount" style={{padding:'10px',fontSize:12.5,fontWeight:700,color:s.paid?'var(--green)':'var(--red)'}}>
-                    {inr(Number(s.amount||0)+(s.includesGst?Number(s.gstAmount||0):0))}
-                    {s.includesGst&&Number(s.gstAmount)>0&&<div style={{fontSize:10,color:'var(--primary)',fontWeight:400}}>incl. GST {inr(s.gstAmount)}</div>}
-                  </td>
-                  <td style={{padding:'10px',fontSize:12,color:'var(--text-muted)'}}>{fmt(s.date)||'—'}</td>
-                  <td style={{padding:'10px',textAlign:'center'}}>
-                    {s.paid ? <div><span className="badge green">✓ Paid</span>{s.datePaid&&<div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>{fmt(s.datePaid)}</div>}</div> : <span className="badge grey">Pending</span>}
-                  </td>
-                  <td style={{padding:'10px',textAlign:'center',fontSize:12}}>
-                    {s.linkedEntryId
-                      ? <span title={`Linked to ${s.stageType==='Advance'?'Advance':'Bill'}: ${s.linkedEntryId}`} style={{color:'var(--green)'}}>🔗</span>
-                      : <span style={{color:'var(--text-muted)'}}>—</span>}
-                  </td>
-                  <td style={{padding:'8px 10px'}}>
-                    {saving===s.id ? (
-                      <span style={{fontSize:11,color:'var(--text-muted)'}}>Saving…</span>
-                    ) : s.paid ? (
-                      <button className="btn btn-sm btn-ghost" style={{color:'var(--amber)',border:'1px solid var(--amber)',fontSize:11}}
-                        onClick={()=>toggleStage(s)}>↩ Unmark</button>
-                    ) : (
-                      <div style={{display:'flex',alignItems:'center',gap:6}}>
-                        <input type="date"
-                          value={payDates[s.id]||''}
-                          onChange={e=>setPayDates(p=>({...p,[s.id]:e.target.value}))}
-                          style={{fontSize:11,padding:'3px 5px',border:`1px solid ${payDates[s.id]?'var(--primary)':'var(--border)'}`,borderRadius:4,width:130}} />
-                        <button className="btn btn-sm btn-primary" style={{fontSize:11,whiteSpace:'nowrap',opacity:payDates[s.id]?1:0.5}}
-                          onClick={()=>toggleStage(s)}>Mark Paid</button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div style={{marginTop:10,fontSize:11,color:'var(--text-muted)',background:'var(--grey-50)',padding:'8px 10px',borderRadius:4}}>
-            💡 <strong>Advance</strong> → auto-creates entry in Advance Payments &nbsp;·&nbsp;
-            <strong>Dispatch/Delivery/Retention</strong> → auto-creates entry in Bill Payments &nbsp;·&nbsp;
-            Unmarking deletes the linked entry
-          </div>
-        </div>
-        <div style={{padding:'0 20px 16px',display:'flex',justifyContent:'flex-end'}}>
-          <button className="btn btn-ghost" onClick={onClose}>Close</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Cash Flow Module ──────────────────────────────────
-const SETTINGS_COLLECTION = 'settings';
-const SETTINGS_DOC = 'cashflow';
-
-function useCashSettings() {
-  const [settings, setSettings] = useState({ startingBalance: 1350000, criticalThreshold: 500000, warningThreshold: 800000 });
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    function start() {
-      const { db, doc, onSnapshot } = window.fb;
-      const unsub = onSnapshot(doc(db, SETTINGS_COLLECTION, SETTINGS_DOC), (snap) => {
-        if (snap.exists()) setSettings(s => ({ ...s, ...snap.data() }));
-        setLoading(false);
-      }, () => setLoading(false));
-      return unsub;
-    }
-    if (window.fb) {
-      const unsub = start();
-      return () => unsub && unsub();
-    } else {
-      let unsub;
-      const handler = () => { unsub = start(); };
-      window.addEventListener('firebase-ready', handler, { once: true });
-      return () => { window.removeEventListener('firebase-ready', handler); if (unsub) unsub(); };
-    }
-  }, []);
-
-  async function save(newSettings) {
-    const { db, doc, setDoc } = window.fb;
-    await setDoc(doc(db, SETTINGS_COLLECTION, SETTINGS_DOC), { ...settings, ...newSettings }, { merge: true });
-  }
-
-  return { settings, loading, save };
-}
-
-async function clearCashFlowData() {
-  const { db, doc, setDoc } = window.fb;
-  // Clear all unpaid bills (the forecast's source data) and reset the starting balance.
-  await clearAllBills();
-  await setDoc(doc(db, SETTINGS_COLLECTION, SETTINGS_DOC), { startingBalance: 0 }, { merge: true });
-}
-
-function CashFlow() {
-  const [view, setView] = useState('all');
-  const [typeFilter, setTypeFilter] = useState('all');
-  const [projectFilter, setCFProjectFilter] = useState('all');
-  const [catFilter, setCatFilter] = useState('all');
-  const { items: bills,    loading: billsLoading    } = useBills();
-  const { items: advances, loading: advLoading      } = useAdvances();
-  const { items: receipts, loading: receiptsLoading } = useReceipts();
-  const { items: capital,  loading: capitalLoading  } = useCapitalLoans();
-  const { items: expenses, loading: expLoading      } = useExpenses();
-  const { items: petty,    loading: pettyLoading    } = usePettyCash();
-  const { items: pos,      loading: posLoading      } = usePurchaseOrders();
-  const { items: wos,      loading: wosLoading      } = useWorkOrders();
-  const { settings, loading: settingsLoading } = useCashSettings();
-  const [editingBalance, setEditingBalance] = useState(false);
-  const [balanceInput, setBalanceInput] = useState('');
-
-  const loading = billsLoading || settingsLoading || receiptsLoading || capitalLoading || advLoading || expLoading || pettyLoading || posLoading || wosLoading;
-  const todayStr = new Date().toISOString().slice(0,10);
-
-  // ── Build all rows from every money movement ──
-  const allRows = [
-    // OUTFLOWS
-    ...bills.flatMap(b => {
-      if (b.paymentSchedule && b.paymentSchedule.length > 0) {
-        return b.paymentSchedule.flatMap(stage => {
-          const rows = [{
-            date: stage.date||b.due||'', label: `${b.payee} — ${stage.name||'Payment'}`,
-            cat: b.category||'Bill', subcat: `${stage.pct||''}% of ${inr(b.amount||0)}`,
-            type: 'out', amt: Number(stage.amount||0), project: b.project||'',
-            ref: b.invoiceNo||'', isPast: (stage.date||b.due||'') < todayStr,
-          }];
-          // GST outflow on this stage
-          if (stage.includesGst && Number(stage.gstAmount||0) > 0) {
-            rows.push({
-              date: stage.date||b.due||'', label: `GST — ${b.payee}`,
-              cat: 'GST Paid', subcat: `${b.gstPct||''}%`,
-              type: 'out', amt: Number(stage.gstAmount), project: b.project||'',
-              ref: b.invoiceNo||'', isPast: (stage.date||b.due||'') < todayStr,
-            });
-            // ITC recovery on 20th of following month
-            const stageDate = stage.date||b.due||'';
-            if (stageDate) {
-              const d = new Date(stageDate);
-              const nextMonth = d.getMonth() + 1; // 0-indexed + 1 = next month (1-indexed)
-              const nextYear = nextMonth > 11 ? d.getFullYear() + 1 : d.getFullYear();
-              const itcMonth = nextMonth > 11 ? 1 : nextMonth + 1; // convert to 1-indexed display
-              const itcDate = `${nextYear}-${String(itcMonth).padStart(2,'0')}-20`;
-              rows.push({
-                date: itcDate, label: `ITC Recovery — ${b.payee} (GST Refund)`,
-                cat: 'GST ITC Recovery', subcat: 'Input Tax Credit',
-                type: 'in', amt: Number(stage.gstAmount), project: b.project||'',
-                ref: b.invoiceNo||'', isPast: itcDate < todayStr,
-              });
-            }
-          }
-          return rows;
-        });
-      }
-      return [{
-        date: b.due||b.invoiceDate||'', label: b.payee,
-        cat: b.category||'Bill', subcat: b.paid?'Paid':'Unpaid',
-        type: 'out', amt: Number(b.amount||0), project: b.project||'',
-        ref: b.invoiceNo||'', isPast: (b.due||'') < todayStr,
-      }];
-    }),
-    ...advances.map(a => ({
-      date: a.datePaid||'', label: `Advance — ${a.vendor}`,
-      cat: 'Advance', subcat: a.status||'',
-      type: 'out', amt: Number(a.amount||0), project: a.project||'',
-      ref: a.refNumber||'', isPast: (a.datePaid||'') <= todayStr,
-    })),
-    // PO payment schedules
-    ...pos.flatMap(p => {
-      if (p.paymentSchedule && p.paymentSchedule.length > 0) {
-        return p.paymentSchedule.flatMap(stage => {
-          const rows = [{
-            date: stage.date||'', label: `${p.po} — ${p.vendorName} (${stage.name||'Payment'})`,
-            cat: 'Purchase Order', subcat: stage.name||'',
-            type: 'out', amt: Number(stage.amount||0), project: p.project||'',
-            ref: p.po||'', isPast: (stage.date||'') < todayStr,
-          }];
-          if (stage.includesGst && Number(stage.gstAmount||0) > 0) {
-            rows.push({
-              date: stage.date||'', label: `GST — ${p.vendorName} (${p.po})`,
-              cat: 'GST Paid', subcat: `${p.gstPct||''}%`,
-              type: 'out', amt: Number(stage.gstAmount), project: p.project||'',
-              ref: p.po||'', isPast: (stage.date||'') < todayStr,
-            });
-            const d = new Date(stage.date||todayStr);
-            const nextMonth = d.getMonth() + 1;
-            const nextYear = nextMonth > 11 ? d.getFullYear() + 1 : d.getFullYear();
-            const itcMonth = nextMonth > 11 ? 1 : nextMonth + 1;
-            const itcDate = `${nextYear}-${String(itcMonth).padStart(2,'0')}-20`;
-            rows.push({
-              date: itcDate, label: `ITC Recovery — ${p.vendorName} (${p.po})`,
-              cat: 'GST ITC Recovery', subcat: 'Input Tax Credit',
-              type: 'in', amt: Number(stage.gstAmount), project: p.project||'',
-              ref: p.po||'', isPast: itcDate < todayStr,
-            });
-          }
-          return rows;
-        });
-      }
-      return [];  // POs without schedule don't create cashflow rows (no confirmed date)
-    }),
-    // WO payment schedules
-    ...wos.flatMap(w => {
-      if (w.paymentSchedule && w.paymentSchedule.length > 0) {
-        return w.paymentSchedule.flatMap(stage => {
-          const rows = [{
-            date: stage.date||'', label: `${w.wo} — ${w.vendorName} (${stage.name||'Payment'})`,
-            cat: 'Work Order', subcat: stage.name||'',
-            type: 'out', amt: Number(stage.amount||0), project: w.project||'',
-            ref: w.wo||'', isPast: (stage.date||'') < todayStr,
-          }];
-          if (stage.includesGst && Number(stage.gstAmount||0) > 0) {
-            rows.push({
-              date: stage.date||'', label: `GST — ${w.vendorName} (${w.wo})`,
-              cat: 'GST Paid', subcat: `${w.gstPct||''}%`,
-              type: 'out', amt: Number(stage.gstAmount), project: w.project||'',
-              ref: w.wo||'', isPast: (stage.date||'') < todayStr,
-            });
-            const d = new Date(stage.date||todayStr);
-            const nextMonth = d.getMonth() + 1;
-            const nextYear = nextMonth > 11 ? d.getFullYear() + 1 : d.getFullYear();
-            const itcMonth = nextMonth > 11 ? 1 : nextMonth + 1;
-            const itcDate = `${nextYear}-${String(itcMonth).padStart(2,'0')}-20`;
-            rows.push({
-              date: itcDate, label: `ITC Recovery — ${w.vendorName} (${w.wo})`,
-              cat: 'GST ITC Recovery', subcat: 'Input Tax Credit',
-              type: 'in', amt: Number(stage.gstAmount), project: w.project||'',
-              ref: w.wo||'', isPast: itcDate < todayStr,
-            });
-          }
-          return rows;
-        });
-      }
-      return [];  // WOs without schedule don't create cashflow rows
-    }),
-    ...expenses.map(e => ({
-      date: e.date||'', label: e.description||(e.vendor||'General Expense'),
-      cat: e.category||'General Expense', subcat: e.paymentMode||'',
-      type: 'out', amt: Number(e.amount||0), project: e.project||'',
-      ref: e.refNumber||'', isPast: (e.date||'') <= todayStr,
-    })),
-    ...petty.map(p => ({
-      date: p.date||'', label: p.description||'Petty Cash',
-      cat: `Petty — ${p.category||''}`, subcat: p.paidBy||'',
-      type: 'out', amt: Number(p.amount||0), project: p.project||'',
-      ref: '', isPast: (p.date||'') <= todayStr,
-    })),
-    // INFLOWS
-    ...receipts.map(r => ({
-      date: r.dateReceived||'', label: `${r.client||'Client'} — ${r.raBillNo||r.milestoneName||'Receipt'}`,
-      cat: 'Client Receipt', subcat: r.paymentMode||'',
-      type: 'in', amt: Number(r.amountReceived||0), project: r.project||'',
-      ref: r.refNumber||'', isPast: (r.dateReceived||'') <= todayStr,
-    })),
-    ...capital.map(c => ({
-      date: c.dateReceived||'', label: `${c.type} — ${c.source}`,
-      cat: 'Capital Inflow', subcat: c.paymentMode||'',
-      type: 'in', amt: Number(c.amount||0), project: c.project||'',
-      ref: c.refNumber||'', isPast: (c.dateReceived||'') <= todayStr,
-    })),
-  ]
-  .filter(r => r.date && r.amt > 0)
-  .sort((a,b) => {
-    if (!a.date && !b.date) return 0;
-    if (!a.date) return 1;
-    if (!b.date) return -1;
-    return (a.date).localeCompare(b.date);
-  });
-
-  // Apply filters
-  const filtered = allRows.filter(r =>
-    (view==='all' || (view==='past' && r.isPast) || (view==='future' && !r.isPast)) &&
-    (typeFilter==='all' || r.type===typeFilter) &&
-    (projectFilter==='all' || r.project===projectFilter) &&
-    (catFilter==='all' || r.cat===catFilter || (catFilter==='Petty — ' && r.cat.startsWith('Petty')))
-  ).sort((a,b) => (a.date||'').localeCompare(b.date||''));
-
-  // Build running balance
-  let running = Number(settings.startingBalance) || 0;
-  const rows = filtered.map(r => {
-    if (r.type==='out') running -= r.amt;
-    else running += r.amt;
-    return { ...r, balance: running };
-  });
-
-  const totalIn  = filtered.filter(r=>r.type==='in').reduce((s,r)=>s+r.amt,0);
-  const totalOut = filtered.filter(r=>r.type==='out').reduce((s,r)=>s+r.amt,0);
-  const netFlow  = totalIn - totalOut;
-  const forecastLow = rows.length ? Math.min(...rows.map(r=>r.balance)) : Number(settings.startingBalance)||0;
-  const forecastEnd = rows.length ? rows[rows.length-1].balance : Number(settings.startingBalance)||0;
-  const lowRow = rows.find(r=>r.balance===forecastLow);
-  const criticalBreached = forecastLow < Number(settings.criticalThreshold||0);
-  const warningBreached  = !criticalBreached && forecastLow < Number(settings.warningThreshold||0);
-
-  // Category breakdown
-  const outByCat = {};
-  filtered.filter(r=>r.type==='out').forEach(r=>{ outByCat[r.cat]=(outByCat[r.cat]||0)+r.amt; });
-  const inByCat = {};
-  filtered.filter(r=>r.type==='in').forEach(r=>{ inByCat[r.cat]=(inByCat[r.cat]||0)+r.amt; });
-
-  async function saveBalance() {
-    const { db, doc, setDoc } = window.fb;
-    try {
-      await setDoc(doc(db, SETTINGS_COLLECTION, SETTINGS_DOC), { ...settings, startingBalance: Number(balanceInput)||0 }, { merge:true });
-      setEditingBalance(false);
-    } catch(e) { console.error(e); alert('Could not save balance.'); }
-  }
-
-  const TYPE_BADGE = { 'Bill':'red', 'Advance':'amber', 'General Expense':'red', 'Client Receipt':'green', 'Capital Inflow':'blue' };
-
-  return (
-    <div>
-      <div className="section-header">
-        <div>
-          <div className="section-title">Cash Flow</div>
-          <div className="section-sub">{loading?'Loading…':`${allRows.length} transactions — Bills · Advances · Expenses · Petty Cash · Receipts · Capital`}</div>
-        </div>
-      </div>
-
-      {!loading && criticalBreached && (
-        <div className="alert-bar critical" style={{marginBottom:14}}>
-          <span className="alert-icon">🚨</span>
-          <strong>Critical:</strong>&nbsp;Balance drops to {inr(forecastLow)} {lowRow?`on ${fmt(lowRow.date)}`:''} — below ₹{Number(settings.criticalThreshold||0).toLocaleString('en-IN')} threshold.
-        </div>
-      )}
-      {!loading && warningBreached && (
-        <div className="alert-bar warning" style={{marginBottom:14}}>
-          <span className="alert-icon">⚠️</span>
-          <strong>Warning:</strong>&nbsp;Balance drops to {inr(forecastLow)} {lowRow?`on ${fmt(lowRow.date)}`:''}.
-        </div>
-      )}
-
-      {/* Stats */}
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(6,1fr)',marginBottom:14}}>
-        <div className="stat-card">
-          <div className="stat-label">Opening Balance</div>
-          {editingBalance ? (
-            <div style={{display:'flex',gap:4,marginTop:4}}>
-              <input className="form-input font-mono" style={{width:90,fontSize:12}} value={balanceInput}
-                onChange={e=>setBalanceInput(e.target.value)} autoFocus onKeyDown={e=>e.key==='Enter'&&saveBalance()} />
-              <button className="btn btn-sm btn-primary" onClick={saveBalance}>✓</button>
-              <button className="btn btn-sm btn-ghost" onClick={()=>setEditingBalance(false)}>✕</button>
-            </div>
-          ) : (
-            <>
-              <div className="stat-value green">{inr(settings.startingBalance||0)}</div>
-              <div className="stat-sub" style={{cursor:'pointer',color:'var(--primary)'}}
-                onClick={()=>{setBalanceInput(String(settings.startingBalance||0));setEditingBalance(true);}}>Edit</div>
-            </>
-          )}
-        </div>
-        <div className="stat-card"><div className="stat-label">Total Inflows</div><div className="stat-value green">{inr(totalIn)}</div><div className="stat-sub">{filtered.filter(r=>r.type==='in').length} entries</div></div>
-        <div className="stat-card"><div className="stat-label">Total Outflows</div><div className="stat-value red">{inr(totalOut)}</div><div className="stat-sub">{filtered.filter(r=>r.type==='out').length} entries</div></div>
-        <div className="stat-card"><div className="stat-label">Net Flow</div><div className={`stat-value ${netFlow>=0?'green':'red'}`}>{inr(Math.abs(netFlow))}{netFlow<0?' ↓':' ↑'}</div></div>
-        <div className="stat-card"><div className="stat-label">Balance Low</div><div className={`stat-value ${criticalBreached?'red':warningBreached?'amber':'blue'}`}>{inr(forecastLow)}</div>{lowRow&&<div className="stat-sub">{fmt(lowRow.date)}</div>}</div>
-        <div className="stat-card"><div className="stat-label">Closing Balance</div><div className={`stat-value ${forecastEnd>=0?'green':'red'}`}>{inr(forecastEnd)}</div></div>
-      </div>
-
-      {/* Breakdown summary */}
-      {!loading && rows.length > 0 && (
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
-          <div className="card">
-            <div className="card-header"><span className="card-title">Outflows by Category</span></div>
-            <div className="card-body">
-              {Object.entries(outByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
-                <div key={cat} style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-                  <span style={{fontSize:12,color:'var(--text-secondary)'}}>{cat}</span>
-                  <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--red)'}}>{inr(amt)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="card">
-            <div className="card-header"><span className="card-title">Inflows by Source</span></div>
-            <div className="card-body">
-              {Object.entries(inByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
-                <div key={cat} style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-                  <span style={{fontSize:12,color:'var(--text-secondary)'}}>{cat}</span>
-                  <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--green)'}}>{inr(amt)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Filters */}
-      <div className="card">
-        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
-          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
-            <div className="tabs" style={{marginBottom:0}}>
-              {[['all','All'],['past','Past'],['future','Future / Due']].map(([v,l])=>(
-                <div key={v} className={`tab ${view===v?'active':''}`} onClick={()=>setView(v)}>{l}</div>
-              ))}
-            </div>
-            <select className="form-input form-select" style={{width:140}} value={typeFilter} onChange={e=>setTypeFilter(e.target.value)}>
-              <option value="all">All Types</option>
-              <option value="in">Inflows only</option>
-              <option value="out">Outflows only</option>
-            </select>
-            <select className="form-input form-select" style={{width:160}} value={projectFilter} onChange={e=>setCFProjectFilter(e.target.value)}>
-              <option value="all">All Projects</option>
-              {PROJECTS.map(p=><option key={p}>{p}</option>)}
-            </select>
-            <select className="form-input form-select" style={{width:160}} value={catFilter} onChange={e=>setCatFilter(e.target.value)}>
-              <option value="all">All Categories</option>
-              {['Bill','Purchase Order','Work Order','Advance','General Expense','Petty — ','Client Receipt','Capital Inflow','GST Paid','GST ITC Recovery'].map(c=><option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
-        ) : rows.length===0 ? (
-          <div className="module-coming">
-            <div className="big-icon">📈</div>
-            <h3>No transactions found</h3>
-            <p className="text-muted">All your money movements will appear here once entered.</p>
-          </div>
-        ) : (
-          <table>
-            <thead>
-              <tr><th>↑ Date (Oldest first)</th><th>Description</th><th>Category</th><th>Project</th><th>Ref #</th><th>Inflow</th><th>Outflow</th><th>Running Balance</th></tr>
-            </thead>
-            <tbody>
-              <tr style={{background:'var(--primary-50)'}}>
-                <td colSpan={7} style={{fontSize:12,fontWeight:600,color:'var(--primary)',padding:'6px 12px'}}>Opening Balance</td>
-                <td className="amount fw-600" style={{color:'var(--primary)'}}>{inr(settings.startingBalance||0)}</td>
-              </tr>
-              {rows.map((r,i) => (
-                <tr key={i} style={{
-                  background: r.type==='in'?'#F0FFF4':r.balance<Number(settings.criticalThreshold||0)?'#FFF3F3':'',
-                  opacity: r.isPast ? 1 : 0.85,
-                  borderLeft: r.isPast ? 'none' : '3px solid var(--amber)',
-                }}>
-                  <td className="mono">{fmt(r.date)}{!r.isPast&&<span style={{fontSize:9,color:'var(--amber)',marginLeft:4}}>DUE</span>}</td>
-                  <td style={{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} className="fw-600">{r.label}</td>
-                  <td><span className={`badge ${TYPE_BADGE[r.cat]||'grey'}`} style={{fontSize:10}}>{r.cat}</span></td>
-                  <td>{r.project?<span className={`badge ${PROJECT_COLOR[r.project]||'grey'}`}>{r.project}</span>:<span className="text-muted">—</span>}</td>
-                  <td className="mono" style={{fontSize:11}}>{r.ref||'—'}</td>
-                  <td className="amount" style={{color:'var(--green)',fontWeight:600}}>{r.type==='in'?`+ ${inr(r.amt)}`:'—'}</td>
-                  <td className="amount" style={{color:'var(--red)',fontWeight:600}}>{r.type==='out'?`− ${inr(r.amt)}`:'—'}</td>
-                  <td className="amount fw-600" style={{color:r.balance<0?'var(--red)':r.balance<Number(settings.warningThreshold||0)?'var(--amber)':'var(--text)'}}>{inr(r.balance)}</td>
-                </tr>
-              ))}
-              <tr style={{background:'var(--grey-50)',fontWeight:700}}>
-                <td colSpan={5} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Totals ({rows.length} transactions)</td>
-                <td className="amount" style={{color:'var(--green)',fontWeight:700}}>+ {inr(totalIn)}</td>
-                <td className="amount" style={{color:'var(--red)',fontWeight:700}}>− {inr(totalOut)}</td>
-                <td className="amount fw-600" style={{color:forecastEnd>=0?'var(--green)':'var(--red)'}}>{inr(forecastEnd)}</td>
-              </tr>
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-}
 // ─── BillScheduleModal — per-stage paid tracking ──────
 function BillScheduleModal({ bill, onClose, onUpdate }) {
   const [stages, setStages] = useState((bill.paymentSchedule||[]).map(s=>({...s})));
@@ -3144,6 +1733,564 @@ function BillScheduleModal({ bill, onClose, onUpdate }) {
             {saving ? 'Saving…' : 'Save Changes'}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Dashboard ────────────────────────────────────────
+function Dashboard({ setActive }) {
+  const { items: bills }    = useBills();
+  const { items: advances } = useAdvances();
+  const { items: wos }      = useWorkOrders();
+  const { items: pos }      = usePurchaseOrders();
+  const { items: quotes }   = useQuotations();
+  const { items: receipts } = useReceipts();
+  const { items: expenses } = useExpenses();
+  const { items: petty }    = usePettyCash();
+  const today = new Date().toISOString().slice(0,10);
+  const thisMonth = today.slice(0,7);
+
+  const overdueBills = bills.filter(b => !b.paid && b.due && b.due < today);
+  const overdueAmt   = overdueBills.reduce((s,b)=>s+Number(b.amount||0),0);
+  const dueTodayBills = bills.filter(b => !b.paid && b.due === today);
+  const activeWOs    = wos.filter(w => w.stage==='In Progress'||w.stage==='Issued');
+  const pendingQuotes = quotes.filter(q => !q.approved);
+  const unadjAdv     = advances.filter(a => a.status!=='Fully Adjusted');
+  const monthExpenses = [...expenses,...petty].filter(i=>(i.date||'').startsWith(thisMonth)).reduce((s,i)=>s+Number(i.amount||0),0);
+  const monthReceipts = receipts.filter(r=>(r.dateReceived||'').startsWith(thisMonth)).reduce((s,r)=>s+Number(r.amountReceived||0),0);
+
+  const alerts = [];
+  if (overdueBills.length) alerts.push({type:'red', msg:`${overdueBills.length} overdue bill${overdueBills.length>1?'s':''} — ${inr(overdueAmt)} pending`});
+  if (dueTodayBills.length) alerts.push({type:'amber', msg:`${dueTodayBills.length} bill${dueTodayBills.length>1?'s':''} due today`});
+  if (unadjAdv.length) alerts.push({type:'amber', msg:`${unadjAdv.length} unadjusted advance${unadjAdv.length>1?'s':''} — ${inr(unadjAdv.reduce((s,a)=>s+Number(a.balanceAmount||0),0))}`});
+  if (pendingQuotes.length) alerts.push({type:'blue', msg:`${pendingQuotes.length} quotation${pendingQuotes.length>1?'s':''} pending approval`});
+
+  const quickLinks = [
+    {icon:'📋',label:'Quotations',id:'quotations'},{icon:'🔧',label:'Work Orders',id:'workorders'},
+    {icon:'📦',label:'Purchase Orders',id:'purchaseorders'},{icon:'📑',label:'Bill Payments',id:'billpayments'},
+    {icon:'📈',label:'Cash Flow',id:'cashflow'},{icon:'📊',label:'Project P&L',id:'projectpnl'},
+    {icon:'📥',label:'Receipts',id:'receipts'},{icon:'⚙',label:'Settings',id:'settings'},
+  ];
+
+  return (
+    <div>
+      <div className="section-header"><div><div className="section-title">Dashboard</div>
+        <div className="section-sub">{new Date().toLocaleDateString('en-IN',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div>
+      </div></div>
+      {alerts.map((a,i)=>(
+        <div key={i} style={{background:a.type==='red'?'#FEE2E2':a.type==='amber'?'#FEF3C7':'#DBEAFE',borderLeft:`4px solid var(--${a.type})`,padding:'10px 14px',borderRadius:6,marginBottom:8,fontSize:13}}>
+          {a.type==='red'?'🚨':a.type==='amber'?'⚠️':'ℹ️'} {a.msg}
+        </div>
+      ))}
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginTop:16}}>
+        <div className="stat-card" style={{cursor:'pointer'}} onClick={()=>setActive('billpayments')}>
+          <div className="stat-label">Overdue Bills</div><div className="stat-value red">{overdueBills.length}</div><div className="stat-sub">{inr(overdueAmt)}</div>
+        </div>
+        <div className="stat-card" style={{cursor:'pointer'}} onClick={()=>setActive('workorders')}>
+          <div className="stat-label">Active Work Orders</div><div className="stat-value blue">{activeWOs.length}</div><div className="stat-sub">{pos.filter(p=>p.stage!=='Closed'&&p.stage!=='Fully Received').length} POs pending</div>
+        </div>
+        <div className="stat-card" style={{cursor:'pointer'}} onClick={()=>setActive('receipts')}>
+          <div className="stat-label">This Month Receipts</div><div className="stat-value green">{inr(monthReceipts)}</div><div className="stat-sub">{thisMonth}</div>
+        </div>
+        <div className="stat-card" style={{cursor:'pointer'}} onClick={()=>setActive('cashflow')}>
+          <div className="stat-label">This Month Expenses</div><div className="stat-value amber">{inr(monthExpenses)}</div><div className="stat-sub">Petty + General</div>
+        </div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginTop:14}}>
+        <div className="card">
+          <div className="card-header"><span className="card-title">Quick Links</span></div>
+          <div className="card-body" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            {quickLinks.map(l=>(
+              <button key={l.id} onClick={()=>setActive(l.id)} style={{display:'flex',alignItems:'center',gap:8,padding:'10px 12px',background:'var(--grey-50)',border:'1px solid var(--border)',borderRadius:6,cursor:'pointer',fontSize:12.5,fontWeight:500,color:'var(--text)',textAlign:'left'}}>
+                <span style={{fontSize:16}}>{l.icon}</span>{l.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-header"><span className="card-title">Overdue Bills</span></div>
+          {overdueBills.length===0 ? <div style={{padding:'20px',textAlign:'center',color:'var(--text-muted)',fontSize:13}}>✓ No overdue bills</div> : (
+            <table><thead><tr><th>Payee</th><th>Due</th><th>Amount</th></tr></thead>
+            <tbody>{overdueBills.slice(0,5).map(b=>(
+              <tr key={b.docId}><td className="fw-600" style={{fontSize:12}}>{b.payee}</td>
+              <td style={{fontSize:11,color:'var(--red)'}}>{fmt(b.due)}</td>
+              <td className="amount" style={{fontSize:12,color:'var(--red)',fontWeight:700}}>{inr(b.amount||0)}</td></tr>
+            ))}</tbody></table>
+          )}
+        </div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginTop:14}}>
+        <div className="card">
+          <div className="card-header"><span className="card-title">Active Work Orders</span></div>
+          {activeWOs.length===0 ? <div style={{padding:'20px',textAlign:'center',color:'var(--text-muted)',fontSize:13}}>No active work orders</div> : (
+            <table><thead><tr><th>WO #</th><th>Vendor</th><th>Project</th><th>Stage</th><th>Value</th></tr></thead>
+            <tbody>{activeWOs.slice(0,5).map(w=>(
+              <tr key={w.docId}><td className="mono" style={{fontSize:11}}>{w.wo}</td><td style={{fontSize:12}}>{w.vendorName}</td>
+              <td>{w.project?<span className={`badge ${PROJECT_COLOR[w.project]||'grey'}`} style={{fontSize:10}}>{w.project}</span>:'—'}</td>
+              <td><span className={`badge ${WO_STAGE_COLOR[w.stage]||'grey'}`} style={{fontSize:10}}>{w.stage}</span></td>
+              <td className="amount" style={{fontSize:12}}>{inr(w.value||0)}</td></tr>
+            ))}</tbody></table>
+          )}
+        </div>
+        <div className="card">
+          <div className="card-header"><span className="card-title">Pending Quotations</span></div>
+          {pendingQuotes.length===0 ? <div style={{padding:'20px',textAlign:'center',color:'var(--text-muted)',fontSize:13}}>No pending quotations</div> : (
+            <table><thead><tr><th>Vendor</th><th>Value</th><th>Stage</th></tr></thead>
+            <tbody>{pendingQuotes.slice(0,5).map(q=>(
+              <tr key={q.docId}><td style={{fontSize:12}} className="fw-600">{q.vendorName}</td>
+              <td className="amount" style={{fontSize:12}}>{inr(q.value||0)}</td>
+              <td><span className={`badge ${STAGE_COLOR[q.stage]||'grey'}`} style={{fontSize:10}}>{q.stage}</span></td></tr>
+            ))}</tbody></table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Work Orders ──────────────────────────────────────
+function WorkOrders() {
+  const { items, loading } = useWorkOrders();
+  const { items: quotations } = useQuotations();
+  const [showNew, setShowNew] = useState(false);
+  const [editWO, setEditWO] = useState(null);
+  const [viewSchedule, setViewSchedule] = useState(null);
+  const [stageFilter, setStageFilter] = useState('all');
+  const [projectFilter, setProjectFilter] = useState('all');
+  const [vendorFilter, setVendorFilter] = useState('all');
+  const [monthFilter, setMonthFilter] = useState('all');
+  const [woSortBy, setWoSortBy] = useState('date_desc');
+
+  const totalValue = items.reduce((s,w)=>s+Number(w.value||0),0);
+  const activeCount = items.filter(w=>w.stage!=='Completed'&&w.stage!=='Cancelled').length;
+  const nextNumber = nextWONumber(items.length);
+  const vendors = [...new Set(items.map(w=>w.vendorName).filter(Boolean))];
+  const months  = [...new Set(items.map(w=>(w.issueDate||'').slice(0,7)).filter(Boolean))].sort().reverse();
+
+  function applySort(arr) {
+    return [...arr].sort((a,b)=>{
+      if(woSortBy==='date_asc')    return (a.issueDate||a.due||'').localeCompare(b.issueDate||b.due||'');
+      if(woSortBy==='amount_desc') return Number(b.value||0)-Number(a.value||0);
+      if(woSortBy==='amount_asc')  return Number(a.value||0)-Number(b.value||0);
+      if(woSortBy==='vendor_asc')  return (a.vendorName||'').localeCompare(b.vendorName||'');
+      return (b.issueDate||b.due||'').localeCompare(a.issueDate||a.due||'');
+    });
+  }
+
+  const filtered = applySort(items.filter(w=>
+    (stageFilter==='all'||w.stage===stageFilter)&&
+    (projectFilter==='all'||w.project===projectFilter)&&
+    (vendorFilter==='all'||w.vendorName===vendorFilter)&&
+    (monthFilter==='all'||(w.issueDate||'').startsWith(monthFilter))
+  ));
+
+  return (
+    <div>
+      <div className="section-header">
+        <div><div className="section-title">Work Orders</div>
+          <div className="section-sub">{loading?'Loading…':`${items.length} WOs · ${activeCount} active · Next: ${nextNumber}`}</div>
+        </div>
+        <button className="btn btn-primary" onClick={()=>setShowNew(true)}>+ Issue WO</button>
+      </div>
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Total WO Value</div><div className="stat-value red">{inr(totalValue)}</div></div>
+        <div className="stat-card"><div className="stat-label">Active</div><div className="stat-value blue">{activeCount}</div></div>
+        <div className="stat-card"><div className="stat-label">Completed</div><div className="stat-value green">{items.filter(w=>w.stage==='Completed').length}</div></div>
+      </div>
+      <div className="card">
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
+            <select className="form-input form-select" style={{width:130}} value={stageFilter} onChange={e=>setStageFilter(e.target.value)}>
+              <option value="all">All Stages</option>{WO_STAGES.map(s=><option key={s}>{s}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:120}} value={projectFilter} onChange={e=>setProjectFilter(e.target.value)}>
+              <option value="all">All Projects</option>{PROJECTS.map(p=><option key={p}>{p}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:150}} value={vendorFilter} onChange={e=>setVendorFilter(e.target.value)}>
+              <option value="all">All Vendors</option>{vendors.map(v=><option key={v}>{v}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:130}} value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}>
+              <option value="all">All Months</option>{months.map(m=><option key={m}>{m}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:160}} value={woSortBy} onChange={e=>setWoSortBy(e.target.value)}>
+              <option value="date_desc">↓ Issue Date (Newest)</option>
+              <option value="date_asc">↑ Issue Date (Oldest)</option>
+              <option value="amount_desc">↓ Value (Highest)</option>
+              <option value="amount_asc">↑ Value (Lowest)</option>
+              <option value="vendor_asc">A→Z Vendor</option>
+            </select>
+          </div>
+        </div>
+        {loading ? <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+        : filtered.length===0 ? <div className="module-coming"><div className="big-icon">🔧</div><h3>No work orders yet</h3></div>
+        : (
+          <div style={{overflowX:'auto'}}>
+          <table style={{minWidth:800}}>
+            <thead><tr><th>WO Number</th><th>Issue Date</th><th>Vendor</th><th>Project</th><th>Scope</th><th>Value</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr></thead>
+            <tbody>
+              {filtered.map(w=>(
+                <tr key={w.docId}>
+                  <td className="mono" style={{whiteSpace:'nowrap'}}>{w.wo}</td>
+                  <td style={{fontSize:12,color:'var(--text-muted)'}}>{fmt(w.issueDate)||'—'}</td>
+                  <td className="fw-600">{w.vendorName}</td>
+                  <td>{w.project?<span className={`badge ${PROJECT_COLOR[w.project]||'grey'}`}>{w.project}</span>:'—'}</td>
+                  <td style={{maxWidth:180}}>
+                    {w.description}
+                    {w.quotationSyncedAt&&<span style={{fontSize:9,background:'#DBEAFE',color:'var(--primary)',borderRadius:3,padding:'1px 4px',marginLeft:4}}>↺ synced</span>}
+                  </td>
+                  <td className="amount fw-600">{inr(w.value||0)}</td>
+                  <td style={{whiteSpace:'nowrap'}}>
+                    {w.paymentSchedule&&w.paymentSchedule.length>0
+                      ? <span className="btn btn-sm btn-ghost" style={{cursor:'pointer'}} onClick={()=>setViewSchedule({...w,_type:'wo'})}>{w.paymentSchedule.length} stage{w.paymentSchedule.length>1?'s':''}</span>
+                      : <span style={{fontSize:11,color:'var(--text-muted)'}}>—</span>}
+                  </td>
+                  <td><span className={`badge ${WO_STAGE_COLOR[w.stage]||'grey'}`}>{w.stage}</span></td>
+                  <td style={{whiteSpace:'nowrap'}}>
+                    <div className="flex gap-2">
+                      <button className="btn btn-sm btn-ghost" onClick={()=>setEditWO(w)}>Edit</button>
+                      <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteWorkOrder(w.docId);}}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          </div>
+        )}
+      </div>
+      {showNew && <NewWOModal onClose={()=>setShowNew(false)} quotations={quotations} />}
+      {editWO && <NewWOModal onClose={()=>setEditWO(null)} existing={editWO} quotations={quotations} />}
+      {viewSchedule && <POWOScheduleModal doc={viewSchedule} parentType={viewSchedule._type||'wo'} onClose={()=>setViewSchedule(null)} />}
+    </div>
+  );
+}
+
+// ─── Purchase Orders ──────────────────────────────────
+function PurchaseOrders() {
+  const { items, loading } = usePurchaseOrders();
+  const { items: quotations } = useQuotations();
+  const [showNew, setShowNew] = useState(false);
+  const [editPO, setEditPO] = useState(null);
+  const [viewSchedule, setViewSchedule] = useState(null);
+  const [stageFilter, setStageFilter] = useState('all');
+  const [projectFilter, setProjectFilter] = useState('all');
+  const [vendorFilter, setVendorFilter] = useState('all');
+  const [monthFilter, setMonthFilter] = useState('all');
+  const [poSortBy, setPoSortBy] = useState('date_desc');
+
+  const totalValue = items.reduce((s,p)=>s+Number(p.value||0),0);
+  const activeCount = items.filter(p=>p.stage!=='Closed'&&p.stage!=='Fully Received').length;
+  const nextNumber = nextPONumber(items.length);
+  const vendors = [...new Set(items.map(p=>p.vendorName).filter(Boolean))];
+  const months  = [...new Set(items.map(p=>(p.issueDate||'').slice(0,7)).filter(Boolean))].sort().reverse();
+  const PO_STAGES = ['Draft','Issued','Goods In Transit','Partially Received','Fully Received','Closed'];
+
+  function applySort(arr) {
+    return [...arr].sort((a,b)=>{
+      if(poSortBy==='date_asc')    return (a.issueDate||'').localeCompare(b.issueDate||'');
+      if(poSortBy==='amount_desc') return Number(b.value||0)-Number(a.value||0);
+      if(poSortBy==='amount_asc')  return Number(a.value||0)-Number(b.value||0);
+      if(poSortBy==='vendor_asc')  return (a.vendorName||'').localeCompare(b.vendorName||'');
+      return (b.issueDate||'').localeCompare(a.issueDate||'');
+    });
+  }
+
+  const filtered = applySort(items.filter(p=>
+    (stageFilter==='all'||p.stage===stageFilter)&&
+    (projectFilter==='all'||p.project===projectFilter)&&
+    (vendorFilter==='all'||p.vendorName===vendorFilter)&&
+    (monthFilter==='all'||(p.issueDate||'').startsWith(monthFilter))
+  ));
+
+  return (
+    <div>
+      <div className="section-header">
+        <div><div className="section-title">Purchase Orders</div>
+          <div className="section-sub">{loading?'Loading…':`${items.length} POs · ${activeCount} active · Next: ${nextNumber}`}</div>
+        </div>
+        <button className="btn btn-primary" onClick={()=>setShowNew(true)}>+ New PO</button>
+      </div>
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+        <div className="stat-card"><div className="stat-label">Total PO Value</div><div className="stat-value red">{inr(totalValue)}</div></div>
+        <div className="stat-card"><div className="stat-label">Active</div><div className="stat-value blue">{activeCount}</div></div>
+        <div className="stat-card"><div className="stat-label">Fully Received</div><div className="stat-value green">{items.filter(p=>p.stage==='Fully Received'||p.stage==='Closed').length}</div></div>
+      </div>
+      <div className="card">
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
+            <select className="form-input form-select" style={{width:160}} value={stageFilter} onChange={e=>setStageFilter(e.target.value)}>
+              <option value="all">All Stages</option>{PO_STAGES.map(s=><option key={s}>{s}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:120}} value={projectFilter} onChange={e=>setProjectFilter(e.target.value)}>
+              <option value="all">All Projects</option>{PROJECTS.map(p=><option key={p}>{p}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:150}} value={vendorFilter} onChange={e=>setVendorFilter(e.target.value)}>
+              <option value="all">All Vendors</option>{vendors.map(v=><option key={v}>{v}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:130}} value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}>
+              <option value="all">All Months</option>{months.map(m=><option key={m}>{m}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:170}} value={poSortBy} onChange={e=>setPoSortBy(e.target.value)}>
+              <option value="date_desc">↓ Issue Date (Newest)</option>
+              <option value="date_asc">↑ Issue Date (Oldest)</option>
+              <option value="amount_desc">↓ Value (Highest)</option>
+              <option value="amount_asc">↑ Value (Lowest)</option>
+              <option value="vendor_asc">A→Z Vendor</option>
+            </select>
+          </div>
+        </div>
+        {loading ? <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+        : filtered.length===0 ? <div className="module-coming"><div className="big-icon">📦</div><h3>No purchase orders yet</h3></div>
+        : (
+          <div style={{overflowX:'auto'}}>
+          <table style={{minWidth:900}}>
+            <thead><tr><th>PO Number</th><th>Issue Date</th><th>Vendor</th><th>Project</th><th>Description</th><th>Value</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr></thead>
+            <tbody>
+              {filtered.map(p=>(
+                <tr key={p.docId}>
+                  <td className="mono" style={{whiteSpace:'nowrap'}}>{p.po}</td>
+                  <td style={{fontSize:12,color:'var(--text-muted)'}}>{fmt(p.issueDate)||'—'}</td>
+                  <td className="fw-600">{p.vendorName}</td>
+                  <td>{p.project?<span className={`badge ${PROJECT_COLOR[p.project]||'grey'}`}>{p.project}</span>:'—'}</td>
+                  <td style={{maxWidth:180}}>
+                    {p.description||'—'}
+                    {p.quotationSyncedAt&&<span style={{fontSize:9,background:'#DBEAFE',color:'var(--primary)',borderRadius:3,padding:'1px 4px',marginLeft:4}}>↺ synced</span>}
+                  </td>
+                  <td className="amount fw-600">{inr(p.value||0)}</td>
+                  <td style={{whiteSpace:'nowrap'}}>
+                    {p.paymentSchedule&&p.paymentSchedule.length>0
+                      ? <span className="btn btn-sm btn-ghost" style={{cursor:'pointer'}} onClick={()=>setViewSchedule({...p,_type:'po'})}>{p.paymentSchedule.length} stage{p.paymentSchedule.length>1?'s':''}</span>
+                      : <span style={{fontSize:11,color:'var(--text-muted)'}}>—</span>}
+                  </td>
+                  <td>
+                    <select className="form-input form-select" style={{width:130,fontSize:11,padding:'3px 4px'}} value={p.stage||'Draft'}
+                      onChange={async e=>{ const {updateDoc}=window.fb; await updateDoc(userDoc(PO_COLLECTION,p.docId),{stage:e.target.value}); }}>
+                      {PO_STAGES.map(s=><option key={s}>{s}</option>)}
+                    </select>
+                  </td>
+                  <td style={{whiteSpace:'nowrap'}}>
+                    <div className="flex gap-2">
+                      <button className="btn btn-sm btn-ghost" onClick={()=>setEditPO(p)}>Edit</button>
+                      <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete PO?'))deletePO(p.docId);}}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          </div>
+        )}
+      </div>
+      {showNew && <NewPOModal onClose={()=>setShowNew(false)} nextNumber={nextNumber} quotations={quotations} />}
+      {editPO && <NewPOModal onClose={()=>setEditPO(null)} nextNumber={nextNumber} quotations={quotations} existing={editPO} />}
+      {viewSchedule && <POWOScheduleModal doc={viewSchedule} parentType={viewSchedule._type||'po'} onClose={()=>setViewSchedule(null)} />}
+    </div>
+  );
+}
+
+// ─── Cash Flow Module ──────────────────────────────────
+function CashFlow() {
+  const [view, setView] = useState('all');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [projectFilter, setCFProjectFilter] = useState('all');
+  const [catFilter, setCatFilter] = useState('all');
+  const { items: bills,    loading: billsLoading    } = useBills();
+  const { items: advances, loading: advLoading      } = useAdvances();
+  const { items: receipts, loading: receiptsLoading } = useReceipts();
+  const { items: capital,  loading: capitalLoading  } = useCapitalLoans();
+  const { items: expenses, loading: expLoading      } = useExpenses();
+  const { items: petty,    loading: pettyLoading    } = usePettyCash();
+  const { items: pos,      loading: posLoading      } = usePurchaseOrders();
+  const { items: wos,      loading: wosLoading      } = useWorkOrders();
+  const { settings, loading: settingsLoading } = useCashSettings();
+  const [editingBalance, setEditingBalance] = useState(false);
+  const [balanceInput, setBalanceInput] = useState('');
+
+  const loading = billsLoading||settingsLoading||receiptsLoading||capitalLoading||advLoading||expLoading||pettyLoading||posLoading||wosLoading;
+  const todayStr = new Date().toISOString().slice(0,10);
+
+  function getITCDate(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    const nextMonth = d.getMonth() + 1;
+    const nextYear = nextMonth > 11 ? d.getFullYear() + 1 : d.getFullYear();
+    const itcMonth = nextMonth > 11 ? 1 : nextMonth + 1;
+    return `${nextYear}-${String(itcMonth).padStart(2,'0')}-20`;
+  }
+
+  function scheduleRows(items, type) {
+    return items.flatMap(doc => {
+      const refNo = doc.po||doc.wo||'';
+      const label = doc.vendorName||doc.payee||'';
+      if (doc.paymentSchedule&&doc.paymentSchedule.length>0) {
+        return doc.paymentSchedule.flatMap(s => {
+          if (!s.amount) return [];
+          const rows = [{
+            date:s.date||'', label:`${refNo} — ${label} (${s.stageType||'Payment'})`,
+            cat:type, subcat:s.stageType||'', type:'out', amt:Number(s.amount||0),
+            project:doc.project||'', ref:refNo, isPast:(s.date||'')<todayStr,
+          }];
+          if (s.includesGst&&Number(s.gstAmount||0)>0) {
+            rows.push({date:s.date||'',label:`GST — ${label}`,cat:'GST Paid',subcat:'',type:'out',amt:Number(s.gstAmount),project:doc.project||'',ref:refNo,isPast:(s.date||'')<todayStr});
+            const itcDate = getITCDate(s.date||'');
+            if (itcDate) rows.push({date:itcDate,label:`ITC Recovery — ${label}`,cat:'GST ITC Recovery',subcat:'',type:'in',amt:Number(s.gstAmount),project:doc.project||'',ref:refNo,isPast:itcDate<todayStr});
+          }
+          return rows;
+        });
+      }
+      return [];
+    });
+  }
+
+  function billRows(bills) {
+    return bills.flatMap(b => {
+      if (b.paymentSchedule&&b.paymentSchedule.length>0) {
+        return b.paymentSchedule.flatMap(s => {
+          const rows = [{date:s.date||b.due||'',label:`${b.payee} — ${s.stageType||'Payment'}`,cat:b.category||'Bill',subcat:'',type:'out',amt:Number(s.amount||0),project:b.project||'',ref:b.invoiceNo||'',isPast:(s.date||b.due||'')<todayStr}];
+          if (s.includesGst&&Number(s.gstAmount||0)>0) {
+            rows.push({date:s.date||b.due||'',label:`GST — ${b.payee}`,cat:'GST Paid',subcat:'',type:'out',amt:Number(s.gstAmount),project:b.project||'',ref:b.invoiceNo||'',isPast:(s.date||b.due||'')<todayStr});
+            const itcDate = getITCDate(s.date||b.due||'');
+            if (itcDate) rows.push({date:itcDate,label:`ITC — ${b.payee}`,cat:'GST ITC Recovery',subcat:'',type:'in',amt:Number(s.gstAmount),project:b.project||'',ref:b.invoiceNo||'',isPast:itcDate<todayStr});
+          }
+          return rows;
+        });
+      }
+      return [{date:b.due||b.invoiceDate||'',label:b.payee,cat:b.category||'Bill',subcat:'',type:'out',amt:Number(b.amount||0),project:b.project||'',ref:b.invoiceNo||'',isPast:(b.due||'')<todayStr}];
+    });
+  }
+
+  const allRows = [
+    ...billRows(bills.filter(b=>!b.fromSchedule)),
+    ...scheduleRows(pos,'Purchase Order'),
+    ...scheduleRows(wos,'Work Order'),
+    ...advances.map(a=>({date:a.datePaid||'',label:`Advance — ${a.vendor}`,cat:'Advance',subcat:'',type:'out',amt:Number(a.amount||0),project:a.project||'',ref:a.refNumber||'',isPast:(a.datePaid||'')<=todayStr})),
+    ...expenses.map(e=>({date:e.date||'',label:e.description||(e.vendor||''),cat:e.category||'Expense',subcat:'',type:'out',amt:Number(e.amount||0),project:e.project||'',ref:'',isPast:(e.date||'')<=todayStr})),
+    ...petty.map(p=>({date:p.date||'',label:p.description||'Petty Cash',cat:`Petty — ${p.category||''}`,subcat:'',type:'out',amt:Number(p.amount||0),project:p.project||'',ref:'',isPast:(p.date||'')<=todayStr})),
+    ...receipts.map(r=>({date:r.dateReceived||'',label:`${r.client||'Client'} — Receipt`,cat:'Client Receipt',subcat:'',type:'in',amt:Number(r.amountReceived||0),project:r.project||'',ref:r.refNumber||'',isPast:(r.dateReceived||'')<=todayStr})),
+    ...capital.map(c=>({date:c.dateReceived||'',label:`${c.type} — ${c.source}`,cat:'Capital Inflow',subcat:'',type:'in',amt:Number(c.amount||0),project:c.project||'',ref:c.refNumber||'',isPast:(c.dateReceived||'')<=todayStr})),
+  ].filter(r=>r.date&&r.amt>0).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+
+  const filtered = allRows.filter(r=>
+    (view==='all'||(view==='past'&&r.isPast)||(view==='future'&&!r.isPast))&&
+    (typeFilter==='all'||r.type===typeFilter)&&
+    (projectFilter==='all'||r.project===projectFilter)&&
+    (catFilter==='all'||r.cat===catFilter||(catFilter==='Petty'&&r.cat.startsWith('Petty')))
+  ).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+
+  let running = Number(settings.startingBalance)||0;
+  const rows = filtered.map(r=>{ if(r.type==='out') running-=r.amt; else running+=r.amt; return {...r,balance:running}; });
+  const totalIn  = filtered.filter(r=>r.type==='in').reduce((s,r)=>s+r.amt,0);
+  const totalOut = filtered.filter(r=>r.type==='out').reduce((s,r)=>s+r.amt,0);
+  const forecastEnd = rows.length ? rows[rows.length-1].balance : Number(settings.startingBalance)||0;
+  const forecastLow = rows.length ? Math.min(...rows.map(r=>r.balance)) : forecastEnd;
+  const outByCat = {}; filtered.filter(r=>r.type==='out').forEach(r=>{outByCat[r.cat]=(outByCat[r.cat]||0)+r.amt;});
+  const inByCat  = {}; filtered.filter(r=>r.type==='in').forEach(r=>{inByCat[r.cat]=(inByCat[r.cat]||0)+r.amt;});
+
+  async function saveBalance() {
+    const {doc,setDoc} = window.fb;
+    try { await setDoc(doc(window.fb.db,SETTINGS_COLLECTION,SETTINGS_DOC),{...settings,startingBalance:Number(balanceInput)||0},{merge:true}); setEditingBalance(false); }
+    catch(e){console.error(e);}
+  }
+
+  return (
+    <div>
+      <div className="section-header"><div>
+        <div className="section-title">Cash Flow</div>
+        <div className="section-sub">{loading?'Loading…':`${allRows.length} transactions · Bills · POs · WOs · Advances · Expenses · Receipts · Capital`}</div>
+      </div></div>
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(6,1fr)',marginBottom:14}}>
+        <div className="stat-card">
+          <div className="stat-label">Opening Balance</div>
+          {editingBalance?(
+            <div style={{display:'flex',gap:4,marginTop:4}}>
+              <input className="form-input font-mono" style={{width:90,fontSize:12}} value={balanceInput} onChange={e=>setBalanceInput(e.target.value)} autoFocus onKeyDown={e=>e.key==='Enter'&&saveBalance()} />
+              <button className="btn btn-sm btn-primary" onClick={saveBalance}>✓</button>
+              <button className="btn btn-sm btn-ghost" onClick={()=>setEditingBalance(false)}>✕</button>
+            </div>
+          ):(
+            <>
+              <div className="stat-value green">{inr(settings.startingBalance||0)}</div>
+              <div className="stat-sub" style={{cursor:'pointer',color:'var(--primary)'}} onClick={()=>{setBalanceInput(String(settings.startingBalance||0));setEditingBalance(true);}}>Edit</div>
+            </>
+          )}
+        </div>
+        <div className="stat-card"><div className="stat-label">Total Inflows</div><div className="stat-value green">{inr(totalIn)}</div></div>
+        <div className="stat-card"><div className="stat-label">Total Outflows</div><div className="stat-value red">{inr(totalOut)}</div></div>
+        <div className="stat-card"><div className="stat-label">Net Flow</div><div className={`stat-value ${totalIn-totalOut>=0?'green':'red'}`}>{inr(Math.abs(totalIn-totalOut))}{totalIn-totalOut<0?' ↓':' ↑'}</div></div>
+        <div className="stat-card"><div className="stat-label">Balance Low</div><div className={`stat-value ${forecastLow<0?'red':'blue'}`}>{inr(forecastLow)}</div></div>
+        <div className="stat-card"><div className="stat-label">Closing Balance</div><div className={`stat-value ${forecastEnd>=0?'green':'red'}`}>{inr(forecastEnd)}</div></div>
+      </div>
+      {!loading&&rows.length>0&&(
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
+          <div className="card"><div className="card-header"><span className="card-title">Outflows by Category</span></div><div className="card-body">
+            {Object.entries(outByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
+              <div key={cat} style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+                <span style={{fontSize:12,color:'var(--text-secondary)'}}>{cat}</span>
+                <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--red)'}}>{inr(amt)}</span>
+              </div>
+            ))}
+          </div></div>
+          <div className="card"><div className="card-header"><span className="card-title">Inflows by Source</span></div><div className="card-body">
+            {Object.entries(inByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
+              <div key={cat} style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+                <span style={{fontSize:12,color:'var(--text-secondary)'}}>{cat}</span>
+                <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--green)'}}>{inr(amt)}</span>
+              </div>
+            ))}
+          </div></div>
+        </div>
+      )}
+      <div className="card">
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
+            <div className="tabs" style={{marginBottom:0}}>
+              {[['all','All'],['past','Past'],['future','Future / Due']].map(([v,l])=>(
+                <div key={v} className={`tab ${view===v?'active':''}`} onClick={()=>setView(v)}>{l}</div>
+              ))}
+            </div>
+            <select className="form-input form-select" style={{width:140}} value={typeFilter} onChange={e=>setTypeFilter(e.target.value)}>
+              <option value="all">All Types</option><option value="in">Inflows only</option><option value="out">Outflows only</option>
+            </select>
+            <select className="form-input form-select" style={{width:130}} value={projectFilter} onChange={e=>setCFProjectFilter(e.target.value)}>
+              <option value="all">All Projects</option>{PROJECTS.map(p=><option key={p}>{p}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:160}} value={catFilter} onChange={e=>setCatFilter(e.target.value)}>
+              <option value="all">All Categories</option>
+              {['Bill','Purchase Order','Work Order','Advance','General Expense','Petty','Client Receipt','Capital Inflow','GST Paid','GST ITC Recovery'].map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+        {loading ? <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+        : rows.length===0 ? <div className="module-coming"><div className="big-icon">📈</div><h3>No transactions found</h3><p className="text-muted">All money movements will appear here.</p></div>
+        : (
+          <table>
+            <thead><tr><th>↑ Date</th><th>Description</th><th>Category</th><th>Project</th><th>Inflow</th><th>Outflow</th><th>Running Balance</th></tr></thead>
+            <tbody>
+              <tr style={{background:'var(--primary-50)'}}>
+                <td colSpan={6} style={{fontSize:12,fontWeight:600,color:'var(--primary)',padding:'6px 12px'}}>Opening Balance</td>
+                <td className="amount fw-600" style={{color:'var(--primary)'}}>{inr(settings.startingBalance||0)}</td>
+              </tr>
+              {rows.map((r,i)=>(
+                <tr key={i} style={{background:r.type==='in'?'#F0FFF4':'',opacity:r.isPast?1:0.85,borderLeft:r.isPast?'none':'3px solid var(--amber)'}}>
+                  <td className="mono">{fmt(r.date)}{!r.isPast&&<span style={{fontSize:9,color:'var(--amber)',marginLeft:4}}>DUE</span>}</td>
+                  <td style={{maxWidth:220,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} className="fw-600">{r.label}</td>
+                  <td><span className="badge grey" style={{fontSize:10}}>{r.cat}</span></td>
+                  <td>{r.project?<span className={`badge ${PROJECT_COLOR[r.project]||'grey'}`} style={{fontSize:10}}>{r.project}</span>:'—'}</td>
+                  <td className="amount" style={{color:'var(--green)',fontWeight:600}}>{r.type==='in'?`+ ${inr(r.amt)}`:'—'}</td>
+                  <td className="amount" style={{color:'var(--red)',fontWeight:600}}>{r.type==='out'?`− ${inr(r.amt)}`:'—'}</td>
+                  <td className="amount fw-600" style={{color:r.balance<0?'var(--red)':'var(--text)'}}>{inr(r.balance)}</td>
+                </tr>
+              ))}
+              <tr style={{background:'var(--grey-50)',fontWeight:700}}>
+                <td colSpan={4} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Totals ({rows.length} transactions)</td>
+                <td className="amount" style={{color:'var(--green)',fontWeight:700}}>+ {inr(totalIn)}</td>
+                <td className="amount" style={{color:'var(--red)',fontWeight:700}}>− {inr(totalOut)}</td>
+                <td className="amount fw-600" style={{color:forecastEnd>=0?'var(--green)':'var(--red)'}}>{inr(forecastEnd)}</td>
+              </tr>
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
@@ -6648,15 +5795,15 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
   const [form, setForm] = useState(isEdit ? {
     quotNo: existing.quotNo||'', vendorName: existing.vendorName||'',
     description: existing.description||'', value: existing.value ? String(existing.value) : '',
+    gstPct: existing.gstPct||'',
     receivedDate: existing.receivedDate||'',
-    stage: existing.stage||'Receipt of Quotation', notes: existing.notes||'', project: existing.project||''
+    stage: existing.stage||'Receipt of Quotation', notes: existing.notes||'', project: existing.project||'',
+    split: existing.split||{pontoon:50,wtp:50}
   } : {
-    quotNo:'', vendorName:'', description:'', value:'',
+    quotNo:'', vendorName:'', description:'', value:'', gstPct:'',
     receivedDate: new Date().toISOString().slice(0,10),
-    stage:'Receipt of Quotation', notes:'', project:''
+    stage:'Receipt of Quotation', notes:'', project:'', split:{pontoon:50,wtp:50}
   });
-  const [schedule, setSchedule] = useState(isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) : []);
-  const [gstPct, setGstPct] = useState(isEdit ? (existing.gstPct||'') : '');
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
 
@@ -6665,9 +5812,9 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
     setSaving(true);
     try{
       if (isEdit) {
-        await updateQuotation(existing.docId, {...form, value:Number(form.value), paymentSchedule:schedule, gstPct});
+        await updateQuotation(existing.docId, {...form, value:Number(form.value)});
       } else {
-        await addQuotation({...form, value:Number(form.value), paymentSchedule:schedule, gstPct});
+        await addQuotation({...form, value:Number(form.value)});
       }
       onClose();
     }catch(e){console.error(e);alert('Could not save quotation.');}
@@ -6709,7 +5856,10 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
               {QUOTE_STAGES.map(s=><option key={s}>{s}</option>)}
             </select>
           </div>
-          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} gstPct={gstPct} onGstPctChange={setGstPct} />
+          <div className="form-group">
+            <label className="form-label">GST % <span style={{color:'var(--text-muted)',fontWeight:400,fontSize:11}}>(carries over to PO)</span></label>
+            <input className="form-input font-mono" style={{width:100}} value={form.gstPct} onChange={e=>set('gstPct',e.target.value)} placeholder="e.g. 18" />
+          </div>
           <div className="form-group">
             <label className="form-label">Notes</label>
             <textarea className="form-input" rows="2" value={form.notes} onChange={e=>set('notes',e.target.value)} style={{resize:'vertical'}} />
