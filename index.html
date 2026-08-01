@@ -972,10 +972,24 @@ function ClearDataCard({ item }) {
 const STAGE_TYPES = ['Advance', 'Against Dispatch', 'Against Delivery', 'Retention', 'Other'];
 const STAGE_TYPE_COLOR = { 'Advance':'amber', 'Against Dispatch':'blue', 'Against Delivery':'teal', 'Retention':'grey', 'Other':'grey' };
 
-function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChange }) {
+function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChange, parentDoc, parentType, onStagePaid }) {
   const baseAmt = Number(totalValue)||0;
   const gstRate = parseFloat(gstPct)||0;
   const totalGstAmt = Math.round(baseAmt * gstRate / 100);
+  const [stageSaving, setStageSaving] = useState(null);
+
+  async function handleTogglePaid(row) {
+    if (!parentDoc || !onStagePaid) return;
+    setStageSaving(row.id);
+    try {
+      const newPaid = !row.paid;
+      const updatedRows = rows.map(r => r.id===row.id ? {...r, paid:newPaid, paidAt:newPaid?Date.now():null} : r);
+      setRows(updatedRows);
+      await syncStageToModules({...row, paid:newPaid}, parentDoc, parentType, updatedRows, setRows);
+      if (onStagePaid) onStagePaid(updatedRows);
+    } catch(e) { console.error(e); alert('Could not update stage: '+e.message); }
+    finally { setStageSaving(null); }
+  }
 
   function addRow() {
     setRows(r=>[...r,{id:genRowId(),stageType:'Advance',pct:'',amount:'',date:'',includesGst:false,gstAmount:'',linkedEntryId:''}]);
@@ -1067,11 +1081,24 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
                         placeholder={String(totalGstAmt||0)} />
                     ) : <span style={{fontSize:11,color:'var(--text-muted)',padding:'0 4px'}}>—</span>}
                   </td>
-                  <td style={{padding:3,textAlign:'center',width:55}}>
-                    {r.paid
-                      ? <span style={{fontSize:10,background:'#D1FAE5',color:'var(--green)',borderRadius:3,padding:'2px 6px',fontWeight:600}}>✓ Paid</span>
-                      : <span style={{fontSize:10,color:'var(--text-muted)'}}>—</span>}
-                    {r.linkedEntryId && <span title="Linked" style={{marginLeft:3,fontSize:11}}>🔗</span>}
+                  <td style={{padding:3,textAlign:'center',width:90}}>
+                    {stageSaving===r.id ? (
+                      <span style={{fontSize:10,color:'var(--text-muted)'}}>…</span>
+                    ) : r.paid ? (
+                      <div>
+                        <span style={{fontSize:10,background:'#D1FAE5',color:'var(--green)',borderRadius:3,padding:'2px 5px',fontWeight:600}}>✓ Paid</span>
+                        {parentDoc && <div style={{marginTop:2}}>
+                          <span onClick={()=>handleTogglePaid(r)} style={{fontSize:9,color:'var(--amber)',cursor:'pointer',textDecoration:'underline'}}>Unmark</span>
+                        </div>}
+                        {r.linkedEntryId && <span title="Linked" style={{fontSize:10,marginLeft:2}}>🔗</span>}
+                      </div>
+                    ) : parentDoc ? (
+                      <button onClick={()=>handleTogglePaid(r)} className="btn btn-sm btn-primary" style={{fontSize:9,padding:'2px 6px',background:'var(--green)'}}>
+                        Mark Paid
+                      </button>
+                    ) : (
+                      <span style={{fontSize:11,color:'var(--text-muted)'}}>—</span>
+                    )}
                   </td>
                   <td style={{padding:3,textAlign:'center'}}>
                     <span onClick={()=>removeRow(r.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span>
@@ -1493,7 +1520,7 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
             <label className="form-label">Value (₹)</label>
             <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} />
           </div>
-          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} gstPct={gstPct} onGstPctChange={setGstPct} />
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} gstPct={gstPct} onGstPctChange={setGstPct} parentDoc={isEdit?{...existing,...form,docId:existing.docId}:null} parentType="wo" onStagePaid={s=>setSchedule(s)} />
           <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
@@ -2144,8 +2171,8 @@ function NewPOModal({ onClose, nextNumber, quotations, prefill, existing }) {
     if (!form.vendorName.trim() || !form.value) return;
     setSaving(true);
     try {
-      if (isEdit) await updatePO(existing.docId, { ...form, value: Number(form.value), paymentSchedule: schedule });
-      else await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule });
+      if (isEdit) await updatePO(existing.docId, { ...form, value: Number(form.value), paymentSchedule: schedule, gstPct });
+      else await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule, gstPct });
       onClose();
     } catch (e) { console.error(e); alert('Could not save purchase order.'); }
     finally { setSaving(false); }
@@ -2192,7 +2219,7 @@ function NewPOModal({ onClose, nextNumber, quotations, prefill, existing }) {
             <label className="form-label">Total Value (₹)</label>
             <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
           </div>
-          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} gstPct={gstPct} onGstPctChange={setGstPct} />
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} gstPct={gstPct} onGstPctChange={setGstPct} parentDoc={isEdit?{...existing,...form,docId:existing.docId}:null} parentType="po" onStagePaid={s=>setSchedule(s)} />
           <div className="form-group">
             <label className="form-label">Stage</label>
             <select className="form-input form-select" value={form.stage} onChange={e=>set('stage', e.target.value)}>
