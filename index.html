@@ -1445,7 +1445,39 @@ function useQuotations() {
   return {items,loading};
 }
 async function addQuotation(data) { const { addDoc } = window.fb; await addDoc(userCol(QUOTATIONS_COLLECTION), {...data, createdAt:Date.now()}); }
-async function updateQuotation(docId, data) { const { updateDoc } = window.fb; await updateDoc(userDoc(QUOTATIONS_COLLECTION, docId), data); }
+async function updateQuotation(docId, data) {
+  const { updateDoc, getDocs } = window.fb;
+  // Save the quotation
+  await updateDoc(userDoc(QUOTATIONS_COLLECTION, docId), data);
+
+  // Auto-sync fields to any linked POs and WOs
+  // Fields that should propagate: vendorName, description, value, project, split, paymentSchedule, gstPct
+  const syncFields = {};
+  if (data.vendorName  !== undefined) syncFields.vendorName   = data.vendorName;
+  if (data.description !== undefined) syncFields.description  = data.description;
+  if (data.value       !== undefined) syncFields.value        = data.value;
+  if (data.project     !== undefined) syncFields.project      = data.project;
+  if (data.split       !== undefined) syncFields.split        = data.split;
+  if (data.paymentSchedule !== undefined) syncFields.paymentSchedule = data.paymentSchedule;
+  if (data.gstPct      !== undefined) syncFields.gstPct       = data.gstPct;
+  if (!Object.keys(syncFields).length) return;
+
+  // Find linked POs
+  try {
+    const poSnap = await getDocs(userCol(PO_COLLECTION));
+    const linkedPOs = poSnap.docs.filter(d => d.data().linkedQuotation === docId);
+    await Promise.all(linkedPOs.map(d => updateDoc(d.ref, {...syncFields, quotationSyncedAt: Date.now()})));
+    if (linkedPOs.length) console.log(`Synced ${linkedPOs.length} PO(s) from quotation`);
+  } catch(e) { console.warn('PO sync failed:', e.message); }
+
+  // Find linked WOs
+  try {
+    const woSnap = await getDocs(userCol(WO_COLLECTION));
+    const linkedWOs = woSnap.docs.filter(d => d.data().linkedQuotation === docId);
+    await Promise.all(linkedWOs.map(d => updateDoc(d.ref, {...syncFields, quotationSyncedAt: Date.now()})));
+    if (linkedWOs.length) console.log(`Synced ${linkedWOs.length} WO(s) from quotation`);
+  } catch(e) { console.warn('WO sync failed:', e.message); }
+}
 async function deleteQuotation(docId) { const { deleteDoc } = window.fb; await deleteDoc(userDoc(QUOTATIONS_COLLECTION, docId)); }
 async function clearAllQuotations() {
   const { getDocs, writeBatch, db } = window.fb;
@@ -1818,7 +1850,10 @@ function WorkOrders() {
                   <td style={{fontSize:12,color:'var(--text-muted)'}}>{fmt(w.issueDate)||'—'}</td>
                   <td className="fw-600">{w.vendorName}</td>
                   <td>{w.project?<span className={`badge ${PROJECT_COLOR[w.project]||'grey'}`}>{w.project}</span>:<span className="text-muted">—</span>}</td>
-                  <td style={{maxWidth:180}}>{w.description}</td>
+                  <td style={{maxWidth:180}}>
+                    {w.description}
+                    {w.quotationSyncedAt && <span style={{fontSize:9,background:'#DBEAFE',color:'var(--primary)',borderRadius:3,padding:'1px 4px',marginLeft:4,verticalAlign:'middle'}}>↺ synced</span>}
+                  </td>
                   <td className="amount fw-600">{inr(w.value||0)}</td>
                   <td>{w.due || '—'}</td>
                   <td>
@@ -2164,7 +2199,10 @@ function PurchaseOrders() {
                   <td style={{fontSize:12,color:'var(--text-muted)'}}>{fmt(p.issueDate)||'—'}</td>
                   <td className="fw-600">{p.vendorName}</td>
                   <td>{p.project?<span className={`badge ${PROJECT_COLOR[p.project]||'grey'}`}>{p.project}</span>:<span className="text-muted">—</span>}</td>
-                  <td style={{maxWidth:180}}>{p.description || '—'}</td>
+                  <td style={{maxWidth:180}}>
+                    {p.description || '—'}
+                    {p.quotationSyncedAt && <span style={{fontSize:9,background:'#DBEAFE',color:'var(--primary)',borderRadius:3,padding:'1px 4px',marginLeft:4,verticalAlign:'middle'}}>↺ synced</span>}
+                  </td>
                   <td className="amount fw-600">{inr(p.value||0)}</td>
                   <td>
                     {p.paymentSchedule && p.paymentSchedule.length > 0 ? (
