@@ -2419,7 +2419,12 @@ function CashFlow() {
     })),
   ]
   .filter(r => r.date && r.amt > 0)
-  .sort((a,b) => (a.date||'').localeCompare(b.date||''));
+  .sort((a,b) => {
+    if (!a.date && !b.date) return 0;
+    if (!a.date) return 1;
+    if (!b.date) return -1;
+    return (a.date).localeCompare(b.date);
+  });
 
   // Apply filters
   const filtered = allRows.filter(r =>
@@ -2427,7 +2432,7 @@ function CashFlow() {
     (typeFilter==='all' || r.type===typeFilter) &&
     (projectFilter==='all' || r.project===projectFilter) &&
     (catFilter==='all' || r.cat===catFilter || (catFilter==='Petty — ' && r.cat.startsWith('Petty')))
-  );
+  ).sort((a,b) => (a.date||'').localeCompare(b.date||''));
 
   // Build running balance
   let running = Number(settings.startingBalance) || 0;
@@ -2574,7 +2579,7 @@ function CashFlow() {
         ) : (
           <table>
             <thead>
-              <tr><th>Date</th><th>Description</th><th>Category</th><th>Project</th><th>Ref #</th><th>Inflow</th><th>Outflow</th><th>Balance</th></tr>
+              <tr><th>↑ Date (Oldest first)</th><th>Description</th><th>Category</th><th>Project</th><th>Ref #</th><th>Inflow</th><th>Outflow</th><th>Running Balance</th></tr>
             </thead>
             <tbody>
               <tr style={{background:'var(--primary-50)'}}>
