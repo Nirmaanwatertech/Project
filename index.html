@@ -1415,8 +1415,8 @@ async function syncManualEntryToPOWO(entryId, entryType, linkedPO, linkedWO, amo
 // ─── Stage → Advance / Bill auto-sync ────────────────
 async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule, setScheduleParent, paymentDate) {
   const { addDoc, deleteDoc, updateDoc } = window.fb;
-  const sType = (stage.stageType || stage.name || 'Other').trim();
-  const isAdvance = sType === 'Advance';
+  const sType = (stage.stageType || '').trim() || (stage.name || '').trim() || 'Other';
+  const isAdvance = sType.toLowerCase() === 'advance';
   // Only Bills collection for non-advance types
   const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
   const paidDate = paymentDate || stage.date || new Date().toISOString().slice(0,10);
@@ -3583,6 +3583,8 @@ function BillPayments() {
   const billVendors = [...new Set(items.map(b=>b.payee).filter(Boolean))].sort();
   const filtered = applySort(
     withStatus.filter(b =>
+      // Hide fromSchedule bills that are actually advance payments (mis-routed)
+      !(b.fromSchedule && (b.notes||'').startsWith('Advance')) &&
       (catFilter === 'all' || b.category === catFilter) &&
       (statusFilter === 'all' || b.computedStatus === statusFilter) &&
       (projectFilter === 'all' || b.project === projectFilter) &&
