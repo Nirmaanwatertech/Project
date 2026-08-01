@@ -1415,10 +1415,13 @@ async function syncManualEntryToPOWO(entryId, entryType, linkedPO, linkedWO, amo
 // ─── Stage → Advance / Bill auto-sync ────────────────
 async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule, setScheduleParent, paymentDate) {
   const { addDoc, deleteDoc, updateDoc } = window.fb;
-  const sType = (stage.stageType || stage.name || '').trim();
+  const sType = (stage.stageType || stage.name || 'Other').trim();
   const isAdvance = sType === 'Advance';
+  // Only Bills collection for non-advance types
+  const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
   const paidDate = paymentDate || stage.date || new Date().toISOString().slice(0,10);
-  const refNo = parentType==='po' ? parentDoc.po : parentDoc.wo;
+  const refNo = parentType==='po' ? (parentDoc.po||'') : (parentDoc.wo||'');
+  console.log(`syncStageToModules: type="${sType}" isAdvance=${isAdvance} col=${col} paid=${stage.paid}`);
 
   if (stage.paid) {
     const baseAmt = Number(stage.amount)||0;
@@ -3697,9 +3700,10 @@ function BillPayments() {
             ) : filtered.length===0 ? (
               <div className="module-coming"><div className="big-icon">📑</div><h3>No bills yet</h3><p className="text-muted">Add your first bill.</p></div>
             ) : (
-              <table>
+              <div style={{overflowX:'auto'}}>
+              <table style={{minWidth:900}}>
                 <thead>
-                  <tr><th>Payee</th><th>Project</th><th>Category</th><th>Invoice #</th><th>Due Date</th><th>Bill Amount</th><th>Paid So Far</th><th>Net Payable</th><th>Linked To</th><th>Status</th><th>Actions</th></tr>
+                  <tr><th>Payee</th><th>Project</th><th>Category</th><th>Invoice #</th><th>Due Date</th><th>Bill Amount</th><th>Paid So Far</th><th>Net Payable</th><th>Linked To</th><th>Status</th><th style={{minWidth:180}}>Actions</th></tr>
                 </thead>
                 <tbody>
                   {filtered.map(b => (
@@ -3721,18 +3725,28 @@ function BillPayments() {
                       <td><XRefBadge po={b.linkedPO} wo={b.linkedWO} /></td>
                       <td><span className={`badge ${BILL_STATUS_COLOR[b.computedStatus]}`}>{b.computedStatus}</span></td>
                       <td>
-                        <div className="flex gap-2">
-                          <button className="btn btn-sm btn-ghost" onClick={()=>setEditBill(b)}>Edit</button>
-                          {b.paymentSchedule&&b.paymentSchedule.length>0&&<button className="btn btn-sm btn-outline" onClick={()=>setViewBillSchedule(b)}>Schedule</button>}
-                          {!b.paid && <button className="btn btn-sm btn-primary" onClick={()=>markBillPaid(b.docId)}>Mark Paid</button>}
-                          {b.paid && <button className="btn btn-sm btn-ghost" style={{color:'var(--amber)',border:'1px solid var(--amber)'}} onClick={()=>{if(confirm('Reverse payment? This will mark the bill as unpaid again.'))unmarkBillPaid(b.docId);}}>↩ Unmark Paid</button>}
-                          <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteBill(b.docId);}}>Delete</button>
+                        <div className="flex gap-2" style={{flexWrap:'wrap'}}>
+                          {b.fromSchedule ? (
+                            <>
+                              <span style={{fontSize:10,color:'var(--text-muted)',padding:'3px 6px',background:'var(--grey-50)',borderRadius:4,border:'1px solid var(--border)'}}>📎 From PO/WO Schedule</span>
+                              <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this linked bill? This will NOT unmark the PO stage.'))deleteBill(b.docId);}}>Delete</button>
+                            </>
+                          ) : (
+                            <>
+                              <button className="btn btn-sm btn-ghost" onClick={()=>setEditBill(b)}>Edit</button>
+                              {b.paymentSchedule&&b.paymentSchedule.length>0&&<button className="btn btn-sm btn-outline" onClick={()=>setViewBillSchedule(b)}>Schedule</button>}
+                              {!b.paid && <button className="btn btn-sm btn-primary" onClick={()=>markBillPaid(b.docId)}>Mark Paid</button>}
+                              {b.paid && <button className="btn btn-sm btn-ghost" style={{color:'var(--amber)',border:'1px solid var(--amber)'}} onClick={()=>{if(confirm('Reverse payment? This will mark the bill as unpaid again.'))unmarkBillPaid(b.docId);}}>↩ Unmark Paid</button>}
+                              <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteBill(b.docId);}}>Delete</button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
         </>
@@ -3806,12 +3820,21 @@ function BillPayments() {
                       </td>
                       <td><span className={`badge ${ADV_STATUS_COLOR[a.status]||'grey'}`}>{a.status}</span></td>
                       <td>
-                        <div className="flex gap-2">
-                          <button className="btn btn-sm btn-ghost" onClick={()=>setEditAdvance(a)}>Edit</button>
-                          {a.status !== 'Fully Adjusted' && (
-                            <button className="btn btn-sm btn-ghost" onClick={()=>setLinkingAdvance(a)}>Link / Adjust</button>
+                        <div className="flex gap-2" style={{flexWrap:'wrap'}}>
+                          {a.fromSchedule ? (
+                            <>
+                              <span style={{fontSize:10,color:'var(--text-muted)',padding:'3px 6px',background:'var(--grey-50)',borderRadius:4,border:'1px solid var(--border)'}}>📎 From PO/WO Schedule</span>
+                              <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this linked advance? This will NOT unmark the PO stage.'))deleteAdvance(a.docId);}}>Delete</button>
+                            </>
+                          ) : (
+                            <>
+                              <button className="btn btn-sm btn-ghost" onClick={()=>setEditAdvance(a)}>Edit</button>
+                              {a.status !== 'Fully Adjusted' && (
+                                <button className="btn btn-sm btn-ghost" onClick={()=>setLinkingAdvance(a)}>Link / Adjust</button>
+                              )}
+                              <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteAdvance(a.docId);}}>Delete</button>
+                            </>
                           )}
-                          <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteAdvance(a.docId);}}>Delete</button>
                         </div>
                       </td>
                     </tr>
