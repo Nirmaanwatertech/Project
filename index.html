@@ -1434,11 +1434,12 @@ async function syncScheduleChanges(schedule, parentDoc, parentType) {
     const paidDate = stage.datePaid || stage.date || '';
 
     if (!stage.paid) {
-      // Stage unmarked as paid — delete the linked entry
-      try {
-        await deleteDoc(userDoc(col, stage.linkedEntryId));
-        schedule[i] = {...stage, linkedEntryId: ''};
-      } catch(e) { console.warn('Could not delete entry on unmark:', e.message); }
+      // Stage unmarked as paid — delete the linked entry from either collection
+      const altCol2 = isAdvance ? BILLS_COLLECTION : ADVANCES_COLLECTION;
+      let deleted = false;
+      try { await deleteDoc(userDoc(col, stage.linkedEntryId)); deleted = true; } catch(e) {}
+      if (!deleted) { try { await deleteDoc(userDoc(altCol2, stage.linkedEntryId)); } catch(e) { console.warn('Could not delete:', e.message); } }
+      schedule[i] = {...stage, linkedEntryId: '', paid: false, paidAt: null};
     } else {
       // Stage still paid — update amount/date in case they changed
       try {
@@ -1476,11 +1477,10 @@ async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule,
   const { addDoc, deleteDoc, updateDoc } = window.fb;
   const sType = (stage.stageType || '').trim() || (stage.name || '').trim() || 'Other';
   const isAdvance = sType.toLowerCase() === 'advance';
-  // Only Bills collection for non-advance types
   const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
-  const paidDate = paymentDate || stage.date || new Date().toISOString().slice(0,10);
+  const paidDate = paymentDate || stage.datePaid || stage.date || new Date().toISOString().slice(0,10);
   const refNo = parentType==='po' ? (parentDoc.po||'') : (parentDoc.wo||'');
-  console.log(`syncStageToModules: type="${sType}" isAdvance=${isAdvance} col=${col} paid=${stage.paid}`);
+  console.log(`syncStageToModules: stageType="${stage.stageType}" name="${stage.name}" resolved="${sType}" isAdvance=${isAdvance} col=${col} paid=${stage.paid} linkedEntryId=${stage.linkedEntryId}`);
 
   if (stage.paid) {
     const baseAmt = Number(stage.amount)||0;
@@ -1538,17 +1538,26 @@ async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule,
   } else {
     // Unmark paid → delete linked entry
     if (stage.linkedEntryId) {
-      const sType2 = (stage.stageType || stage.name || '').trim();
-      const col = sType2 === 'Advance' ? ADVANCES_COLLECTION : BILLS_COLLECTION;
+      // Try deleting from correct collection first, then fallback to the other
+      const altCol = isAdvance ? BILLS_COLLECTION : ADVANCES_COLLECTION;
+      let deleted = false;
       try {
         await deleteDoc(userDoc(col, stage.linkedEntryId));
-        const newSchedule = updatedSchedule.map(s =>
-          s.id === stage.id ? {...s, linkedEntryId: ''} : s
-        );
-        const parentCol = parentType==='po' ? PO_COLLECTION : WO_COLLECTION;
-        await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: newSchedule});
-        if (setScheduleParent) setScheduleParent(newSchedule);
-      } catch(e) { console.warn('Could not delete linked entry:', e.message); }
+        deleted = true;
+        console.log(`Deleted from ${col}:`, stage.linkedEntryId);
+      } catch(e) { console.warn(`Not found in ${col}, trying ${altCol}...`); }
+      if (!deleted) {
+        try {
+          await deleteDoc(userDoc(altCol, stage.linkedEntryId));
+          console.log(`Deleted from fallback ${altCol}:`, stage.linkedEntryId);
+        } catch(e) { console.warn('Could not delete from either collection:', e.message); }
+      }
+      const newSchedule = updatedSchedule.map(s =>
+        s.id === stage.id ? {...s, linkedEntryId: '', paid: false, paidAt: null} : s
+      );
+      const parentCol = parentType==='po' ? PO_COLLECTION : WO_COLLECTION;
+      await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: newSchedule});
+      if (setScheduleParent) setScheduleParent(newSchedule);
     }
   }
 }
