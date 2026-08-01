@@ -969,27 +969,30 @@ function ClearDataCard({ item }) {
 }
 
 // ─── PaymentScheduleEditor ────────────────────────────
+const STAGE_TYPES = ['Advance', 'Against Dispatch', 'Against Delivery', 'Retention', 'Other'];
+const STAGE_TYPE_COLOR = { 'Advance':'amber', 'Against Dispatch':'blue', 'Against Delivery':'teal', 'Retention':'grey', 'Other':'grey' };
+
 function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChange }) {
   const baseAmt = Number(totalValue)||0;
   const gstRate = parseFloat(gstPct)||0;
   const totalGstAmt = Math.round(baseAmt * gstRate / 100);
 
   function addRow() {
-    setRows(r=>[...r,{id:genRowId(),name:'',pct:'',amount:'',date:'',includesGst:false,gstAmount:''}]);
+    setRows(r=>[...r,{id:genRowId(),name:'',stageType:'Advance',pct:'',amount:'',date:'',includesGst:false,gstAmount:'',linkedEntryId:''}]);
   }
   function removeRow(id) { setRows(r=>r.filter(x=>x.id!==id)); }
   function updateRow(id,field,value) {
     setRows(r=>r.map(x=>{
       if(x.id!==id) return x;
       const next={...x,[field]:value};
-      // % ↔ amount auto-calc on base (excl GST)
       if(field==='pct'&&baseAmt) next.amount=String(Math.round((parseFloat(value)||0)/100*baseAmt));
       if(field==='amount'&&baseAmt>0) next.pct=String(Math.round((Number(value)||0)/baseAmt*100));
-      // When GST checkbox toggled on, pre-fill gstAmount with full GST
       if(field==='includesGst') {
         if(value && !next.gstAmount && totalGstAmt>0) next.gstAmount=String(totalGstAmt);
         if(!value) next.gstAmount='';
       }
+      // Auto-set name from stageType if name is blank
+      if(field==='stageType' && !x.name) next.name=value;
       return next;
     }));
   }
@@ -1011,10 +1014,9 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
           value={gstPct||''} onChange={e=>onGstPctChange&&onGstPctChange(e.target.value)}
           placeholder="18" />
         {gstRate>0&&baseAmt>0&&(
-          <span style={{fontSize:11.5,color:'var(--text-muted)'}}>
-            Total GST = <strong style={{color:'var(--primary)'}}>{inr(totalGstAmt)}</strong>
-            &nbsp;· Tick "GST" on the stage where GST is payable
-            &nbsp;· ITC recovered on 20th of following month
+          <span style={{fontSize:11,color:'var(--text-muted)'}}>
+            GST = <strong style={{color:'var(--primary)'}}>{inr(totalGstAmt)}</strong>
+            &nbsp;· Tick "GST" on applicable stage · ITC on 20th of next month
           </span>
         )}
       </div>
@@ -1024,47 +1026,59 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
           <table style={{width:'100%'}}>
             <thead>
               <tr style={{background:'var(--grey-50)'}}>
-                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>Stage</th>
+                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>Type</th>
+                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>Name</th>
                 <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>%</th>
                 <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>Amount (₹)</th>
                 <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>Due Date</th>
-                <th style={{fontSize:10,padding:'5px 8px',textAlign:'center',color:'var(--primary)',whiteSpace:'nowrap'}}>GST?</th>
-                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--primary)'}}>GST Amt (₹)</th>
+                <th style={{fontSize:10,padding:'5px 8px',textAlign:'center',color:'var(--primary)'}}>GST?</th>
+                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--primary)'}}>GST Amt</th>
+                <th style={{fontSize:10,padding:'5px 8px',textAlign:'center',color:'var(--text-muted)'}}>Linked</th>
                 <th style={{fontSize:10,padding:'5px 8px',width:20}}></th>
               </tr>
             </thead>
             <tbody>
               {rows.map(r=>(
-                <tr key={r.id} style={{borderTop:'1px solid var(--grey-50)',background:r.includesGst?'#EFF6FF':''}}>
+                <tr key={r.id} style={{borderTop:'1px solid var(--grey-50)',background:r.includesGst?'#EFF6FF':r.paid?'#F0FFF4':''}}>
+                  <td style={{padding:3,width:130}}>
+                    <select className="form-input form-select" style={{fontSize:11,padding:'3px 4px'}}
+                      value={r.stageType||'Advance'} onChange={e=>updateRow(r.id,'stageType',e.target.value)}>
+                      {STAGE_TYPES.map(t=><option key={t}>{t}</option>)}
+                    </select>
+                  </td>
                   <td style={{padding:3}}>
                     <input className="form-input" style={{fontSize:11.5,padding:'4px 6px'}}
-                      value={r.name} onChange={e=>updateRow(r.id,'name',e.target.value)} placeholder="e.g. Advance" />
+                      value={r.name} onChange={e=>updateRow(r.id,'name',e.target.value)}
+                      placeholder={r.stageType||'Stage name'} />
                   </td>
-                  <td style={{padding:3,width:55}}>
+                  <td style={{padding:3,width:50}}>
                     <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px'}}
                       value={r.pct} onChange={e=>updateRow(r.id,'pct',e.target.value)} placeholder="30" />
                   </td>
-                  <td style={{padding:3,width:105}}>
+                  <td style={{padding:3,width:100}}>
                     <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px'}}
                       value={r.amount} onChange={e=>updateRow(r.id,'amount',e.target.value)} placeholder="0" />
                   </td>
-                  <td style={{padding:3,width:125}}>
+                  <td style={{padding:3,width:120}}>
                     <input className="form-input" type="date" style={{fontSize:11.5,padding:'4px 6px'}}
                       value={r.date} onChange={e=>updateRow(r.id,'date',e.target.value)} />
                   </td>
-                  <td style={{padding:3,textAlign:'center',width:40}}>
+                  <td style={{padding:3,textAlign:'center',width:36}}>
                     <input type="checkbox" checked={!!r.includesGst}
                       onChange={e=>updateRow(r.id,'includesGst',e.target.checked)}
-                      style={{width:16,height:16,cursor:'pointer',accentColor:'var(--primary)'}} />
+                      style={{width:14,height:14,cursor:'pointer',accentColor:'var(--primary)'}} />
                   </td>
-                  <td style={{padding:3,width:105}}>
+                  <td style={{padding:3,width:95}}>
                     {r.includesGst ? (
-                      <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px',background:'#EFF6FF',borderColor:'var(--primary)'}}
+                      <input className="form-input font-mono" style={{fontSize:11,padding:'3px 5px',background:'#EFF6FF',borderColor:'var(--primary)'}}
                         value={r.gstAmount} onChange={e=>updateRow(r.id,'gstAmount',e.target.value)}
                         placeholder={String(totalGstAmt||0)} />
-                    ) : (
-                      <span style={{fontSize:11,color:'var(--text-muted)',padding:'0 6px'}}>—</span>
-                    )}
+                    ) : <span style={{fontSize:11,color:'var(--text-muted)',padding:'0 4px'}}>—</span>}
+                  </td>
+                  <td style={{padding:3,textAlign:'center',width:40}}>
+                    {r.linkedEntryId
+                      ? <span title="Linked to Advance/Bill" style={{fontSize:12,color:'var(--green)'}}>🔗</span>
+                      : <span style={{fontSize:11,color:'var(--text-muted)'}}>—</span>}
                   </td>
                   <td style={{padding:3,textAlign:'center'}}>
                     <span onClick={()=>removeRow(r.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span>
@@ -1080,15 +1094,12 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
             <span style={{color:'var(--text-muted)'}}>Base: {inr(stageAmtTotal)}</span>
             {gstRate>0&&(
               <span style={{color:gstAssigned>0?'var(--primary)':'var(--text-muted)'}}>
-                GST assigned: {inr(gstAssigned)} / {inr(totalGstAmt)}
-                {gstAssigned>0&&<span style={{marginLeft:4}}>· ITC on 20th of next month</span>}
+                GST assigned: {inr(gstAssigned)}/{inr(totalGstAmt)}
               </span>
             )}
-            {gstAssigned>0&&(
-              <span style={{color:'var(--green)',fontWeight:600}}>
-                Total payable: {inr(stageAmtTotal+gstAssigned)}
-              </span>
-            )}
+            <span style={{color:'var(--text-muted)',fontSize:10}}>
+              💡 Advance type → auto-creates Advance entry when marked paid · Dispatch/Delivery → auto-creates Bill
+            </span>
           </div>
         </div>
       )}
@@ -1310,6 +1321,128 @@ function NewWOModal({ onClose, existing, quotations }) {
       </div>
     </div>
   );
+}
+
+// ─── Manual entry → PO/WO stage link ─────────────────
+// When a manually created Advance or Bill is linked to a PO/WO,
+// find the best matching unlinked stage and store the entry ID there
+async function syncManualEntryToPOWO(entryId, entryType, linkedPO, linkedWO, amount, date) {
+  const { getDocs, updateDoc } = window.fb;
+  const isAdvance = entryType === 'advance';
+
+  // Find the PO or WO document
+  let parentDoc = null, parentCol = null, parentId = null;
+  if (linkedPO) {
+    const snap = await getDocs(userCol(PO_COLLECTION));
+    const match = snap.docs.find(d => d.data().po === linkedPO);
+    if (match) { parentDoc = match.data(); parentCol = PO_COLLECTION; parentId = match.id; }
+  } else if (linkedWO) {
+    const snap = await getDocs(userCol(WO_COLLECTION));
+    const match = snap.docs.find(d => d.data().wo === linkedWO);
+    if (match) { parentDoc = match.data(); parentCol = WO_COLLECTION; parentId = match.id; }
+  }
+  if (!parentDoc || !parentDoc.paymentSchedule) return;
+
+  // Find the best matching unlinked stage of the right type
+  const targetTypes = isAdvance ? ['Advance'] : ['Against Dispatch','Against Delivery','Retention','Other'];
+  const schedule = parentDoc.paymentSchedule;
+  const matchIdx = schedule.findIndex(s =>
+    targetTypes.includes(s.stageType||'Other') &&
+    !s.linkedEntryId &&
+    (Math.abs(Number(s.amount||0) - amount) < 1 || !s.amount)
+  );
+
+  if (matchIdx === -1) {
+    // No matching stage found — just log, don't force-link
+    console.log('No matching unlinked stage found for manual entry, linking skipped');
+    return;
+  }
+
+  // Store the entry ID in the matched stage
+  const newSchedule = schedule.map((s,i) =>
+    i === matchIdx ? {...s, linkedEntryId: entryId, paid: true, paidAt: Date.now()} : s
+  );
+  await updateDoc(userDoc(parentCol, parentId), { paymentSchedule: newSchedule });
+  console.log(`Linked manual ${entryType} to stage ${schedule[matchIdx].name} in ${linkedPO||linkedWO}`);
+}
+
+// ─── Stage → Advance / Bill auto-sync ────────────────
+async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule, setScheduleParent) {
+  // parentDoc = the PO or WO object
+  // parentType = 'po' or 'wo'
+  // updatedSchedule = full schedule array with this stage's changes
+  const { addDoc, deleteDoc, updateDoc } = window.fb;
+  const isAdvance = stage.stageType === 'Advance';
+  const isBill    = stage.stageType === 'Against Dispatch' || stage.stageType === 'Against Delivery' || stage.stageType === 'Retention' || stage.stageType === 'Other';
+
+  if (stage.paid) {
+    // Mark paid → create or update linked entry
+    const entryData = isAdvance ? {
+      vendor:      parentDoc.vendorName || '',
+      amount:      Number(stage.amount)||0,
+      datePaid:    stage.date || new Date().toISOString().slice(0,10),
+      paymentMode: 'NEFT',
+      refNumber:   '',
+      narration:   `${stage.name||stage.stageType} — ${parentType==='po'?parentDoc.po:parentDoc.wo}`,
+      linkedPO:    parentType==='po' ? parentDoc.po : '',
+      linkedWO:    parentType==='wo' ? parentDoc.wo : '',
+      project:     parentDoc.project||'',
+      split:       parentDoc.split||{pontoon:50,wtp:50},
+      status:      'Unadjusted',
+      balanceAmount: Number(stage.amount)||0,
+      fromSchedule: true,
+    } : {
+      payee:       parentDoc.vendorName||'',
+      category:    'Vendor',
+      invoiceNo:   parentType==='po' ? parentDoc.po : parentDoc.wo,
+      invoiceDate: stage.date||'',
+      due:         stage.date||'',
+      amount:      Number(stage.amount)||(Number(stage.amount)||0)+(stage.includesGst?Number(stage.gstAmount||0):0),
+      notes:       `${stage.name||stage.stageType} — ${parentType==='po'?parentDoc.po:parentDoc.wo}`,
+      linkedPO:    parentType==='po' ? parentDoc.po : '',
+      linkedWO:    parentType==='wo' ? parentDoc.wo : '',
+      project:     parentDoc.project||'',
+      split:       parentDoc.split||{pontoon:50,wtp:50},
+      gstPct:      stage.includesGst ? (Number(stage.gstAmount||0)/Number(stage.amount||1)*100).toFixed(0) : '',
+      fromSchedule: true,
+    };
+
+    if (stage.linkedEntryId) {
+      // Update existing entry
+      const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
+      try { await updateDoc(userDoc(col, stage.linkedEntryId), entryData); }
+      catch(e) { console.warn('Could not update linked entry:', e.message); }
+    } else {
+      // Create new entry
+      const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
+      try {
+        const ref = await addDoc(userCol(col), {...entryData, createdAt: Date.now()});
+        // Store the new entry ID back into the stage
+        const newSchedule = updatedSchedule.map(s =>
+          s.id === stage.id ? {...s, linkedEntryId: ref.id} : s
+        );
+        const parentCol = parentType==='po' ? PO_COLLECTION : WO_COLLECTION;
+        const parentId  = parentType==='po' ? parentDoc.docId : parentDoc.docId;
+        await updateDoc(userDoc(parentCol, parentId), {paymentSchedule: newSchedule});
+        if (setScheduleParent) setScheduleParent(newSchedule);
+      } catch(e) { console.warn('Could not create linked entry:', e.message); }
+    }
+  } else {
+    // Unmark paid → delete linked entry
+    if (stage.linkedEntryId) {
+      const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
+      try {
+        await deleteDoc(userDoc(col, stage.linkedEntryId));
+        // Remove linkedEntryId from stage
+        const newSchedule = updatedSchedule.map(s =>
+          s.id === stage.id ? {...s, linkedEntryId: ''} : s
+        );
+        const parentCol = parentType==='po' ? PO_COLLECTION : WO_COLLECTION;
+        await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: newSchedule});
+        if (setScheduleParent) setScheduleParent(newSchedule);
+      } catch(e) { console.warn('Could not delete linked entry:', e.message); }
+    }
+  }
 }
 
 function IssuePOModal({ quotation, onClose, onIssued }) {
@@ -1858,7 +1991,7 @@ function WorkOrders() {
                   <td>{w.due || '—'}</td>
                   <td>
                     {w.paymentSchedule && w.paymentSchedule.length > 0 ? (
-                      <span className="btn btn-sm btn-ghost" style={{cursor:'pointer',whiteSpace:'nowrap'}} onClick={() => setViewSchedule({...w, label:w.wo})}>
+                      <span className="btn btn-sm btn-ghost" style={{cursor:'pointer',whiteSpace:'nowrap'}} onClick={() => setViewSchedule({...w, label:w.wo, _type:'wo'})}>
                         {w.paymentSchedule.length} stage{w.paymentSchedule.length===1?'':'s'}
                       </span>
                     ) : <span className="text-muted text-sm">—</span>}
@@ -2206,7 +2339,7 @@ function PurchaseOrders() {
                   <td className="amount fw-600">{inr(p.value||0)}</td>
                   <td>
                     {p.paymentSchedule && p.paymentSchedule.length > 0 ? (
-                      <span className="btn btn-sm btn-ghost" style={{cursor:'pointer',whiteSpace:'nowrap'}} onClick={() => setViewSchedule({...p, label:p.po})}>
+                      <span className="btn btn-sm btn-ghost" style={{cursor:'pointer',whiteSpace:'nowrap'}} onClick={() => setViewSchedule({...p, label:p.po, _type:'po'})}>
                         {p.paymentSchedule.length} stage{p.paymentSchedule.length===1?'':'s'}
                       </span>
                     ) : <span className="text-muted text-sm">—</span>}
@@ -2231,41 +2364,144 @@ function PurchaseOrders() {
       {showNew && <NewPOModal onClose={() => setShowNew(false)} nextNumber={nextNumber} quotations={quotations} />}
       {editPO && <NewPOModal onClose={() => setEditPO(null)} nextNumber={nextNumber} quotations={quotations} existing={editPO} />}
       {viewSchedule && (
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={() => setViewSchedule(null)}>
-          <div style={{background:'var(--surface)',borderRadius:10,width:440,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
-            <div style={{background:'var(--primary)',padding:'14px 18px'}}>
-              <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payment Schedule — {viewSchedule.label}</span>
-            </div>
-            <div style={{padding:'16px 20px'}}>
-              <table style={{width:'100%'}}>
-                <thead><tr>
-                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)',padding:'4px 0'}}>Stage</th>
-                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>%</th>
-                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Amount</th>
-                  <th style={{fontSize:10,textAlign:'left',color:'var(--text-muted)'}}>Date</th>
-                </tr></thead>
-                <tbody>
-                  {(viewSchedule.paymentSchedule||[]).map((r,i) => (
-                    <tr key={i} style={{borderTop:'1px solid var(--grey-50)'}}>
-                      <td style={{padding:'6px 0',fontSize:12.5}}>{r.name}</td>
-                      <td style={{fontSize:12.5}}>{r.pct}%</td>
-                      <td className="amount" style={{fontSize:12.5}}>{inr(r.amount||0)}</td>
-                      <td style={{fontSize:12.5}}>{r.date || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{padding:'0 20px 16px',display:'flex',justifyContent:'flex-end'}}>
-              <button onClick={() => setViewSchedule(null)} className="btn btn-ghost">Close</button>
-            </div>
-          </div>
-        </div>
+        <POWOScheduleModal
+          doc={viewSchedule}
+          parentType={viewSchedule._type||'po'}
+          onClose={()=>setViewSchedule(null)}
+          onScheduleUpdate={async(newSchedule)=>{
+            const col = viewSchedule._type==='wo' ? WO_COLLECTION : PO_COLLECTION;
+            const { updateDoc } = window.fb;
+            await updateDoc(userDoc(col, viewSchedule.docId), {paymentSchedule:newSchedule});
+            setViewSchedule(null);
+          }}
+        />
       )}
     </div>
   );
 }
 
+
+// ─── PO/WO Schedule Modal with Mark Paid + Auto-sync ──
+function POWOScheduleModal({ doc, parentType, onClose, onScheduleUpdate }) {
+  const [stages, setStages] = useState((doc.paymentSchedule||[]).map(s=>({...s})));
+  const [saving, setSaving] = useState(null); // stageId being processed
+
+  const paidAmt   = stages.filter(s=>s.paid).reduce((s,r)=>s+Number(r.amount||0),0);
+  const unpaidAmt = stages.filter(s=>!s.paid).reduce((s,r)=>s+Number(r.amount||0),0);
+
+  async function toggleStage(stage) {
+    setSaving(stage.id);
+    try {
+      const newPaid = !stage.paid;
+      const updatedStages = stages.map(s => s.id===stage.id ? {...s, paid:newPaid, paidAt:newPaid?Date.now():null} : s);
+      setStages(updatedStages);
+
+      // Sync to Advances or Bills
+      await syncStageToModules(
+        {...stage, paid: newPaid},
+        doc,
+        parentType,
+        updatedStages,
+        setStages
+      );
+
+      // Save updated schedule to PO/WO
+      await onScheduleUpdate(updatedStages.map(s => s.id===stage.id ? {...s, paid:newPaid, paidAt:newPaid?Date.now():null} : s));
+    } catch(e) {
+      console.error(e);
+      alert('Error: ' + e.message);
+      setStages(stages); // revert
+    } finally { setSaving(null); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:620,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0}}>
+          <div style={{fontWeight:700,fontSize:14,color:'#fff'}}>
+            Payment Schedule — {doc.po||doc.wo} · {doc.vendorName}
+          </div>
+          <div style={{fontSize:11,color:'rgba(255,255,255,.7)',marginTop:2}}>
+            Advance stages auto-create Advance entries · Dispatch/Delivery stages auto-create Bills
+          </div>
+        </div>
+        <div style={{padding:'16px 20px'}}>
+          <div style={{display:'flex',gap:12,marginBottom:14}}>
+            <div style={{flex:1,padding:'8px 12px',background:'#F0FFF4',borderRadius:6,border:'1px solid var(--green)'}}>
+              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Paid</div>
+              <div className="amount" style={{fontSize:15,fontWeight:700,color:'var(--green)'}}>{inr(paidAmt)}</div>
+            </div>
+            <div style={{flex:1,padding:'8px 12px',background:'#FFF7ED',borderRadius:6,border:'1px solid var(--amber)'}}>
+              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Remaining</div>
+              <div className="amount" style={{fontSize:15,fontWeight:700,color:'var(--amber)'}}>{inr(unpaidAmt)}</div>
+            </div>
+            <div style={{flex:1,padding:'8px 12px',background:'var(--grey-50)',borderRadius:6,border:'1px solid var(--border)'}}>
+              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Total Value</div>
+              <div className="amount" style={{fontSize:15,fontWeight:700}}>{inr(doc.value||0)}</div>
+            </div>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{background:'var(--grey-50)'}}>
+                <th style={{padding:'7px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Type</th>
+                <th style={{padding:'7px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Stage</th>
+                <th style={{padding:'7px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Amount</th>
+                <th style={{padding:'7px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Due Date</th>
+                <th style={{padding:'7px 10px',fontSize:11,textAlign:'center',color:'var(--text-muted)'}}>Status</th>
+                <th style={{padding:'7px 10px',fontSize:11,textAlign:'center',color:'var(--text-muted)'}}>Linked</th>
+                <th style={{padding:'7px 10px',fontSize:11,textAlign:'center',color:'var(--text-muted)'}}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stages.map(s=>(
+                <tr key={s.id} style={{borderTop:'1px solid var(--grey-50)',background:s.paid?'#F0FFF4':''}}>
+                  <td style={{padding:'10px'}}>
+                    <span className={`badge ${STAGE_TYPE_COLOR[s.stageType||'Other']||'grey'}`} style={{fontSize:10}}>
+                      {s.stageType||'Other'}
+                    </span>
+                  </td>
+                  <td style={{padding:'10px',fontSize:12.5,fontWeight:600}}>{s.name||s.stageType||'Stage'}</td>
+                  <td className="amount" style={{padding:'10px',fontSize:12.5,fontWeight:700,color:s.paid?'var(--green)':'var(--red)'}}>
+                    {inr(Number(s.amount||0)+(s.includesGst?Number(s.gstAmount||0):0))}
+                    {s.includesGst&&Number(s.gstAmount)>0&&<div style={{fontSize:10,color:'var(--primary)',fontWeight:400}}>incl. GST {inr(s.gstAmount)}</div>}
+                  </td>
+                  <td style={{padding:'10px',fontSize:12,color:'var(--text-muted)'}}>{fmt(s.date)||'—'}</td>
+                  <td style={{padding:'10px',textAlign:'center'}}>
+                    {s.paid ? <span className="badge green">✓ Paid</span> : <span className="badge grey">Pending</span>}
+                  </td>
+                  <td style={{padding:'10px',textAlign:'center',fontSize:12}}>
+                    {s.linkedEntryId
+                      ? <span title={`Linked to ${s.stageType==='Advance'?'Advance':'Bill'}: ${s.linkedEntryId}`} style={{color:'var(--green)'}}>🔗</span>
+                      : <span style={{color:'var(--text-muted)'}}>—</span>}
+                  </td>
+                  <td style={{padding:'10px',textAlign:'center'}}>
+                    {saving===s.id ? (
+                      <span style={{fontSize:11,color:'var(--text-muted)'}}>Saving…</span>
+                    ) : s.paid ? (
+                      <button className="btn btn-sm btn-ghost" style={{color:'var(--amber)',border:'1px solid var(--amber)',fontSize:11}}
+                        onClick={()=>toggleStage(s)}>↩ Unmark</button>
+                    ) : (
+                      <button className="btn btn-sm btn-primary" style={{fontSize:11}}
+                        onClick={()=>toggleStage(s)}>Mark Paid</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{marginTop:10,fontSize:11,color:'var(--text-muted)',background:'var(--grey-50)',padding:'8px 10px',borderRadius:4}}>
+            💡 <strong>Advance</strong> → auto-creates entry in Advance Payments &nbsp;·&nbsp;
+            <strong>Dispatch/Delivery/Retention</strong> → auto-creates entry in Bill Payments &nbsp;·&nbsp;
+            Unmarking deletes the linked entry
+          </div>
+        </div>
+        <div style={{padding:'0 20px 16px',display:'flex',justifyContent:'flex-end'}}>
+          <button className="btn btn-ghost" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Cash Flow Module ──────────────────────────────────
 const SETTINGS_COLLECTION = 'settings';
@@ -2908,11 +3144,18 @@ function NewBillModal({ onClose, existing }) {
     if (!form.payee.trim() || !form.amount || !form.due) return;
     setSaving(true);
     try {
+      let savedDocId = existing?.docId;
       if (isEdit) {
-        const { db, doc, updateDoc } = window.fb;
+        const { updateDoc } = window.fb;
         await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...form, amount: Number(form.amount), paymentSchedule: schedule, gstPct });
       } else {
-        await addBill({ ...form, amount: Number(form.amount), entryType: 'invoice', paymentSchedule: schedule, gstPct });
+        const { addDoc } = window.fb;
+        const ref = await addDoc(userCol(BILLS_COLLECTION), { ...form, amount: Number(form.amount), entryType: 'invoice', paymentSchedule: schedule, gstPct, createdAt: Date.now() });
+        savedDocId = ref.id;
+      }
+      // Sync link back to PO or WO schedule if linked
+      if ((form.linkedPO || form.linkedWO) && savedDocId) {
+        await syncManualEntryToPOWO(savedDocId, 'bill', form.linkedPO, form.linkedWO, Number(form.amount), form.due);
       }
       onClose();
     } catch (e) { console.error(e); alert('Could not save bill.'); }
@@ -3015,11 +3258,18 @@ function NewAdvanceModal({ onClose, pos, wos, bills, existing }) {
     setSaving(true);
     try {
       const amt = Number(form.amount);
+      let savedDocId = existing?.docId;
       if (isEdit) {
         const { updateDoc } = window.fb;
         await updateDoc(userDoc(ADVANCES_COLLECTION, existing.docId), { ...form, amount: amt });
       } else {
-        await addAdvance({ ...form, amount: amt, balanceAmount: amt });
+        const { addDoc } = window.fb;
+        const ref = await addDoc(userCol(ADVANCES_COLLECTION), { ...form, amount: amt, balanceAmount: amt, status: 'Unadjusted', createdAt: Date.now() });
+        savedDocId = ref.id;
+      }
+      // Sync link back to PO or WO schedule if linked
+      if ((form.linkedPO || form.linkedWO) && savedDocId) {
+        await syncManualEntryToPOWO(savedDocId, 'advance', form.linkedPO, form.linkedWO, amt, form.datePaid);
       }
       onClose();
     } catch (e) { console.error(e); alert('Could not save advance payment.'); }
