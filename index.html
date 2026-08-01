@@ -2259,20 +2259,23 @@ async function clearCashFlowData() {
 }
 
 function CashFlow() {
-  const [view, setView] = useState('all'); // 'all' | 'past' | 'future'
-  const [typeFilter, setTypeFilter] = useState('all'); // 'all' | 'in' | 'out'
+  const [view, setView] = useState('all');
+  const [typeFilter, setTypeFilter] = useState('all');
   const [projectFilter, setCFProjectFilter] = useState('all');
+  const [catFilter, setCatFilter] = useState('all');
   const { items: bills,    loading: billsLoading    } = useBills();
   const { items: advances, loading: advLoading      } = useAdvances();
   const { items: receipts, loading: receiptsLoading } = useReceipts();
   const { items: capital,  loading: capitalLoading  } = useCapitalLoans();
   const { items: expenses, loading: expLoading      } = useExpenses();
   const { items: petty,    loading: pettyLoading    } = usePettyCash();
+  const { items: pos,      loading: posLoading      } = usePurchaseOrders();
+  const { items: wos,      loading: wosLoading      } = useWorkOrders();
   const { settings, loading: settingsLoading } = useCashSettings();
   const [editingBalance, setEditingBalance] = useState(false);
   const [balanceInput, setBalanceInput] = useState('');
 
-  const loading = billsLoading || settingsLoading || receiptsLoading || capitalLoading || advLoading || expLoading || pettyLoading;
+  const loading = billsLoading || settingsLoading || receiptsLoading || capitalLoading || advLoading || expLoading || pettyLoading || posLoading || wosLoading;
   const todayStr = new Date().toISOString().slice(0,10);
 
   // ── Build all rows from every money movement ──
@@ -2325,6 +2328,70 @@ function CashFlow() {
       type: 'out', amt: Number(a.amount||0), project: a.project||'',
       ref: a.refNumber||'', isPast: (a.datePaid||'') <= todayStr,
     })),
+    // PO payment schedules
+    ...pos.flatMap(p => {
+      if (p.paymentSchedule && p.paymentSchedule.length > 0) {
+        return p.paymentSchedule.flatMap(stage => {
+          const rows = [{
+            date: stage.date||'', label: `${p.po} — ${p.vendorName} (${stage.name||'Payment'})`,
+            cat: 'Purchase Order', subcat: stage.name||'',
+            type: 'out', amt: Number(stage.amount||0), project: p.project||'',
+            ref: p.po||'', isPast: (stage.date||'') < todayStr,
+          }];
+          if (stage.includesGst && Number(stage.gstAmount||0) > 0) {
+            rows.push({
+              date: stage.date||'', label: `GST — ${p.vendorName} (${p.po})`,
+              cat: 'GST Paid', subcat: `${p.gstPct||''}%`,
+              type: 'out', amt: Number(stage.gstAmount), project: p.project||'',
+              ref: p.po||'', isPast: (stage.date||'') < todayStr,
+            });
+            const d = new Date(stage.date||todayStr);
+            d.setMonth(d.getMonth()+1);
+            const itcDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-20`;
+            rows.push({
+              date: itcDate, label: `ITC Recovery — ${p.vendorName} (${p.po})`,
+              cat: 'GST ITC Recovery', subcat: 'Input Tax Credit',
+              type: 'in', amt: Number(stage.gstAmount), project: p.project||'',
+              ref: p.po||'', isPast: itcDate < todayStr,
+            });
+          }
+          return rows;
+        });
+      }
+      return [];  // POs without schedule don't create cashflow rows (no confirmed date)
+    }),
+    // WO payment schedules
+    ...wos.flatMap(w => {
+      if (w.paymentSchedule && w.paymentSchedule.length > 0) {
+        return w.paymentSchedule.flatMap(stage => {
+          const rows = [{
+            date: stage.date||'', label: `${w.wo} — ${w.vendorName} (${stage.name||'Payment'})`,
+            cat: 'Work Order', subcat: stage.name||'',
+            type: 'out', amt: Number(stage.amount||0), project: w.project||'',
+            ref: w.wo||'', isPast: (stage.date||'') < todayStr,
+          }];
+          if (stage.includesGst && Number(stage.gstAmount||0) > 0) {
+            rows.push({
+              date: stage.date||'', label: `GST — ${w.vendorName} (${w.wo})`,
+              cat: 'GST Paid', subcat: `${w.gstPct||''}%`,
+              type: 'out', amt: Number(stage.gstAmount), project: w.project||'',
+              ref: w.wo||'', isPast: (stage.date||'') < todayStr,
+            });
+            const d = new Date(stage.date||todayStr);
+            d.setMonth(d.getMonth()+1);
+            const itcDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-20`;
+            rows.push({
+              date: itcDate, label: `ITC Recovery — ${w.vendorName} (${w.wo})`,
+              cat: 'GST ITC Recovery', subcat: 'Input Tax Credit',
+              type: 'in', amt: Number(stage.gstAmount), project: w.project||'',
+              ref: w.wo||'', isPast: itcDate < todayStr,
+            });
+          }
+          return rows;
+        });
+      }
+      return [];  // WOs without schedule don't create cashflow rows
+    }),
     ...expenses.map(e => ({
       date: e.date||'', label: e.description||(e.vendor||'General Expense'),
       cat: e.category||'General Expense', subcat: e.paymentMode||'',
@@ -2358,7 +2425,8 @@ function CashFlow() {
   const filtered = allRows.filter(r =>
     (view==='all' || (view==='past' && r.isPast) || (view==='future' && !r.isPast)) &&
     (typeFilter==='all' || r.type===typeFilter) &&
-    (projectFilter==='all' || r.project===projectFilter)
+    (projectFilter==='all' || r.project===projectFilter) &&
+    (catFilter==='all' || r.cat===catFilter || (catFilter==='Petty — ' && r.cat.startsWith('Petty')))
   );
 
   // Build running balance
@@ -2484,9 +2552,13 @@ function CashFlow() {
               <option value="in">Inflows only</option>
               <option value="out">Outflows only</option>
             </select>
-            <select className="form-input form-select" style={{width:130}} value={projectFilter} onChange={e=>setCFProjectFilter(e.target.value)}>
+            <select className="form-input form-select" style={{width:160}} value={projectFilter} onChange={e=>setCFProjectFilter(e.target.value)}>
               <option value="all">All Projects</option>
               {PROJECTS.map(p=><option key={p}>{p}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:160}} value={catFilter} onChange={e=>setCatFilter(e.target.value)}>
+              <option value="all">All Categories</option>
+              {['Bill','Purchase Order','Work Order','Advance','General Expense','Petty — ','Client Receipt','Capital Inflow','GST Paid','GST ITC Recovery'].map(c=><option key={c} value={c}>{c}</option>)}
             </select>
           </div>
         </div>
