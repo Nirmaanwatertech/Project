@@ -1293,8 +1293,13 @@ function NewWOModal({ onClose, existing, quotations }) {
     if(!form.vendorName.trim()||!form.description.trim()) return;
     setSaving(true);
     try {
-      if(isEdit) await updateWorkOrder(existing.docId,{...form,value:Number(form.value)||0,paymentSchedule:schedule,gstPct});
-      else { const { addDoc } = window.fb; await addDoc(userCol(WO_COLLECTION),{...form,value:Number(form.value)||0,paymentSchedule:schedule,gstPct,createdAt:Date.now()}); }
+      if(isEdit) {
+        await updateWorkOrder(existing.docId,{...form,value:Number(form.value)||0,paymentSchedule:schedule,gstPct});
+        await syncScheduleChanges(schedule, {...existing,...form,docId:existing.docId,value:Number(form.value)||0}, 'wo');
+      } else {
+        const { addDoc } = window.fb;
+        await addDoc(userCol(WO_COLLECTION),{...form,value:Number(form.value)||0,paymentSchedule:schedule,gstPct,createdAt:Date.now()});
+      }
       onClose();
     }catch(e){console.error(e);alert('Could not save.');}
     finally{setSaving(false);}
@@ -1410,6 +1415,60 @@ async function syncManualEntryToPOWO(entryId, entryType, linkedPO, linkedWO, amo
   );
   await updateDoc(userDoc(parentCol, parentId), { paymentSchedule: newSchedule });
   console.log(`Linked manual ${entryType} to stage ${schedule[matchIdx].name} in ${linkedPO||linkedWO}`);
+}
+
+// ─── Sync all schedule changes to linked entries ──────
+// Called when PO/WO is saved — updates or deletes linked Advance/Bill entries
+async function syncScheduleChanges(schedule, parentDoc, parentType) {
+  if (!schedule || !schedule.length) return;
+  const { updateDoc, deleteDoc } = window.fb;
+
+  for (let i = 0; i < schedule.length; i++) {
+    const stage = schedule[i];
+    if (!stage.linkedEntryId) continue;
+
+    const sType = (stage.stageType || stage.name || 'Other').trim();
+    const isAdvance = sType.toLowerCase() === 'advance';
+    const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
+    const refNo = parentType==='po' ? (parentDoc.po||'') : (parentDoc.wo||'');
+    const paidDate = stage.datePaid || stage.date || '';
+
+    if (!stage.paid) {
+      // Stage unmarked as paid — delete the linked entry
+      try {
+        await deleteDoc(userDoc(col, stage.linkedEntryId));
+        schedule[i] = {...stage, linkedEntryId: ''};
+      } catch(e) { console.warn('Could not delete entry on unmark:', e.message); }
+    } else {
+      // Stage still paid — update amount/date in case they changed
+      try {
+        const baseAmt = Number(stage.amount)||0;
+        const gstAmt = stage.includesGst ? Number(stage.gstAmount||0) : 0;
+        if (isAdvance) {
+          await updateDoc(userDoc(ADVANCES_COLLECTION, stage.linkedEntryId), {
+            amount: baseAmt, balanceAmount: baseAmt,
+            datePaid: paidDate, narration: `${sType} — ${refNo}`,
+            vendorName: parentDoc.vendorName||'', project: parentDoc.project||'',
+          });
+        } else {
+          await updateDoc(userDoc(BILLS_COLLECTION, stage.linkedEntryId), {
+            amount: baseAmt + gstAmt,
+            due: paidDate, invoiceDate: paidDate,
+            notes: `${sType} — ${refNo}`,
+            payee: parentDoc.vendorName||'', project: parentDoc.project||'',
+          });
+        }
+      } catch(e) { console.warn('Could not update linked entry:', e.message); }
+    }
+  }
+
+  // Save back updated schedule (with cleared linkedEntryIds for unmarked stages)
+  const parentCol = parentType==='po' ? PO_COLLECTION : WO_COLLECTION;
+  const hasChanges = schedule.some(s => !s.paid && s.linkedEntryId === '');
+  if (hasChanges) {
+    try { await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: schedule}); }
+    catch(e) { console.warn('Could not update schedule:', e.message); }
+  }
 }
 
 // ─── Stage → Advance / Bill auto-sync ────────────────
@@ -2200,8 +2259,13 @@ function NewPOModal({ onClose, nextNumber, quotations, prefill, existing }) {
     if (!form.vendorName.trim() || !form.value) return;
     setSaving(true);
     try {
-      if (isEdit) await updatePO(existing.docId, { ...form, value: Number(form.value), paymentSchedule: schedule, gstPct });
-      else await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule, gstPct });
+      if (isEdit) {
+        await updatePO(existing.docId, { ...form, value: Number(form.value), paymentSchedule: schedule, gstPct });
+        // Sync any changes to linked Advance/Bill entries
+        await syncScheduleChanges(schedule, {...existing, ...form, docId: existing.docId, value: Number(form.value)}, 'po');
+      } else {
+        await addPO({ ...form, value: Number(form.value), paymentSchedule: schedule, gstPct });
+      }
       onClose();
     } catch (e) { console.error(e); alert('Could not save purchase order.'); }
     finally { setSaving(false); }
