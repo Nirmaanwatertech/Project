@@ -1360,7 +1360,7 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
             <label className="form-label">Value (₹)</label>
             <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} />
           </div>
-          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} gstPct={gstPct} onGstPctChange={setGstPct} />
           <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
@@ -1947,6 +1947,7 @@ function NewPOModal({ onClose, nextNumber, quotations, prefill, existing }) {
     isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) :
     prefill?.paymentSchedule ? prefill.paymentSchedule.map(r => ({...r, id: genRowId()})) : []
   );
+  const [gstPct, setGstPct] = useState(isEdit ? (existing.gstPct||'') : (prefill?.gstPct||''));
   const [saving, setSaving] = useState(false);
   function set(f, v) { setForm(s => ({ ...s, [f]: v })); }
 
@@ -2017,7 +2018,7 @@ function NewPOModal({ onClose, nextNumber, quotations, prefill, existing }) {
             <label className="form-label">Total Value (₹)</label>
             <input className="form-input font-mono" value={form.value} onChange={e=>set('value', e.target.value)} placeholder="0" />
           </div>
-          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} />
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} gstPct={gstPct} onGstPctChange={setGstPct} />
           <div className="form-group">
             <label className="form-label">Stage</label>
             <select className="form-input form-select" value={form.stage} onChange={e=>set('stage', e.target.value)}>
@@ -6106,6 +6107,7 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
     stage:'Receipt of Quotation', notes:'', project:''
   });
   const [schedule, setSchedule] = useState(isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) : []);
+  const [gstPct, setGstPct] = useState(isEdit ? (existing.gstPct||'') : '');
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
 
@@ -6114,9 +6116,9 @@ function NewQuotationWithREQ({ onClose, reqs, existing }) {
     setSaving(true);
     try{
       if (isEdit) {
-        await updateQuotation(existing.docId, {...form, value:Number(form.value), paymentSchedule:schedule});
+        await updateQuotation(existing.docId, {...form, value:Number(form.value), paymentSchedule:schedule, gstPct});
       } else {
-        await addQuotation({...form,value:Number(form.value),paymentSchedule:schedule});
+        await addQuotation({...form, value:Number(form.value), paymentSchedule:schedule, gstPct});
       }
       onClose();
     }catch(e){console.error(e);alert('Could not save quotation.');}
