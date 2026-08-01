@@ -980,12 +980,22 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
 
   async function handleTogglePaid(row) {
     if (!parentDoc || !onStagePaid) return;
+    const newPaid = !row.paid;
+    let paymentDate = row.date || new Date().toISOString().slice(0,10);
+    if (newPaid) {
+      // Ask for payment date
+      const input = window.prompt(
+        `Date of payment for "${row.stageType||'Stage'}" (${inr(row.amount||0)}):\nFormat: YYYY-MM-DD`,
+        paymentDate
+      );
+      if (input === null) return; // user cancelled
+      if (input.trim()) paymentDate = input.trim();
+    }
     setStageSaving(row.id);
     try {
-      const newPaid = !row.paid;
-      const updatedRows = rows.map(r => r.id===row.id ? {...r, paid:newPaid, paidAt:newPaid?Date.now():null} : r);
+      const updatedRows = rows.map(r => r.id===row.id ? {...r, paid:newPaid, paidAt:newPaid?Date.now():null, datePaid:newPaid?paymentDate:''} : r);
       setRows(updatedRows);
-      await syncStageToModules({...row, paid:newPaid}, parentDoc, parentType, updatedRows, setRows);
+      await syncStageToModules({...row, paid:newPaid}, parentDoc, parentType, updatedRows, setRows, paymentDate);
       if (onStagePaid) onStagePaid(updatedRows);
     } catch(e) { console.error(e); alert('Could not update stage: '+e.message); }
     finally { setStageSaving(null); }
@@ -1387,73 +1397,73 @@ async function syncManualEntryToPOWO(entryId, entryType, linkedPO, linkedWO, amo
 }
 
 // ─── Stage → Advance / Bill auto-sync ────────────────
-async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule, setScheduleParent) {
-  // parentDoc = the PO or WO object
-  // parentType = 'po' or 'wo'
-  // updatedSchedule = full schedule array with this stage's changes
+async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule, setScheduleParent, paymentDate) {
   const { addDoc, deleteDoc, updateDoc } = window.fb;
-  const isAdvance = stage.stageType === 'Advance';
-  const isBill    = stage.stageType === 'Against Dispatch' || stage.stageType === 'Against Delivery' || stage.stageType === 'Retention' || stage.stageType === 'Other';
+  const sType = (stage.stageType || stage.name || '').trim();
+  const isAdvance = sType === 'Advance';
+  const paidDate = paymentDate || stage.date || new Date().toISOString().slice(0,10);
+  const refNo = parentType==='po' ? parentDoc.po : parentDoc.wo;
 
   if (stage.paid) {
-    // Mark paid → create or update linked entry
-    const entryData = isAdvance ? {
-      vendor:      parentDoc.vendorName || '',
-      amount:      Number(stage.amount)||0,
-      datePaid:    stage.date || new Date().toISOString().slice(0,10),
-      paymentMode: 'NEFT',
-      refNumber:   '',
-      narration:   `${stage.name||stage.stageType} — ${parentType==='po'?parentDoc.po:parentDoc.wo}`,
-      linkedPO:    parentType==='po' ? parentDoc.po : '',
-      linkedWO:    parentType==='wo' ? parentDoc.wo : '',
-      project:     parentDoc.project||'',
-      split:       parentDoc.split||{pontoon:50,wtp:50},
-      status:      'Unadjusted',
-      balanceAmount: Number(stage.amount)||0,
-      fromSchedule: true,
-    } : {
-      payee:       parentDoc.vendorName||'',
-      category:    'Vendor',
-      invoiceNo:   parentType==='po' ? parentDoc.po : parentDoc.wo,
-      invoiceDate: stage.date||'',
-      due:         stage.date||'',
-      amount:      Number(stage.amount)||(Number(stage.amount)||0)+(stage.includesGst?Number(stage.gstAmount||0):0),
-      notes:       `${stage.name||stage.stageType} — ${parentType==='po'?parentDoc.po:parentDoc.wo}`,
-      linkedPO:    parentType==='po' ? parentDoc.po : '',
-      linkedWO:    parentType==='wo' ? parentDoc.wo : '',
-      project:     parentDoc.project||'',
-      split:       parentDoc.split||{pontoon:50,wtp:50},
-      gstPct:      stage.includesGst ? (Number(stage.gstAmount||0)/Number(stage.amount||1)*100).toFixed(0) : '',
-      fromSchedule: true,
+    const baseAmt = Number(stage.amount)||0;
+    const gstAmt  = stage.includesGst ? Number(stage.gstAmount||0) : 0;
+
+    const advanceData = {
+      vendor:        parentDoc.vendorName || '',
+      amount:        baseAmt,
+      datePaid:      paidDate,
+      paymentMode:   'NEFT',
+      refNumber:     '',
+      narration:     `${sType} — ${refNo}`,
+      linkedPO:      parentType==='po' ? refNo : '',
+      linkedWO:      parentType==='wo' ? refNo : '',
+      project:       parentDoc.project||'',
+      split:         parentDoc.split||{pontoon:50,wtp:50},
+      status:        'Unadjusted',
+      balanceAmount: baseAmt,
+      fromSchedule:  true,
     };
 
+    const billData = {
+      payee:         parentDoc.vendorName||'',
+      category:      'Vendor',
+      invoiceNo:     refNo,
+      invoiceDate:   paidDate,
+      due:           paidDate,
+      amount:        baseAmt + gstAmt,
+      notes:         `${sType} — ${refNo}`,
+      linkedPO:      parentType==='po' ? refNo : '',
+      linkedWO:      parentType==='wo' ? refNo : '',
+      project:       parentDoc.project||'',
+      split:         parentDoc.split||{pontoon:50,wtp:50},
+      gstPct:        stage.includesGst && baseAmt > 0 ? ((gstAmt/baseAmt)*100).toFixed(0) : '',
+      fromSchedule:  true,
+    };
+
+    const entryData = isAdvance ? advanceData : billData;
+    const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
+
     if (stage.linkedEntryId) {
-      // Update existing entry
-      const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
       try { await updateDoc(userDoc(col, stage.linkedEntryId), entryData); }
       catch(e) { console.warn('Could not update linked entry:', e.message); }
     } else {
-      // Create new entry
-      const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
       try {
         const ref = await addDoc(userCol(col), {...entryData, createdAt: Date.now()});
-        // Store the new entry ID back into the stage
         const newSchedule = updatedSchedule.map(s =>
           s.id === stage.id ? {...s, linkedEntryId: ref.id} : s
         );
         const parentCol = parentType==='po' ? PO_COLLECTION : WO_COLLECTION;
-        const parentId  = parentType==='po' ? parentDoc.docId : parentDoc.docId;
-        await updateDoc(userDoc(parentCol, parentId), {paymentSchedule: newSchedule});
+        await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: newSchedule});
         if (setScheduleParent) setScheduleParent(newSchedule);
       } catch(e) { console.warn('Could not create linked entry:', e.message); }
     }
   } else {
     // Unmark paid → delete linked entry
     if (stage.linkedEntryId) {
-      const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
+      const sType2 = (stage.stageType || stage.name || '').trim();
+      const col = sType2 === 'Advance' ? ADVANCES_COLLECTION : BILLS_COLLECTION;
       try {
         await deleteDoc(userDoc(col, stage.linkedEntryId));
-        // Remove linkedEntryId from stage
         const newSchedule = updatedSchedule.map(s =>
           s.id === stage.id ? {...s, linkedEntryId: ''} : s
         );
@@ -2410,22 +2420,21 @@ function POWOScheduleModal({ doc, parentType, onClose, onScheduleUpdate }) {
   const unpaidAmt = stages.filter(s=>!s.paid).reduce((s,r)=>s+Number(r.amount||0),0);
 
   async function toggleStage(stage) {
+    const newPaid = !stage.paid;
+    let paymentDate = stage.date || new Date().toISOString().slice(0,10);
+    if (newPaid) {
+      const input = window.prompt(
+        `Date of payment for "${stage.stageType||'Stage'}" — ${inr(stage.amount||0)}:\nFormat: YYYY-MM-DD`,
+        paymentDate
+      );
+      if (input === null) return; // cancelled
+      if (input.trim()) paymentDate = input.trim();
+    }
     setSaving(stage.id);
     try {
-      const newPaid = !stage.paid;
-      const updatedStages = stages.map(s => s.id===stage.id ? {...s, paid:newPaid, paidAt:newPaid?Date.now():null} : s);
+      const updatedStages = stages.map(s => s.id===stage.id ? {...s, paid:newPaid, paidAt:newPaid?Date.now():null, datePaid:newPaid?paymentDate:''} : s);
       setStages(updatedStages);
-
-      // Sync to Advances or Bills
-      await syncStageToModules(
-        {...stage, paid: newPaid},
-        doc,
-        parentType,
-        updatedStages,
-        setStages
-      );
-
-      // Save updated schedule to PO/WO (don't close modal)
+      await syncStageToModules({...stage, paid:newPaid}, doc, parentType, updatedStages, setStages, paymentDate);
       const col = parentType==='wo' ? WO_COLLECTION : PO_COLLECTION;
       const { updateDoc } = window.fb;
       await updateDoc(userDoc(col, doc.docId), {paymentSchedule: updatedStages});
@@ -2489,7 +2498,7 @@ function POWOScheduleModal({ doc, parentType, onClose, onScheduleUpdate }) {
                   </td>
                   <td style={{padding:'10px',fontSize:12,color:'var(--text-muted)'}}>{fmt(s.date)||'—'}</td>
                   <td style={{padding:'10px',textAlign:'center'}}>
-                    {s.paid ? <span className="badge green">✓ Paid</span> : <span className="badge grey">Pending</span>}
+                    {s.paid ? <div><span className="badge green">✓ Paid</span>{s.datePaid&&<div style={{fontSize:10,color:'var(--text-muted)',marginTop:2}}>{fmt(s.datePaid)}</div>}</div> : <span className="badge grey">Pending</span>}
                   </td>
                   <td style={{padding:'10px',textAlign:'center',fontSize:12}}>
                     {s.linkedEntryId
