@@ -1929,7 +1929,7 @@ async function clearAllPOs() {
   await batch.commit();
 }
 
-function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existing }) {
+function NewPOModal({ onClose, nextNumber, quotations, prefill, existing }) {
   const isEdit = !!existing;
   const knownNames = useKnownNames();
   const [form, setForm] = useState(isEdit ? {
@@ -2007,17 +2007,7 @@ function NewPOModal({ onClose, nextNumber, vendors, quotations, prefill, existin
           </div>
           <div className="form-group">
             <label className="form-label">Vendor Name</label>
-            {vendors && vendors.length > 0 ? (
-              <select className="form-input form-select" value={form.vendorName} onChange={e=>set('vendorName', e.target.value)}>
-                <option value="">Select vendor…</option>
-                {vendors.map(v => <option key={v.docId} value={v.company}>{v.company}</option>)}
-                {form.vendorName && !vendors.find(v => v.company === form.vendorName) && (
-                  <option value={form.vendorName}>{form.vendorName} (from quotation)</option>
-                )}
-              </select>
-            ) : (
-              <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={knownNames.vendors} placeholder="Vendor name" />
-            )}
+            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={knownNames.vendors} placeholder="Vendor name" />
           </div>
           <div className="form-group">
             <label className="form-label">Description of Goods / Materials</label>
@@ -2185,8 +2175,8 @@ function PurchaseOrders() {
         )}
       </div>
 
-      {showNew && <NewPOModal onClose={() => setShowNew(false)} nextNumber={nextNumber} vendors={vendors} quotations={quotations} />}
-      {editPO && <NewPOModal onClose={() => setEditPO(null)} nextNumber={nextNumber} vendors={vendors} quotations={quotations} existing={editPO} />}
+      {showNew && <NewPOModal onClose={() => setShowNew(false)} nextNumber={nextNumber} quotations={quotations} />}
+      {editPO && <NewPOModal onClose={() => setEditPO(null)} nextNumber={nextNumber} quotations={quotations} existing={editPO} />}
       {viewSchedule && (
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={() => setViewSchedule(null)}>
           <div style={{background:'var(--surface)',borderRadius:10,width:440,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
@@ -3073,17 +3063,9 @@ function BillPayments() {
 
   // Bills with computed status
   const withStatus = items.map(b => {
-    let status;
-    if (b.paid) status = 'Paid';
-    else if (b.due === todayStr) status = 'Due Today';
-    else if (b.due < todayStr) status = 'Overdue';
-    else status = 'Upcoming';
-    const days = (status === 'Overdue' && b.due) ? Math.floor((new Date(todayStr) - new Date(b.due)) / 86400000) : 0;
     const linkedAdv = advances.filter(a => a.linkedBill === b.docId);
     const advanceDeducted = linkedAdv.reduce((s,a) => s + Number(a.adjustedAmount||0), 0);
 
-    // If bill has payment schedule, calculate paid/unpaid from stages
-    let paidStagesAmt = 0, unpaidStagesAmt = 0;
     const hasSchedule = b.paymentSchedule && b.paymentSchedule.length > 0;
     const totalGstAmt = b.gstPct ? Math.round(Number(b.amount||0) * parseFloat(b.gstPct) / 100) : 0;
     const gstAssignedToStages = hasSchedule
@@ -3091,6 +3073,7 @@ function BillPayments() {
       : 0;
     const unassignedGst = Math.max(0, totalGstAmt - gstAssignedToStages);
 
+    let paidStagesAmt = 0, unpaidStagesAmt = 0;
     if (hasSchedule) {
       b.paymentSchedule.forEach(s => {
         const base = Number(s.amount||0);
@@ -3098,9 +3081,26 @@ function BillPayments() {
         if (s.paid) paidStagesAmt += base + gst;
         else unpaidStagesAmt += base + gst;
       });
-      // Add any GST not yet assigned to a stage — always unpaid until invoice
       unpaidStagesAmt += unassignedGst;
     }
+
+    // For status: use next unpaid stage's due date (not the bill's overall due)
+    let effectiveDue = b.due;
+    if (hasSchedule) {
+      const nextUnpaid = b.paymentSchedule.find(s => !s.paid && s.date);
+      if (nextUnpaid) effectiveDue = nextUnpaid.date;
+      else if (b.paymentSchedule.every(s => s.paid)) effectiveDue = null; // all paid
+    }
+
+    let status;
+    if (b.paid || (hasSchedule && unpaidStagesAmt === 0)) status = 'Paid';
+    else if (!effectiveDue) status = 'Upcoming';
+    else if (effectiveDue === todayStr) status = 'Due Today';
+    else if (effectiveDue < todayStr) status = 'Overdue';
+    else status = 'Upcoming';
+
+    const days = (status === 'Overdue' && effectiveDue)
+      ? Math.floor((new Date(todayStr) - new Date(effectiveDue)) / 86400000) : 0;
 
     const netPayable = hasSchedule
       ? Math.max(0, unpaidStagesAmt - advanceDeducted)
@@ -3108,7 +3108,7 @@ function BillPayments() {
     const paidSoFar = hasSchedule ? paidStagesAmt : 0;
     const totalBillAmt = Number(b.amount||0) + totalGstAmt;
 
-    return { ...b, computedStatus: status, days, advanceDeducted, netPayable, paidSoFar, hasSchedule, totalBillAmt };
+    return { ...b, computedStatus: status, days, advanceDeducted, netPayable, paidSoFar, hasSchedule, totalBillAmt, effectiveDue };
   });
 
   function applySort(arr, key, dateField='due', amtField='amount', nameField='payee') {
