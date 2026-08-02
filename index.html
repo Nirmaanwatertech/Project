@@ -6416,7 +6416,7 @@ function PermissionMatrix({ currentUser }) {
 }
 
 // ─── Settings ─────────────────────────────────────────
-function Settings() {
+function Settings({ currentUser }) {
   const [tab, setTab] = useState('projects');
   const [projects, setProjects] = useState(null);
   const [projectColors, setProjectColors] = useState(null);
@@ -6485,7 +6485,7 @@ function Settings() {
     <div>
       <div className="section-header"><div><div className="section-title">Settings</div></div></div>
       <div className="tabs" style={{marginBottom:16}}>
-        {[['projects','🗂 Projects'],['lists','📋 Lists'],['danger','⚠️ Danger Zone']].map(([v,l])=>(
+        {[['projects','🗂 Projects'],['lists','📋 Lists'],['permissions','🔐 Permissions'],['danger','⚠️ Danger Zone']].map(([v,l])=>(
           <div key={v} className={`tab ${tab===v?'active':''}`} onClick={()=>setTab(v)}>{l}</div>
         ))}
       </div>
@@ -6533,6 +6533,8 @@ function Settings() {
 
       {tab==='lists' && <ListsManager />}
 
+      {tab==='permissions' && <PermissionMatrix currentUser={currentUser} />}
+
       {tab==='danger' && (
         <div className="card">
           <div className="card-header"><span className="card-title">Danger Zone</span></div>
@@ -6558,20 +6560,7 @@ function Settings() {
 }
 
 function SettingsWithUser({ currentUser }) {
-  return (
-    <div>
-      <div className="section-header">
-        <div className="section-title">Settings</div>
-      </div>
-      <div style={{marginBottom:20}}>
-        <PermissionMatrix currentUser={currentUser} />
-      </div>
-      <div style={{marginBottom:20}}>
-        <ListsManager />
-      </div>
-      <Settings currentUser={currentUser} />
-    </div>
-  );
+  return <Settings currentUser={currentUser} />;
 }
 
 // ─── Topbar titles ─────────────────────────────────────
