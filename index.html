@@ -1524,7 +1524,182 @@ async function syncManualEntryToPOWO(entryId, entryType, linkedPO, linkedWO, amo
   }
 
 // ─── IssuePOModal — from approved quotation ───────────
-// ─── XRefBadge ────────────────────────────────────────
+function IssuePOModal({ quotation, onClose, onIssued }) {
+  const knownNames = useKnownNames();
+  const { items: pos } = usePurchaseOrders();
+  const nextNumber = nextPONumber(pos.length);
+  const [form, setForm] = useState({
+    po: nextNumber, vendorName: quotation?.vendorName||'',
+    description: quotation?.description||'', value: quotation?.value ? String(quotation.value) : '',
+    linkedQuotation: quotation?.docId||'', stage: 'Issued',
+    issueDate: new Date().toISOString().slice(0,10),
+    project: quotation?.project||'', split: quotation?.split||{pontoon:50,wtp:50},
+    gstPct: quotation?.gstPct||'', notes: '',
+  });
+  const [schedule, setSchedule] = useState([]);
+  const [gstPct, setGstPct] = useState(quotation?.gstPct||'');
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  async function handleSave() {
+    if (!form.vendorName.trim()) return;
+    setSaving(true);
+    try {
+      await addPO({...form, value:Number(form.value)||0, paymentSchedule:schedule, gstPct});
+      if (onIssued) onIssued();
+      onClose();
+    } catch(e){ console.error(e); alert('Could not issue PO.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:580,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Issue Purchase Order from Quotation</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group"><label className="form-label">PO Number</label>
+              <input className="form-input font-mono" value={form.po} onChange={e=>set('po',e.target.value)} /></div>
+            <div className="form-group"><label className="form-label">Issue Date</label>
+              <input className="form-input" type="date" value={form.issueDate} onChange={e=>set('issueDate',e.target.value)} /></div>
+          </div>
+          <div className="form-group"><label className="form-label">Vendor Name</label>
+            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={knownNames.vendors} placeholder="Vendor name" /></div>
+          <div className="form-group"><label className="form-label">Description</label>
+            <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} /></div>
+          <div className="form-group"><label className="form-label">Value (₹)</label>
+            <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} placeholder="0" /></div>
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value} gstPct={gstPct} onGstPctChange={setGstPct} />
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.vendorName.trim()} className="btn btn-primary">
+            {saving?'Saving…':'Issue PO'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── NewPOModal ───────────────────────────────────────
+function NewPOModal({ onClose, nextNumber, quotations, prefill, existing }) {
+  const isEdit = !!existing;
+  const knownNames = useKnownNames();
+  const [form, setForm] = useState(isEdit ? {
+    po: existing.po||nextNumber, vendorName: existing.vendorName||'',
+    description: existing.description||'', value: existing.value ? String(existing.value) : '',
+    linkedQuotation: existing.linkedQuotation||'', stage: existing.stage||'Draft',
+    issueDate: existing.issueDate||'', project: existing.project||'',
+    split: existing.split||{pontoon:50,wtp:50}, notes: existing.notes||'',
+  } : {
+    po: nextNumber, vendorName: prefill?.party||'', description: prefill?.description||'',
+    value: prefill?.value ? String(prefill.value) : '',
+    linkedQuotation: prefill?.fromQuotation||'',
+    stage: 'Draft', issueDate: new Date().toISOString().slice(0,10),
+    project: '', split:{pontoon:50,wtp:50}, notes: '',
+  });
+  const [schedule, setSchedule] = useState(
+    isEdit && existing.paymentSchedule
+      ? existing.paymentSchedule.map(r=>({...r,id:genRowId()}))
+      : prefill?.paymentSchedule ? prefill.paymentSchedule.map(r=>({...r,id:genRowId()})) : []
+  );
+  const [gstPct, setGstPct] = useState(isEdit ? (existing.gstPct||'') : (prefill?.gstPct||''));
+  const [saving, setSaving] = useState(false);
+  function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  const eligible = finalizedQuotations(quotations||[]);
+
+  function handleQuotationSelect(val) {
+    const q = (quotations||[]).find(q=>q.docId===val);
+    set('linkedQuotation',val);
+    if (q) {
+      setForm(s=>({...s, linkedQuotation:val,
+        vendorName: s.vendorName||q.vendorName||'',
+        description: s.description||q.description||'',
+        value: s.value||(q.value?String(q.value):''),
+        project: s.project||q.project||'',
+        split: (s.project?s.split:null)||q.split||{pontoon:50,wtp:50},
+      }));
+      if ((!schedule||!schedule.length) && q.paymentSchedule && q.paymentSchedule.length)
+        setSchedule(q.paymentSchedule.map(r=>({...r,id:genRowId()})));
+      if (!gstPct && q.gstPct) setGstPct(q.gstPct);
+    }
+  }
+
+  async function handleSave() {
+    if (!form.vendorName.trim()||!form.value) return;
+    setSaving(true);
+    try {
+      if (isEdit) {
+        await updatePO(existing.docId, {...form, value:Number(form.value), paymentSchedule:schedule, gstPct});
+        await syncScheduleChanges(schedule, {...existing,...form,docId:existing.docId,value:Number(form.value)}, 'po');
+      } else {
+        await addPO({...form, value:Number(form.value), paymentSchedule:schedule, gstPct});
+      }
+      onClose();
+    } catch(e){ console.error(e); alert('Could not save PO.'); }
+    finally { setSaving(false); }
+  }
+
+  const PO_STAGES_LIST = ['Draft','Issued','Goods In Transit','Partially Received','Fully Received','Closed'];
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:600,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit?'✏ Edit Purchase Order':'+ New Purchase Order'}</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div className="form-grid">
+            <div className="form-group"><label className="form-label">PO Number</label>
+              <input className="form-input font-mono" value={form.po} onChange={e=>set('po',e.target.value)} /></div>
+            <div className="form-group"><label className="form-label">Issue Date</label>
+              <input className="form-input" type="date" value={form.issueDate} onChange={e=>set('issueDate',e.target.value)} /></div>
+          </div>
+          <div className="form-group"><label className="form-label">Link to Quotation <span style={{color:'var(--text-muted)',fontWeight:400}}>(optional)</span></label>
+            <select className="form-input form-select" value={form.linkedQuotation} onChange={e=>handleQuotationSelect(e.target.value)}>
+              <option value="">None</option>
+              {eligible.map(q=><option key={q.docId} value={q.docId}>{q.vendorName} — {q.description?q.description.slice(0,40):''} ({inr(q.value||0)})</option>)}
+            </select>
+          </div>
+          <div className="form-group"><label className="form-label">Vendor Name</label>
+            <AutocompleteInput value={form.vendorName} onChange={v=>set('vendorName',v)} suggestions={knownNames.vendors} placeholder="Vendor name" /></div>
+          <div className="form-group"><label className="form-label">Description of Goods / Materials</label>
+            <input className="form-input" value={form.description} onChange={e=>set('description',e.target.value)} placeholder="What is being purchased?" /></div>
+          <div className="form-group"><label className="form-label">Total Value (₹)</label>
+            <input className="form-input font-mono" value={form.value} onChange={e=>set('value',e.target.value)} placeholder="0" /></div>
+          <PaymentScheduleEditor rows={schedule} setRows={setSchedule} totalValue={form.value}
+            gstPct={gstPct} onGstPctChange={setGstPct}
+            parentDoc={isEdit?{...existing,...form,docId:existing.docId}:null} parentType="po"
+            onStagePaid={s=>setSchedule(s)} />
+          <div className="form-grid">
+            <div className="form-group"><label className="form-label">Stage</label>
+              <select className="form-input form-select" value={form.stage} onChange={e=>set('stage',e.target.value)}>
+                {PO_STAGES_LIST.map(s=><option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="form-group"><label className="form-label">Notes</label>
+              <input className="form-input" value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Optional" /></div>
+          </div>
+          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} />
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!form.vendorName.trim()||!form.value} className="btn btn-primary"
+            style={{opacity:saving||!form.vendorName.trim()||!form.value?0.6:1}}>
+            {saving?'Saving…':isEdit?'Save Changes':'Create PO'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function XRefBadge({ po, wo, bill }) {
   if (!po && !wo && !bill) return <span className="text-muted" style={{fontSize:11}}>—</span>;
   return (
