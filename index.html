@@ -1084,14 +1084,17 @@ async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule,
   const refNo = parentType === 'po' ? (parentDoc.po||'') : (parentDoc.wo||'');
 
   if (stage.paid) {
-    const baseAmt = Number(stage.amount)||0;
-    const gstAmt  = stage.includesGst ? Number(stage.gstAmount||0) : 0;
+    const stageAmt = Number(stage.amount)||0;  // stage portion (e.g. 90% = ₹90L)
+    const gstAmt   = stage.includesGst ? Number(stage.gstAmount||0) : 0; // full GST (₹18L)
+    // Full PO base value (₹1Cr) — used as bill base so invoice shows correct total
+    const fullBase = Number(parentDoc.value||0);
+    const fullGst  = gstAmt; // GST is on full PO value
 
     // Find linked advances from same PO/WO to auto-adjust
     let advanceDeducted = 0, advanceEntryId = '';
     if (!isAdvance) {
       try {
-        const { getDocs, query, where } = window.fb;
+        const { getDocs } = window.fb;
         const advSnap = await getDocs(userCol(ADVANCES_COLLECTION));
         const linked = advSnap.docs.filter(d => {
           const a = d.data();
@@ -1100,7 +1103,7 @@ async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule,
         if (linked.length > 0) {
           const adv = linked[0];
           const advAmt = Number(adv.data().balanceAmount || adv.data().amount || 0);
-          advanceDeducted = Math.min(advAmt, baseAmt + gstAmt);
+          advanceDeducted = advAmt; // deduct full advance amount
           advanceEntryId = adv.id;
         }
       } catch(e) { console.warn('Could not find linked advances:', e.message); }
@@ -1108,7 +1111,7 @@ async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule,
 
     const entryData = isAdvance ? {
       vendor:        parentDoc.vendorName||'',
-      amount:        baseAmt,
+      amount:        stageAmt,
       datePaid:      paidDate,
       paymentMode:   'NEFT',
       refNumber:     stage.invoiceNo||'',
@@ -1118,7 +1121,7 @@ async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule,
       project:       parentDoc.project||'',
       split:         parentDoc.split||{pontoon:50,wtp:50},
       status:        'Unadjusted',
-      balanceAmount: baseAmt,
+      balanceAmount: stageAmt,
       fromSchedule:  true,
     } : {
       payee:            parentDoc.vendorName||'',
@@ -1126,8 +1129,11 @@ async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule,
       invoiceNo:        stage.invoiceNo||refNo,
       invoiceDate:      paidDate,
       due:              paidDate,
-      amount:           baseAmt + gstAmt,
-      advanceDeducted:  advanceDeducted,
+      // Bill stores full base + full GST separately for correct display
+      amount:           fullBase,      // base = full PO value (₹1Cr)
+      gstAmount:        fullGst,       // GST on full PO value (₹18L)
+      totalAmount:      fullBase + fullGst, // ₹1.18Cr
+      advanceDeducted:  advanceDeducted,    // advance already paid (₹10L)
       notes:            `Against Delivery — ${refNo}`,
       linkedPO:         parentType==='po' ? refNo : '',
       linkedWO:         parentType==='wo' ? refNo : '',
@@ -3093,11 +3099,20 @@ function BillPayments() {
 
   // Bills with computed status
   const withStatus = items.map(b => {
-    const linkedAdv = advances.filter(a => a.linkedBill === b.docId);
-    const advanceDeducted = linkedAdv.reduce((s,a) => s + Number(a.adjustedAmount||0), 0);
+    // Find advances linked to this bill directly OR to the same PO/WO
+    const linkedAdv = advances.filter(a =>
+      a.linkedBill === b.docId ||
+      (b.fromSchedule && b.linkedPO && a.linkedPO === b.linkedPO && a.fromSchedule) ||
+      (b.fromSchedule && b.linkedWO && a.linkedWO === b.linkedWO && a.fromSchedule)
+    );
+    const advanceDeducted = linkedAdv.reduce((s,a) => s + Number(a.amount||0), 0);
 
     const hasSchedule = b.paymentSchedule && b.paymentSchedule.length > 0;
-    const totalGstAmt = b.gstPct ? Math.round(Number(b.amount||0) * parseFloat(b.gstPct) / 100) : 0;
+
+    // For fromSchedule bills: amount already includes GST (set in syncStageToModules as baseAmt+gstAmt)
+    // So don't add GST again
+    const totalGstAmt = (!b.fromSchedule && b.gstPct)
+      ? Math.round(Number(b.amount||0) * parseFloat(b.gstPct) / 100) : 0;
     const gstAssignedToStages = hasSchedule
       ? b.paymentSchedule.filter(s=>s.includesGst).reduce((s,r)=>s+Number(r.gstAmount||0),0)
       : 0;
@@ -3114,16 +3129,20 @@ function BillPayments() {
       unpaidStagesAmt += unassignedGst;
     }
 
-    // For status: use next unpaid stage's due date (not the bill's overall due)
+    // For status: use next unpaid stage's due date
     let effectiveDue = b.due;
     if (hasSchedule) {
       const nextUnpaid = b.paymentSchedule.find(s => !s.paid && s.date);
       if (nextUnpaid) effectiveDue = nextUnpaid.date;
-      else if (b.paymentSchedule.every(s => s.paid)) effectiveDue = null; // all paid
+      else if (b.paymentSchedule.every(s => s.paid)) effectiveDue = null;
     }
 
+    // fromSchedule bills: mark as paid if the advance covers the full amount
+    const billTotal = Number(b.amount||0) + totalGstAmt;
+    const isFullyCovered = b.fromSchedule && advanceDeducted >= billTotal;
+
     let status;
-    if (b.paid || (hasSchedule && unpaidStagesAmt === 0)) status = 'Paid';
+    if (b.paid || isFullyCovered || (hasSchedule && unpaidStagesAmt === 0)) status = 'Paid';
     else if (!effectiveDue) status = 'Upcoming';
     else if (effectiveDue === todayStr) status = 'Due Today';
     else if (effectiveDue < todayStr) status = 'Overdue';
@@ -3132,15 +3151,42 @@ function BillPayments() {
     const days = (status === 'Overdue' && effectiveDue)
       ? Math.floor((new Date(todayStr) - new Date(effectiveDue)) / 86400000) : 0;
 
-    const netPayable = hasSchedule
-      ? Math.max(0, unpaidStagesAmt - advanceDeducted)
-      : Math.max(0, Number(b.amount||0) + totalGstAmt - advanceDeducted);
-    const paidSoFar = hasSchedule
-      ? paidStagesAmt
-      : (b.fromSchedule && b.paid ? Number(b.amount||0) : 0);
-    const totalBillAmt = Number(b.amount||0) + totalGstAmt;
+    // For fromSchedule bills: new entries have amount=base, gstAmount=GST, totalAmount=base+GST
+    // Old entries: amount = base+GST combined (legacy)
+    // Manual bills: amount=base, gstPct used to calc GST
+    let displayBase, displayGst, totalBillAmt;
+    if (b.fromSchedule && b.gstAmount !== undefined) {
+      // New format: fields stored separately
+      displayBase  = Number(b.amount||0);
+      displayGst   = Number(b.gstAmount||0);
+      totalBillAmt = Number(b.totalAmount||0) || (displayBase + displayGst);
+    } else if (b.fromSchedule && b.gstPct && parseFloat(b.gstPct) > 0) {
+      // Legacy format: amount = base+GST combined, reverse-calculate
+      const rate = parseFloat(b.gstPct) / 100;
+      displayBase  = Math.round(Number(b.amount||0) / (1 + rate));
+      displayGst   = Number(b.amount||0) - displayBase;
+      totalBillAmt = Number(b.amount||0);
+    } else {
+      // Manual bill or no GST
+      displayBase  = Number(b.amount||0);
+      displayGst   = b.gstPct ? Math.round(displayBase * parseFloat(b.gstPct) / 100) : 0;
+      totalBillAmt = displayBase + displayGst;
+    }
 
-    return { ...b, computedStatus: status, days, advanceDeducted, netPayable, paidSoFar, hasSchedule, totalBillAmt, effectiveDue };
+    // Update billTotal and status using correct totalBillAmt
+    const isFullyCovered2 = b.fromSchedule && advanceDeducted >= totalBillAmt;
+    let finalStatus = status;
+    if (isFullyCovered2 && status !== 'Paid') finalStatus = 'Paid';
+
+    const paidSoFar2 = hasSchedule ? paidStagesAmt
+      : b.fromSchedule ? advanceDeducted
+      : (b.paid ? totalBillAmt : 0);
+
+    const netPayable2 = hasSchedule
+      ? Math.max(0, unpaidStagesAmt - advanceDeducted)
+      : Math.max(0, totalBillAmt - paidSoFar2);
+
+    return { ...b, computedStatus: finalStatus, days, advanceDeducted, netPayable: netPayable2, paidSoFar: paidSoFar2, hasSchedule, totalBillAmt, effectiveDue, displayBase, displayGst };
   });
 
   function applySort(arr, key, dateField='due', amtField='amount', nameField='payee') {
@@ -3286,7 +3332,7 @@ function BillPayments() {
               <div style={{overflowX:'auto'}}>
               <table style={{minWidth:900}}>
                 <thead>
-                  <tr><th>Payee</th><th>Project</th><th>Category</th><th>Invoice #</th><th>Due Date</th><th>Bill Amount</th><th>Paid So Far</th><th>Net Payable</th><th>Linked To</th><th>Status</th><th style={{minWidth:180}}>Actions</th></tr>
+                  <tr><th>Payee</th><th>Project</th><th>Category</th><th>Invoice #</th><th>Due Date</th><th>Base Value</th><th>GST Amt</th><th>Paid So Far</th><th>Net Payable</th><th>Linked To</th><th>Status</th><th style={{minWidth:180}}>Actions</th></tr>
                 </thead>
                 <tbody>
                   {filtered.map(b => (
@@ -3296,7 +3342,8 @@ function BillPayments() {
                       <td><span className="badge grey">{b.category}</span></td>
                       <td className="mono">{b.invoiceNo||'—'}</td>
                       <td>{fmt(b.due)}{b.days>0&&<span style={{color:'var(--red)',fontWeight:600,marginLeft:4}}>+{b.days}d</span>}</td>
-                      <td className="amount">{inr(b.amount||0)}</td>
+                      <td className="amount fw-600">{inr(b.displayBase||0)}</td>
+                      <td className="amount" style={{color:'var(--text-muted)',fontSize:12}}>{b.displayGst>0?inr(b.displayGst):'—'}</td>
                       <td className="amount" style={{color:'var(--green)'}}>
                         {b.hasSchedule
                           ? (b.paidSoFar > 0 ? inr(b.paidSoFar) : <span className="text-muted">—</span>)
@@ -3312,6 +3359,21 @@ function BillPayments() {
                           {b.fromSchedule ? (
                             <>
                               <span style={{fontSize:10,color:'var(--text-muted)',padding:'3px 6px',background:'var(--grey-50)',borderRadius:4,border:'1px solid var(--border)'}}>📎 From PO/WO Schedule</span>
+                              <button className="btn btn-sm btn-ghost" onClick={async()=>{
+                                // Refresh bill amount from linked PO/WO stage
+                                const {getDocs,updateDoc}=window.fb;
+                                const refNo=b.linkedPO||b.linkedWO;
+                                const col=b.linkedPO?PO_COLLECTION:WO_COLLECTION;
+                                const snap=await getDocs(userCol(col));
+                                const parent=snap.docs.find(d=>(d.data().po||d.data().wo)===refNo);
+                                if(!parent){alert('Could not find linked PO/WO');return;}
+                                const stage=(parent.data().paymentSchedule||[]).find(s=>s.linkedEntryId===b.docId);
+                                if(!stage){alert('Could not find linked stage');return;}
+                                const baseAmt=Number(stage.amount||0);
+                                const gstAmt=stage.includesGst?Number(stage.gstAmount||0):0;
+                                await updateDoc(userDoc(BILLS_COLLECTION,b.docId),{amount:baseAmt+gstAmt,invoiceNo:stage.invoiceNo||b.invoiceNo});
+                                alert('Bill refreshed from PO/WO.');
+                              }}>↺ Refresh</button>
                               <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this linked bill? This will NOT unmark the PO stage.'))deleteBill(b.docId);}}>Delete</button>
                             </>
                           ) : (
