@@ -409,6 +409,7 @@ function ListsManager() {
   const [dragTarget, setDragTarget] = useState(null);
   const [editingItem, setEditingItem] = useState(null); // { listKey, idx }
   const [editValue, setEditValue] = useState('');
+  const [newItems, setNewItems] = useState({});
 
   useEffect(() => { setLocalLists({ ...lists }); }, [JSON.stringify(lists)]);
 
