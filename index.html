@@ -2479,6 +2479,17 @@ function CashFlow() {
       if (doc.paymentSchedule&&doc.paymentSchedule.length>0) {
         return doc.paymentSchedule.flatMap(s => {
           if (!s.amount) return [];
+          if (s.paid) {
+            // Stage already paid — only show ITC recovery inflow if GST was paid
+            if (s.includesGst && Number(s.gstAmount||0) > 0) {
+              const itcDate = getITCDate(s.datePaid||s.date||'');
+              if (itcDate && itcDate >= todayStr) {
+                return [{date:itcDate, label:`ITC Recovery — ${label}`, cat:'GST ITC Recovery', subcat:'', type:'in', amt:Number(s.gstAmount), project:doc.project||'', ref:refNo, isPast:false}];
+              }
+            }
+            return []; // paid stage, no future outflow
+          }
+          // Unpaid stage — show as future outflow
           const rows = [{
             date:s.date||'', label:`${refNo} — ${label} (${s.stageType||'Payment'})`,
             cat:type, subcat:s.stageType||'', type:'out', amt:Number(s.amount||0),
@@ -2500,6 +2511,15 @@ function CashFlow() {
     return bills.flatMap(b => {
       if (b.paymentSchedule&&b.paymentSchedule.length>0) {
         return b.paymentSchedule.flatMap(s => {
+          if (s.paid) {
+            // Paid — only show ITC if GST was included
+            if (s.includesGst&&Number(s.gstAmount||0)>0) {
+              const itcDate = getITCDate(s.datePaid||s.date||b.due||'');
+              if (itcDate && itcDate >= todayStr)
+                return [{date:itcDate,label:`ITC — ${b.payee}`,cat:'GST ITC Recovery',subcat:'',type:'in',amt:Number(s.gstAmount),project:b.project||'',ref:b.invoiceNo||'',isPast:false}];
+            }
+            return [];
+          }
           const rows = [{date:s.date||b.due||'',label:`${b.payee} — ${s.stageType||'Payment'}`,cat:b.category||'Bill',subcat:'',type:'out',amt:Number(s.amount||0),project:b.project||'',ref:b.invoiceNo||'',isPast:(s.date||b.due||'')<todayStr}];
           if (s.includesGst&&Number(s.gstAmount||0)>0) {
             rows.push({date:s.date||b.due||'',label:`GST — ${b.payee}`,cat:'GST Paid',subcat:'',type:'out',amt:Number(s.gstAmount),project:b.project||'',ref:b.invoiceNo||'',isPast:(s.date||b.due||'')<todayStr});
@@ -2509,6 +2529,8 @@ function CashFlow() {
           return rows;
         });
       }
+      // No schedule — show if unpaid
+      if (b.paid) return [];
       return [{date:b.due||b.invoiceDate||'',label:b.payee,cat:b.category||'Bill',subcat:'',type:'out',amt:Number(b.amount||0),project:b.project||'',ref:b.invoiceNo||'',isPast:(b.due||'')<todayStr}];
     });
   }
