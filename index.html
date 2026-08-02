@@ -1295,14 +1295,14 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
           <table style={{width:'100%'}}>
             <thead>
               <tr style={{background:'var(--grey-50)'}}>
-                <th style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>Type</th>
-                <th style={{fontSize:10,padding:'5px 8px',color:'var(--text-muted)'}}>%</th>
-                <th style={{fontSize:10,padding:'5px 8px',color:'var(--text-muted)'}}>Amount (₹)</th>
-                <th style={{fontSize:10,padding:'5px 8px',color:'var(--text-muted)'}}>Due Date</th>
-                <th style={{fontSize:10,padding:'5px 8px',textAlign:'center',color:'var(--primary)'}}>GST?</th>
-                <th style={{fontSize:10,padding:'5px 8px',color:'var(--primary)'}}>GST Amt</th>
-                <th style={{fontSize:10,padding:'5px 8px',color:'var(--green)',minWidth:240}}>Paid?</th>
-                <th style={{width:20}}></th>
+                <th style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)',width:140}}>Type</th>
+                <th style={{fontSize:10,padding:'6px 8px',color:'var(--text-muted)',width:55}}>%</th>
+                <th style={{fontSize:10,padding:'6px 8px',color:'var(--text-muted)',width:120}}>Amount (₹)</th>
+                <th style={{fontSize:10,padding:'6px 8px',color:'var(--text-muted)',width:140}}>Due Date</th>
+                <th style={{fontSize:10,padding:'6px 8px',textAlign:'center',color:'var(--primary)',width:44}}>GST?</th>
+                <th style={{fontSize:10,padding:'6px 8px',color:'var(--primary)',width:110}}>GST Amt</th>
+                <th style={{fontSize:10,padding:'6px 8px',color:'var(--green)',width:250}}>Paid?</th>
+                <th style={{width:24}}></th>
               </tr>
             </thead>
             <tbody>
@@ -1554,7 +1554,7 @@ function IssuePOModal({ quotation, onClose, onIssued }) {
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:580,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:720,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
           <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Issue Purchase Order from Quotation</span>
         </div>
@@ -1649,7 +1649,7 @@ function NewPOModal({ onClose, nextNumber, quotations, prefill, existing }) {
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:600,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:780,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
           <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit?'✏ Edit Purchase Order':'+ New Purchase Order'}</span>
         </div>
@@ -1848,7 +1848,7 @@ function NewWOModal({ onClose, existing, quotations }) {
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:580,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:720,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--secondary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
           <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit?'✏ Edit Work Order':'+ Issue Work Order'}</span>
         </div>
