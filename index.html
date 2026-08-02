@@ -969,6 +969,12 @@ function ClearDataCard({ item }) {
 }
 
 // ─── PaymentScheduleEditor ────────────────────────────
+// ─── Settings & other collections ────────────────────
+const SETTINGS_COLLECTION  = 'settings';
+const SETTINGS_DOC         = 'cashflow';
+const MILESTONES_COLLECTION= 'milestones';
+const PO_STAGES = ['Draft','Issued','Goods In Transit','Partially Received','Fully Received','Closed'];
+
 // ─── Firestore helper ─────────────────────────────────
 function makeCollectionHook(col, orderField, orderDir) {
   return function() {
@@ -2185,6 +2191,76 @@ function PurchaseOrders() {
   );
 }
 
+// ─── Cash Flow Chart ──────────────────────────────────
+function CashFlowChart({ rows, startBalance }) {
+  if (!rows || rows.length < 2) return null;
+  const W = Math.max(700, rows.length * 30);
+  const H = 220;
+  const padL = 72, padR = 20, padT = 24, padB = 36;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+  const balances = [startBalance, ...rows.map(r=>r.balance)];
+  const minB = Math.min(0, ...balances);
+  const maxB = Math.max(...balances);
+  const range = maxB - minB || 1;
+  const xPts = rows.map((_,i) => padL + ((i+1) / rows.length) * chartW);
+  const yScale = v => padT + chartH - ((v - minB) / range * chartH);
+  const zeroY = yScale(0);
+  const x0 = padL;
+  const allX = [x0, ...xPts];
+  const allY = balances.map(b => yScale(b));
+  const polyPts = allX.map((x,i) => `${x},${allY[i]}`).join(' ');
+  const areaD = `M${x0},${zeroY} ` + allX.map((x,i)=>`L${x},${allY[i]}`).join(' ') + ` L${allX[allX.length-1]},${zeroY} Z`;
+  const yTicks = [minB, minB+range*0.25, minB+range*0.5, minB+range*0.75, maxB];
+  const step = Math.max(1, Math.floor(rows.length / 8));
+  const xLabels = rows.filter((_,i) => i % step === 0 || i === rows.length-1);
+  return (
+    <div className="card" style={{marginBottom:14}}>
+      <div className="card-header">
+        <span className="card-title">Cash Flow Timeline</span>
+        <span style={{fontSize:11,color:'var(--text-muted)'}}>Running balance · Green = positive · Red dot = negative</span>
+      </div>
+      <div className="card-body" style={{overflowX:'auto',padding:'8px 0'}}>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{width:'100%',minWidth:600,height:H}}>
+          {/* Grid lines */}
+          {yTicks.map((v,i)=>(
+            <line key={i} x1={padL} y1={yScale(v)} x2={W-padR} y2={yScale(v)} stroke="#F3F4F6" strokeWidth={1}/>
+          ))}
+          {/* Zero line */}
+          <line x1={padL} y1={zeroY} x2={W-padR} y2={zeroY} stroke="#E5E7EB" strokeWidth={1.5} strokeDasharray="5,4"/>
+          {/* Area fill */}
+          <path d={areaD} fill="rgba(16,185,129,0.10)"/>
+          {/* Line */}
+          <polyline points={polyPts} fill="none" stroke="#10B981" strokeWidth={2.5} strokeLinejoin="round"/>
+          {/* Dots for each transaction */}
+          {rows.map((r,i)=>(
+            <circle key={i} cx={xPts[i]} cy={allY[i+1]} r={4}
+              fill={r.balance<0?'#EF4444':'#10B981'} stroke="white" strokeWidth={1.5}/>
+          ))}
+          {/* Future entries indicator */}
+          {rows.some(r=>!r.isPast) && rows.some(r=>r.isPast) && xPts[rows.findIndex(r=>!r.isPast)] > 0 && (
+            <line x1={xPts[rows.findIndex(r=>!r.isPast)]} y1={padT} x2={xPts[rows.findIndex(r=>!r.isPast)]} y2={H-padB} stroke="#F59E0B" strokeWidth={1.5} strokeDasharray="3,3"/>
+          )}
+          {/* Y axis labels */}
+          {yTicks.map((v,i)=>(
+            <text key={i} x={padL-6} y={yScale(v)+4} textAnchor="end" fontSize={9} fill="#9CA3AF">{inr(Math.round(v/1000))}k</text>
+          ))}
+          {/* X axis date labels */}
+          {xLabels.map((r,i)=>{
+            const idx = rows.indexOf(r);
+            return <text key={i} x={xPts[idx]} y={H-4} textAnchor="middle" fontSize={8} fill="#9CA3AF">{fmt(r.date)}</text>;
+          })}
+          {/* Legend */}
+          <circle cx={padL+8} cy={padT-8} r={4} fill="#10B981"/>
+          <text x={padL+16} y={padT-4} fontSize={9} fill="#6B7280">Balance</text>
+          <line x1={padL+70} y1={padT-8} x2={padL+82} y2={padT-8} stroke="#F59E0B" strokeWidth={1.5} strokeDasharray="3,3"/>
+          <text x={padL+86} y={padT-4} fontSize={9} fill="#6B7280">Today</text>
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 // ─── Cash Flow Module ──────────────────────────────────
 function CashFlow() {
   const [view, setView] = useState('all');
@@ -2337,6 +2413,12 @@ function CashFlow() {
           </div></div>
         </div>
       )}
+      {!loading&&rows.length>1&&(
+
+        <CashFlowChart rows={rows} startBalance={Number(settings.startingBalance)||0} />
+
+      )}
+
       <div className="card">
         <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
           <div className="flex gap-2" style={{flexWrap:'wrap'}}>
@@ -2357,8 +2439,12 @@ function CashFlow() {
             </select>
           </div>
         </div>
+
         {loading ? <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
+
+
         : rows.length===0 ? <div className="module-coming"><div className="big-icon">📈</div><h3>No transactions found</h3><p className="text-muted">All money movements will appear here.</p></div>
+
         : (
           <table>
             <thead><tr><th>↑ Date</th><th>Description</th><th>Category</th><th>Project</th><th>Inflow</th><th>Outflow</th><th>Running Balance</th></tr></thead>
@@ -6071,27 +6157,142 @@ function PermissionMatrix({ currentUser }) {
 
 // ─── Settings ─────────────────────────────────────────
 function Settings() {
+  const [tab, setTab] = useState('projects');
+  const [projects, setProjects] = useState(null);
+  const [projectColors, setProjectColors] = useState(null);
+  const [newProjName, setNewProjName] = useState('');
+  const [savingProj, setSavingProj] = useState(false);
+
+  // Load projects from Firestore settings
+  useEffect(() => {
+    async function load() {
+      try {
+        const { getDoc, doc, db } = window.fb;
+        const snap = await getDoc(userDoc(SETTINGS_COLLECTION, 'projects'));
+        if (snap.exists()) {
+          const d = snap.data();
+          setProjects(d.names || ['Pontoon','WTP','Both']);
+          setProjectColors(d.colors || {Pontoon:'blue',WTP:'teal',Both:'grey'});
+        } else {
+          setProjects(['Pontoon','WTP','Both']);
+          setProjectColors({Pontoon:'blue',WTP:'teal',Both:'grey'});
+        }
+      } catch(e) { setProjects(['Pontoon','WTP','Both']); setProjectColors({Pontoon:'blue',WTP:'teal',Both:'grey'}); }
+    }
+    if (window.fb && getUserUID()) load();
+    else { const h=()=>load(); window.addEventListener('user-ready',h,{once:true}); return ()=>window.removeEventListener('user-ready',h); }
+  }, []);
+
+  async function saveProjects(names, colors) {
+    setSavingProj(true);
+    try {
+      const { setDoc } = window.fb;
+      await setDoc(userDoc(SETTINGS_COLLECTION,'projects'), {names, colors}, {merge:true});
+      // Update global PROJECTS array — modules will re-read from Firestore on next load
+      window.__appProjects = names;
+      window.__appProjectColors = colors;
+      setProjects(names);
+      setProjectColors(colors);
+    } catch(e) { alert('Could not save: '+e.message); }
+    finally { setSavingProj(false); }
+  }
+
+  async function addProject() {
+    const name = newProjName.trim();
+    if (!name || projects.includes(name)) return;
+    const newNames = [...projects, name];
+    const newColors = {...projectColors, [name]:'grey'};
+    setNewProjName('');
+    await saveProjects(newNames, newColors);
+  }
+
+  async function removeProject(name) {
+    if (!confirm(`Remove project "${name}"? Existing entries with this project won't be affected.`)) return;
+    const newNames = projects.filter(p=>p!==name);
+    const newColors = {...projectColors};
+    delete newColors[name];
+    await saveProjects(newNames, newColors);
+  }
+
+  async function changeColor(name, color) {
+    const newColors = {...projectColors, [name]:color};
+    await saveProjects(projects, newColors);
+  }
+
+  const COLOR_OPTIONS = ['blue','teal','green','amber','red','grey','primary'];
+
   return (
     <div>
-      <div className="card">
-        <div className="card-header"><span className="card-title">Danger Zone</span></div>
-        <div className="card-body">
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>
-            {[
-              { label:'Clear All Tasks', desc:'Removes all tasks permanently.', scope:'tasks' },
-              { label:'Clear Work Orders', desc:'Deletes all WOs and data.', scope:'workorders' },
-              { label:'Clear Cash Flow Data', desc:'Wipes forecast entries.', scope:'cashflow' },
-              { label:'Clear Bill Payments', desc:'Removes all bills and advances.', scope:'bills' },
-              { label:'Clear Milestones', desc:'Deletes all payment milestones.', scope:'milestones' },
-              { label:'Clear Quotations', desc:'Removes all quotations.', scope:'quotations' },
-              { label:'Clear Purchase Orders', desc:'Removes all POs.', scope:'purchaseorders' },
-              { label:'Clear Petty Cash', desc:'Removes all petty cash entries.', scope:'pettycash' },
-              { label:'Clear General Expenses', desc:'Removes all general expense entries.', scope:'expenses' },
-              { label:'Reset All Data', desc:'Wipes everything. Cannot be undone.', scope:'all' },
-            ].map(item => <ClearDataCard key={item.scope} item={item} />)}
+      <div className="section-header"><div><div className="section-title">Settings</div></div></div>
+      <div className="tabs" style={{marginBottom:16}}>
+        {[['projects','🗂 Projects'],['lists','📋 Lists'],['danger','⚠️ Danger Zone']].map(([v,l])=>(
+          <div key={v} className={`tab ${tab===v?'active':''}`} onClick={()=>setTab(v)}>{l}</div>
+        ))}
+      </div>
+
+      {tab==='projects' && (
+        <div className="card">
+          <div className="card-header"><span className="card-title">Project Configuration</span>
+            <span style={{fontSize:12,color:'var(--text-muted)'}}>Add or remove projects. All modules use these.</span>
+          </div>
+          <div className="card-body">
+            {!projects ? <div className="text-muted">Loading…</div> : (
+              <>
+                <div style={{display:'flex',flexDirection:'column',gap:10,marginBottom:20}}>
+                  {projects.map(p=>(
+                    <div key={p} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'var(--grey-50)',borderRadius:8,border:'1px solid var(--border)'}}>
+                      <span className={`badge ${projectColors[p]||'grey'}`} style={{minWidth:70,textAlign:'center'}}>{p}</span>
+                      <span style={{fontSize:13,fontWeight:600,flex:1}}>{p}</span>
+                      <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                        <span style={{fontSize:11,color:'var(--text-muted)'}}>Color:</span>
+                        {COLOR_OPTIONS.map(c=>(
+                          <div key={c} onClick={()=>changeColor(p,c)}
+                            style={{width:20,height:20,borderRadius:'50%',cursor:'pointer',
+                              background:c==='blue'?'#3B82F6':c==='teal'?'#0D9488':c==='green'?'#10B981':c==='amber'?'#F59E0B':c==='red'?'#EF4444':c==='primary'?'var(--primary)':'#9CA3AF',
+                              border:(projectColors[p]||'grey')===c?'3px solid #1F2937':'2px solid transparent'}} />
+                        ))}
+                      </div>
+                      {projects.length > 1 && (
+                        <button className="btn btn-sm btn-ghost" style={{color:'var(--red)'}} onClick={()=>removeProject(p)}>✕ Remove</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div style={{display:'flex',gap:10,alignItems:'center'}}>
+                  <input className="form-input" style={{width:200}} value={newProjName} onChange={e=>setNewProjName(e.target.value)}
+                    placeholder="New project name" onKeyDown={e=>e.key==='Enter'&&addProject()} />
+                  <button className="btn btn-primary" onClick={addProject} disabled={savingProj||!newProjName.trim()}>
+                    {savingProj?'Saving…':'+ Add Project'}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
-      </div>
+      )}
+
+      {tab==='lists' && <ListsManager />}
+
+      {tab==='danger' && (
+        <div className="card">
+          <div className="card-header"><span className="card-title">Danger Zone</span></div>
+          <div className="card-body">
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>
+              {[
+                { label:'Clear All Tasks', desc:'Removes all tasks permanently.', scope:'tasks' },
+                { label:'Clear Work Orders', desc:'Deletes all WOs and data.', scope:'workorders' },
+                { label:'Clear Bill Payments', desc:'Removes all bills and advances.', scope:'bills' },
+                { label:'Clear Milestones', desc:'Deletes all payment milestones.', scope:'milestones' },
+                { label:'Clear Quotations', desc:'Removes all quotations.', scope:'quotations' },
+                { label:'Clear Purchase Orders', desc:'Removes all POs.', scope:'purchaseorders' },
+                { label:'Clear Petty Cash', desc:'Removes all petty cash entries.', scope:'pettycash' },
+                { label:'Clear General Expenses', desc:'Removes all general expense entries.', scope:'expenses' },
+                { label:'Reset All Data', desc:'Wipes everything. Cannot be undone.', scope:'all' },
+              ].map(item => <ClearDataCard key={item.scope} item={item} />)}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
