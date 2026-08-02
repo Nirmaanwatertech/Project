@@ -969,6 +969,102 @@ function ClearDataCard({ item }) {
 }
 
 // ─── PaymentScheduleEditor ────────────────────────────
+// ─── Firestore helper ─────────────────────────────────
+function makeCollectionHook(col, orderField, orderDir) {
+  return function() {
+    const [items, setItems] = React.useState([]);
+    const [loading, setLoading] = React.useState(true);
+    React.useEffect(() => {
+      function start() {
+        const { query, orderBy, onSnapshot } = window.fb;
+        const q = orderField ? query(userCol(col), orderBy(orderField, orderDir||'desc')) : userCol(col);
+        const unsub = onSnapshot(q,
+          snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
+          err  => { console.error(col, err); setLoading(false); }
+        );
+        return unsub;
+      }
+      if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+      let u;
+      const h = () => { if(getUserUID()) u=start(); };
+      const hu = () => { if(u) u(); if(window.fb) u=start(); };
+      window.addEventListener('firebase-ready', h, {once:true});
+      window.addEventListener('user-ready', hu, {once:true});
+      return () => { window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u)u(); };
+    }, []);
+    return {items, loading};
+  };
+}
+
+// ─── Collection constants ─────────────────────────────
+const TASKS_COLLECTION      = 'tasks';
+const QUOTATIONS_COLLECTION = 'quotations';
+const WO_COLLECTION         = 'workorders';
+const PO_COLLECTION         = 'purchaseorders';
+const WO_STAGES     = ['Draft','Issued','In Progress','Completed','Cancelled'];
+const WO_STAGE_COLOR= { Draft:'grey', Issued:'blue', 'In Progress':'teal', Completed:'green', Cancelled:'red' };
+const QUOTE_STAGES  = ['Receipt of Quotation','Finalized'];
+const STAGE_COLOR   = { 'Receipt of Quotation':'grey', 'Finalized':'green' };
+
+// ─── Hooks ────────────────────────────────────────────
+const useTasks          = makeCollectionHook('tasks',          'createdAt', 'desc');
+const useQuotations     = makeCollectionHook('quotations',     'createdAt', 'desc');
+const useWorkOrders     = makeCollectionHook('workorders',     'createdAt', 'desc');
+const usePurchaseOrders = makeCollectionHook('purchaseorders', 'createdAt', 'desc');
+function useRequisitions() { return { items: [], loading: false }; }
+
+function useCashSettings() {
+  const [settings, setSettings] = React.useState({});
+  const [loading, setLoading]   = React.useState(true);
+  React.useEffect(() => {
+    function start() {
+      const { onSnapshot } = window.fb;
+      const unsub = onSnapshot(userDoc(SETTINGS_COLLECTION, SETTINGS_DOC),
+        snap => { setSettings(snap.exists() ? snap.data() : {}); setLoading(false); },
+        err  => { console.error('CashSettings', err); setLoading(false); }
+      );
+      return unsub;
+    }
+    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+    let u;
+    const h = () => { if(getUserUID()) u=start(); };
+    const hu = () => { if(u) u(); if(window.fb) u=start(); };
+    window.addEventListener('firebase-ready', h, {once:true});
+    window.addEventListener('user-ready', hu, {once:true});
+    return () => { window.removeEventListener('firebase-ready',h); window.removeEventListener('user-ready',hu); if(u)u(); };
+  }, []);
+  return {settings, loading};
+}
+
+// ─── Task helpers ─────────────────────────────────────
+async function addTask(data)          { const {addDoc}=window.fb; await addDoc(userCol(TASKS_COLLECTION),{...data,createdAt:Date.now()}); }
+async function updateTask(id,data)    { const {updateDoc}=window.fb; await updateDoc(userDoc(TASKS_COLLECTION,id),data); }
+async function deleteTask(id)         { const {deleteDoc}=window.fb; await deleteDoc(userDoc(TASKS_COLLECTION,id)); }
+async function clearAllTasks()        { const {getDocs,writeBatch,db}=window.fb; const s=await getDocs(userCol(TASKS_COLLECTION)); const b=writeBatch(db); s.docs.forEach(d=>b.delete(d.ref)); await b.commit(); }
+
+// ─── Quotation helpers ────────────────────────────────
+async function addQuotation(data)     { const {addDoc}=window.fb; await addDoc(userCol(QUOTATIONS_COLLECTION),{...data,createdAt:Date.now()}); }
+async function updateQuotation(id,data) { const {updateDoc}=window.fb; await updateDoc(userDoc(QUOTATIONS_COLLECTION,id),data); }
+async function deleteQuotation(id)    { const {deleteDoc}=window.fb; await deleteDoc(userDoc(QUOTATIONS_COLLECTION,id)); }
+async function clearAllQuotations()   { const {getDocs,writeBatch,db}=window.fb; const s=await getDocs(userCol(QUOTATIONS_COLLECTION)); const b=writeBatch(db); s.docs.forEach(d=>b.delete(d.ref)); await b.commit(); }
+function finalizedQuotations(qs)      { return (qs||[]).filter(q=>q.stage==='Finalized'); }
+
+// ─── WO helpers ───────────────────────────────────────
+async function updateWorkOrder(id,data) { const {updateDoc}=window.fb; await updateDoc(userDoc(WO_COLLECTION,id),data); }
+async function deleteWorkOrder(id)    { const {deleteDoc}=window.fb; await deleteDoc(userDoc(WO_COLLECTION,id)); }
+async function clearAllWorkOrders()   { const {getDocs,writeBatch,db}=window.fb; const s=await getDocs(userCol(WO_COLLECTION)); const b=writeBatch(db); s.docs.forEach(d=>b.delete(d.ref)); await b.commit(); }
+function nextWONumber(count)          { const fy=`${new Date().getFullYear()}-${String(new Date().getFullYear()+1).slice(2)}`; return `NWTS/WO/${fy}/${String(count+1).padStart(3,'0')}`; }
+
+// ─── PO helpers ───────────────────────────────────────
+async function addPO(data)            { const {addDoc}=window.fb; await addDoc(userCol(PO_COLLECTION),{...data,createdAt:Date.now()}); }
+async function updatePO(id,data)      { const {updateDoc}=window.fb; await updateDoc(userDoc(PO_COLLECTION,id),data); }
+async function deletePO(id)           { const {deleteDoc}=window.fb; await deleteDoc(userDoc(PO_COLLECTION,id)); }
+async function clearAllPOs()          { const {getDocs,writeBatch,db}=window.fb; const s=await getDocs(userCol(PO_COLLECTION)); const b=writeBatch(db); s.docs.forEach(d=>b.delete(d.ref)); await b.commit(); }
+function nextPONumber(count)          { const fy=`${new Date().getFullYear()}-${String(new Date().getFullYear()+1).slice(2)}`; return `NWTS/PO/${fy}/${String(count+1).padStart(3,'0')}`; }
+
+// ─── Milestone helpers ────────────────────────────────
+async function clearAllMilestones()   { const {getDocs,writeBatch,db}=window.fb; const s=await getDocs(userCol(MILESTONES_COLLECTION)); const b=writeBatch(db); s.docs.forEach(d=>b.delete(d.ref)); await b.commit(); }
+
 const STAGE_TYPES = ['Advance', 'Against Delivery'];
 const STAGE_TYPE_COLOR = { 'Advance': 'amber', 'Against Delivery': 'teal' };
 
