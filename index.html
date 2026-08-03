@@ -1058,14 +1058,62 @@ function finalizedQuotations(qs)      { return (qs||[]).filter(q=>q.stage==='Fin
 
 // ─── WO helpers ───────────────────────────────────────
 async function updateWorkOrder(id,data) { const {updateDoc}=window.fb; await updateDoc(userDoc(WO_COLLECTION,id),data); }
-async function deleteWorkOrder(id)    { const {deleteDoc}=window.fb; await deleteDoc(userDoc(WO_COLLECTION,id)); }
+async function deleteWorkOrder(id) {
+  const { deleteDoc } = window.fb;
+  try {
+    const { getDoc } = window.fb;
+    const snap = await getDoc(userDoc(WO_COLLECTION, id));
+    if (snap.exists()) {
+      const wo = snap.data();
+      const schedule = wo.paymentSchedule || [];
+      for (let i = 0; i < schedule.length; i++) {
+        const stage = schedule[i];
+        if (stage.linkedEntryId) {
+          const isAdvance = (stage.stageType||'').toLowerCase() === 'advance';
+          const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
+          try { await deleteDoc(userDoc(col, stage.linkedEntryId)); } catch(e) {
+            const alt = isAdvance ? BILLS_COLLECTION : ADVANCES_COLLECTION;
+            try { await deleteDoc(userDoc(alt, stage.linkedEntryId)); } catch(e2) {}
+          }
+        }
+      }
+    }
+  } catch(e) { console.warn('Could not clean up WO linked entries:', e.message); }
+  await deleteDoc(userDoc(WO_COLLECTION, id));
+}
 async function clearAllWorkOrders()   { const {getDocs,writeBatch,db}=window.fb; const s=await getDocs(userCol(WO_COLLECTION)); const b=writeBatch(db); s.docs.forEach(d=>b.delete(d.ref)); await b.commit(); }
 function nextWONumber(count)          { const fy=`${new Date().getFullYear()}-${String(new Date().getFullYear()+1).slice(2)}`; return `NWTS/WO/${fy}/${String(count+1).padStart(3,'0')}`; }
 
 // ─── PO helpers ───────────────────────────────────────
 async function addPO(data)            { const {addDoc}=window.fb; await addDoc(userCol(PO_COLLECTION),{...data,createdAt:Date.now()}); }
 async function updatePO(id,data)      { const {updateDoc}=window.fb; await updateDoc(userDoc(PO_COLLECTION,id),data); }
-async function deletePO(id)           { const {deleteDoc}=window.fb; await deleteDoc(userDoc(PO_COLLECTION,id)); }
+async function deletePO(id) {
+  const { deleteDoc, getDocs } = window.fb;
+  // First find the PO to get its payment schedule
+  try {
+    const { getDoc } = window.fb;
+    const snap = await getDoc(userDoc(PO_COLLECTION, id));
+    if (snap.exists()) {
+      const po = snap.data();
+      const schedule = po.paymentSchedule || [];
+      // Delete all linked Advance and Bill entries
+      for (let i = 0; i < schedule.length; i++) {
+        const stage = schedule[i];
+        if (stage.linkedEntryId) {
+          const isAdvance = (stage.stageType||'').toLowerCase() === 'advance';
+          const col = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
+          try { await deleteDoc(userDoc(col, stage.linkedEntryId)); } catch(e) {
+            // Try the other collection as fallback (in case mis-routed)
+            const alt = isAdvance ? BILLS_COLLECTION : ADVANCES_COLLECTION;
+            try { await deleteDoc(userDoc(alt, stage.linkedEntryId)); } catch(e2) {}
+          }
+        }
+      }
+    }
+  } catch(e) { console.warn('Could not clean up PO linked entries:', e.message); }
+  // Delete the PO itself
+  await deleteDoc(userDoc(PO_COLLECTION, id));
+}
 async function clearAllPOs()          { const {getDocs,writeBatch,db}=window.fb; const s=await getDocs(userCol(PO_COLLECTION)); const b=writeBatch(db); s.docs.forEach(d=>b.delete(d.ref)); await b.commit(); }
 function nextPONumber(count)          { const fy=`${new Date().getFullYear()}-${String(new Date().getFullYear()+1).slice(2)}`; return `NWTS/PO/${fy}/${String(count+1).padStart(3,'0')}`; }
 
