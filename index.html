@@ -3084,6 +3084,15 @@ function LinkAdvanceModal({ advance, onClose, pos, bills }) {
   const [adjustedAmount, setAdjustedAmount] = useState(String(advance.adjustedAmount || ''));
   const [saving, setSaving] = useState(false);
 
+  function handleBillSelect(billDocId) {
+    setLinkedBill(billDocId);
+    if (billDocId && !adjustedAmount) {
+      // Auto-fill with full advance balance
+      const bal = Math.max(0, Number(advance.amount) - (Number(advance.adjustedAmount)||0));
+      setAdjustedAmount(String(bal));
+    }
+  }
+
   async function handleSave() {
     setSaving(true);
     try {
@@ -3119,10 +3128,13 @@ function LinkAdvanceModal({ advance, onClose, pos, bills }) {
           </div>
           <div className="form-group">
             <label className="form-label">Link to Bill</label>
-            <select className="form-input form-select" value={linkedBill} onChange={e=>setLinkedBill(e.target.value)}>
+            <select className="form-input form-select" value={linkedBill} onChange={e=>handleBillSelect(e.target.value)}>
               <option value="">None</option>
-              {(bills||[]).map(b=><option key={b.docId} value={b.docId}>{b.payee} — {inr(b.amount||0)}{b.paid?' (Paid)':''}</option>)}
+              {(bills||[]).map(b=><option key={b.docId} value={b.docId}>{b.payee} — {b.invoiceNo||'no invoice'} — {inr(b.amount||0)}{b.paid?' (Paid)':''}</option>)}
             </select>
+            {linkedBill && <div style={{fontSize:11,color:'var(--text-muted)',marginTop:4}}>
+              Advance balance {inr(Math.max(0, Number(advance.amount)-(Number(advance.adjustedAmount)||0)))} will be auto-filled below
+            </div>}
           </div>
           <div className="form-group">
             <label className="form-label">Amount Adjusted Against This PO/Bill (₹)</label>
@@ -3170,7 +3182,7 @@ function BillPayments() {
 
   // Bills with computed status
   const withStatus = items.map(b => {
-    // Find advances linked to this bill directly OR to the same PO/WO
+    // Find advances linked to this bill directly OR to the same PO/WO (for fromSchedule bills)
     const linkedAdv = advances.filter(a =>
       a.linkedBill === b.docId ||
       (b.fromSchedule && b.linkedPO && a.linkedPO === b.linkedPO && a.fromSchedule) ||
@@ -3180,13 +3192,29 @@ function BillPayments() {
 
     const hasSchedule = b.paymentSchedule && b.paymentSchedule.length > 0;
 
-    // For fromSchedule bills: amount already includes GST (set in syncStageToModules as baseAmt+gstAmt)
-    // So don't add GST again
-    const totalGstAmt = (!b.fromSchedule && b.gstPct)
-      ? Math.round(Number(b.amount||0) * parseFloat(b.gstPct) / 100) : 0;
+    // For fromSchedule bills: amount=base, gstAmount=GST stored separately
+    // For manual bills: amount=base, gstPct used to calc GST
+    let displayBase, displayGst, totalBillAmt;
+    if (b.fromSchedule && b.gstAmount !== undefined) {
+      displayBase  = Number(b.amount||0);
+      displayGst   = Number(b.gstAmount||0);
+      totalBillAmt = Number(b.totalAmount||0) || (displayBase + displayGst);
+    } else if (b.fromSchedule && b.gstPct && parseFloat(b.gstPct) > 0) {
+      const rate = parseFloat(b.gstPct) / 100;
+      displayBase  = Math.round(Number(b.amount||0) / (1 + rate));
+      displayGst   = Number(b.amount||0) - displayBase;
+      totalBillAmt = Number(b.amount||0);
+    } else {
+      // Manual bill — amount is base, gstPct gives GST
+      displayBase  = Number(b.amount||0);
+      const gstRate = b.gstPct ? parseFloat(b.gstPct) : 0;
+      displayGst   = gstRate > 0 ? Math.round(displayBase * gstRate / 100) : 0;
+      totalBillAmt = displayBase + displayGst;
+    }
+
+    const totalGstAmt = displayGst; // unified
     const gstAssignedToStages = hasSchedule
-      ? b.paymentSchedule.filter(s=>s.includesGst).reduce((s,r)=>s+Number(r.gstAmount||0),0)
-      : 0;
+      ? b.paymentSchedule.filter(s=>s.includesGst).reduce((s,r)=>s+Number(r.gstAmount||0),0) : 0;
     const unassignedGst = Math.max(0, totalGstAmt - gstAssignedToStages);
 
     let paidStagesAmt = 0, unpaidStagesAmt = 0;
@@ -3200,7 +3228,7 @@ function BillPayments() {
       unpaidStagesAmt += unassignedGst;
     }
 
-    // For status: use next unpaid stage's due date
+    // Effective due date
     let effectiveDue = b.due;
     if (hasSchedule) {
       const nextUnpaid = b.paymentSchedule.find(s => !s.paid && s.date);
@@ -3208,9 +3236,18 @@ function BillPayments() {
       else if (b.paymentSchedule.every(s => s.paid)) effectiveDue = null;
     }
 
-    // fromSchedule bills: mark as paid if the advance covers the full amount
-    const billTotal = Number(b.amount||0) + totalGstAmt;
-    const isFullyCovered = b.fromSchedule && advanceDeducted >= billTotal;
+    // paidSoFar and netPayable
+    const paidSoFar = hasSchedule
+      ? paidStagesAmt
+      : advanceDeducted > 0
+        ? advanceDeducted          // advance linked to this bill
+        : b.paid ? totalBillAmt : 0;
+
+    const netPayable = hasSchedule
+      ? Math.max(0, unpaidStagesAmt - advanceDeducted)
+      : Math.max(0, totalBillAmt - paidSoFar);
+
+    const isFullyCovered = advanceDeducted >= totalBillAmt;
 
     let status;
     if (b.paid || isFullyCovered || (hasSchedule && unpaidStagesAmt === 0)) status = 'Paid';
@@ -3222,42 +3259,7 @@ function BillPayments() {
     const days = (status === 'Overdue' && effectiveDue)
       ? Math.floor((new Date(todayStr) - new Date(effectiveDue)) / 86400000) : 0;
 
-    // For fromSchedule bills: new entries have amount=base, gstAmount=GST, totalAmount=base+GST
-    // Old entries: amount = base+GST combined (legacy)
-    // Manual bills: amount=base, gstPct used to calc GST
-    let displayBase, displayGst, totalBillAmt;
-    if (b.fromSchedule && b.gstAmount !== undefined) {
-      // New format: fields stored separately
-      displayBase  = Number(b.amount||0);
-      displayGst   = Number(b.gstAmount||0);
-      totalBillAmt = Number(b.totalAmount||0) || (displayBase + displayGst);
-    } else if (b.fromSchedule && b.gstPct && parseFloat(b.gstPct) > 0) {
-      // Legacy format: amount = base+GST combined, reverse-calculate
-      const rate = parseFloat(b.gstPct) / 100;
-      displayBase  = Math.round(Number(b.amount||0) / (1 + rate));
-      displayGst   = Number(b.amount||0) - displayBase;
-      totalBillAmt = Number(b.amount||0);
-    } else {
-      // Manual bill or no GST
-      displayBase  = Number(b.amount||0);
-      displayGst   = b.gstPct ? Math.round(displayBase * parseFloat(b.gstPct) / 100) : 0;
-      totalBillAmt = displayBase + displayGst;
-    }
-
-    // Update billTotal and status using correct totalBillAmt
-    const isFullyCovered2 = b.fromSchedule && advanceDeducted >= totalBillAmt;
-    let finalStatus = status;
-    if (isFullyCovered2 && status !== 'Paid') finalStatus = 'Paid';
-
-    const paidSoFar2 = hasSchedule ? paidStagesAmt
-      : b.fromSchedule ? advanceDeducted
-      : (b.paid ? totalBillAmt : 0);
-
-    const netPayable2 = hasSchedule
-      ? Math.max(0, unpaidStagesAmt - advanceDeducted)
-      : Math.max(0, totalBillAmt - paidSoFar2);
-
-    return { ...b, computedStatus: finalStatus, days, advanceDeducted, netPayable: netPayable2, paidSoFar: paidSoFar2, hasSchedule, totalBillAmt, effectiveDue, displayBase, displayGst };
+    return { ...b, computedStatus: status, days, advanceDeducted, netPayable, paidSoFar, hasSchedule, totalBillAmt, effectiveDue, displayBase, displayGst };
   });
 
   function applySort(arr, key, dateField='due', amtField='amount', nameField='payee') {
