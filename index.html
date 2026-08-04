@@ -2586,6 +2586,8 @@ function CashFlow() {
 
   const futureRows = rows.filter(r=>!r.isPast);
   const pastRows   = rows.filter(r=>r.isPast);
+  // Current balance = opening balance adjusted for all PAST unpaid outflows/inflows in the table
+  // (paid PO stages are excluded from rows entirely, so opening balance = current actual bank balance)
   const currentBalance = pastRows.length ? pastRows[pastRows.length-1].balance : openingBalance;
   const lowestFuture   = futureRows.length ? Math.min(...futureRows.map(r=>r.balance)) : currentBalance;
   const closingBalance = rows.length ? rows[rows.length-1].balance : openingBalance;
@@ -2639,7 +2641,7 @@ function CashFlow() {
         <div className="stat-card" style={{background: currentBalance < 0 ? '#FEF2F2' : currentBalance < alertLevel && alertLevel > 0 ? '#FEF3C7' : ''}}>
           <div className="stat-label">Current Balance</div>
           <div className={`stat-value ${currentBalance < 0 ? 'red' : currentBalance < alertLevel && alertLevel > 0 ? 'amber' : 'green'}`}>{inr(currentBalance)}</div>
-          <div className="stat-sub">After past transactions</div>
+          <div className="stat-sub" style={{fontSize:10}}>Opening ± overdue items</div>
         </div>
         <div className="stat-card" style={{background: lowestFuture < alertLevel && alertLevel > 0 ? '#FEF2F2' : ''}}>
           <div className="stat-label">Lowest Projected</div>
@@ -2676,9 +2678,12 @@ function CashFlow() {
 
       {/* Transaction table */}
       <div className="card">
-        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
-          <div className="tabs" style={{marginBottom:0}}>
-            <div className="tab active">Future Outflows & Inflows</div>
+        <div className="card-body" style={{paddingTop:10,paddingBottom:6}}>
+          <div style={{fontSize:12,color:'var(--text-muted)'}}>
+            <span style={{background:'var(--grey-50)',padding:'2px 8px',borderRadius:4,marginRight:8}}>Past (greyed)</span>
+            <span style={{borderLeft:'3px solid var(--amber)',paddingLeft:6,marginRight:8}}>Future / Due</span>
+            <span style={{background:'#F0FFF4',padding:'2px 8px',borderRadius:4,marginRight:8}}>Inflow</span>
+            {alertLevel>0&&<span style={{background:'#FEF3C7',padding:'2px 8px',borderRadius:4}}>⚠ Below alert</span>}
           </div>
         </div>
         {filtered.length===0
