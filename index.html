@@ -2873,21 +2873,22 @@ function NewBillModal({ onClose, existing }) {
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
 
   async function handleSave() {
-    if (!form.payee.trim() || !form.amount || !form.due) return;
+    if (!form.payee.trim() || !form.amount) return;
     setSaving(true);
     try {
+      // due date defaults to invoice date if not set separately
+      const saveForm = {...form, due: form.due || form.invoiceDate || ''};
       let savedDocId = existing?.docId;
       if (isEdit) {
         const { updateDoc } = window.fb;
-        await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...form, amount: Number(form.amount), paymentSchedule: schedule, gstPct });
+        await updateDoc(userDoc(BILLS_COLLECTION, existing.docId), { ...saveForm, amount: Number(form.amount), paymentSchedule: schedule, gstPct });
       } else {
         const { addDoc } = window.fb;
-        const ref = await addDoc(userCol(BILLS_COLLECTION), { ...form, amount: Number(form.amount), entryType: 'invoice', paymentSchedule: schedule, gstPct, createdAt: Date.now() });
+        const ref = await addDoc(userCol(BILLS_COLLECTION), { ...saveForm, amount: Number(form.amount), entryType: 'invoice', paymentSchedule: schedule, gstPct, createdAt: Date.now() });
         savedDocId = ref.id;
       }
-      // Sync link back to PO or WO schedule if linked
       if ((form.linkedPO || form.linkedWO) && savedDocId) {
-        await syncManualEntryToPOWO(savedDocId, 'bill', form.linkedPO, form.linkedWO, Number(form.amount), form.due);
+        await syncManualEntryToPOWO(savedDocId, 'bill', form.linkedPO, form.linkedWO, Number(form.amount), saveForm.due);
       }
       onClose();
     } catch (e) { console.error(e); alert('Could not save bill.'); }
@@ -2922,10 +2923,6 @@ function NewBillModal({ onClose, existing }) {
               <label className="form-label">Invoice Date</label>
               <input className="form-input" type="date" value={form.invoiceDate} onChange={e=>set('invoiceDate', e.target.value)} />
             </div>
-            <div className="form-group">
-              <label className="form-label">Due Date</label>
-              <input className="form-input" type="date" value={form.due} onChange={e=>set('due', e.target.value)} />
-            </div>
           </div>
           <div className="form-group">
             <label className="form-label">Amount (₹)</label>
@@ -2956,8 +2953,8 @@ function NewBillModal({ onClose, existing }) {
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleSave} disabled={saving || !form.payee.trim() || !form.amount || !form.due} className="btn btn-primary"
-            style={{opacity: saving || !form.payee.trim() || !form.amount || !form.due ? 0.6 : 1}}>
+          <button onClick={handleSave} disabled={saving || !form.payee.trim() || !form.amount} className="btn btn-primary"
+            style={{opacity: saving || !form.payee.trim() || !form.amount ? 0.6 : 1}}>
             {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Save Bill'}
           </button>
         </div>
