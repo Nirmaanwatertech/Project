@@ -2531,6 +2531,15 @@ function CashFlow() {
   const openingBalance = Number(settings.startingBalance)||0;
   const alertLevel     = Number(settings.alertLevel)||0;
 
+  // Current balance = all actual money that has moved (regardless of date)
+  const totalCapital   = capital.reduce((s,c)  => s + Number(c.amount||0), 0);
+  const totalReceipts  = receipts.reduce((s,r) => s + Number(r.amountReceived||0), 0);
+  const totalAdvances  = advances.reduce((s,a) => s + Number(a.amount||0), 0);
+  const totalBillsPaid = bills.filter(b=>b.paid).reduce((s,b) => s + Number(b.totalAmount||0) || s + Number(b.amount||0), 0);
+  const totalExpenses  = expenses.reduce((s,e) => s + Number(e.amount||0), 0);
+  const totalPetty     = petty.reduce((s,p)   => s + Number(p.amount||0), 0);
+  const currentBalance = totalCapital + totalReceipts - totalAdvances - totalBillsPaid - totalExpenses - totalPetty;
+
   function getITCDate(dateStr) {
     if (!dateStr) return '';
     const d = new Date(dateStr);
@@ -2577,21 +2586,15 @@ function CashFlow() {
 
   const filtered = projectFilter==='all' ? allRows : allRows.filter(r=>r.project===projectFilter);
 
-  // Build running balance starting from opening balance
-  let running = openingBalance;
-  const rows = filtered.map(r => {
+  // Future projection starts from current cash balance
+  let running = currentBalance;
+  const rows = filtered.filter(r=>!r.isPast).map(r => {
     if (r.type==='out') running -= r.amt; else running += r.amt;
     return {...r, balance: running};
   });
-
-  const futureRows = rows.filter(r=>!r.isPast);
-  const pastRows   = rows.filter(r=>r.isPast);
-  // Current balance = opening balance adjusted for all PAST unpaid outflows/inflows in the table
-  // (paid PO stages are excluded from rows entirely, so opening balance = current actual bank balance)
-  const currentBalance = pastRows.length ? pastRows[pastRows.length-1].balance : openingBalance;
-  const lowestFuture   = futureRows.length ? Math.min(...futureRows.map(r=>r.balance)) : currentBalance;
-  const closingBalance = rows.length ? rows[rows.length-1].balance : openingBalance;
-  const belowAlert     = alertLevel > 0 && futureRows.some(r=>r.balance < alertLevel);
+  const lowestFuture   = rows.length ? Math.min(...rows.map(r=>r.balance)) : currentBalance;
+  const closingBalance = rows.length ? rows[rows.length-1].balance : currentBalance;
+  const belowAlert     = alertLevel > 0 && (currentBalance < alertLevel || rows.some(r=>r.balance < alertLevel));
 
   async function saveSetting(key, value) {
     const { setDoc, doc, db } = window.fb;
@@ -2621,37 +2624,33 @@ function CashFlow() {
       )}
 
       {/* Summary cards */}
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(5,1fr)',marginBottom:14}}>
-        <div className="stat-card">
-          <div className="stat-label">Opening Balance</div>
-          {editingBalance ? (
-            <div style={{display:'flex',gap:4,marginTop:4}}>
-              <input className="form-input font-mono" style={{width:100,fontSize:12}} value={balanceInput}
-                onChange={e=>setBalanceInput(e.target.value)} autoFocus
-                onKeyDown={e=>{if(e.key==='Enter'){saveSetting('startingBalance',balanceInput);setEditingBalance(false);}}} />
-              <button className="btn btn-sm btn-primary" onClick={()=>{saveSetting('startingBalance',balanceInput);setEditingBalance(false);}}>✓</button>
-            </div>
-          ) : (
-            <>
-              <div className="stat-value">{inr(openingBalance)}</div>
-              <div className="stat-sub" style={{cursor:'pointer',color:'var(--primary)',fontSize:11}} onClick={()=>{setBalanceInput(String(openingBalance));setEditingBalance(true);}}>Edit</div>
-            </>
-          )}
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)',marginBottom:8}}>
+        <div className="stat-card" style={{background:'#F0FFF4'}}>
+          <div className="stat-label">Total Inflows</div>
+          <div className="stat-value green">{inr(totalCapital + totalReceipts)}</div>
+          <div className="stat-sub" style={{fontSize:10}}>Capital {inr(totalCapital)} · Receipts {inr(totalReceipts)}</div>
         </div>
-        <div className="stat-card" style={{background: currentBalance < 0 ? '#FEF2F2' : currentBalance < alertLevel && alertLevel > 0 ? '#FEF3C7' : ''}}>
-          <div className="stat-label">Current Balance</div>
+        <div className="stat-card" style={{background:'#FEF2F2'}}>
+          <div className="stat-label">Total Outflows</div>
+          <div className="stat-value red">{inr(totalAdvances + totalBillsPaid + totalExpenses + totalPetty)}</div>
+          <div className="stat-sub" style={{fontSize:10}}>Advances {inr(totalAdvances)} · Bills {inr(totalBillsPaid)} · Exp {inr(totalExpenses + totalPetty)}</div>
+        </div>
+        <div className="stat-card" style={{background: currentBalance < 0 ? '#FEF2F2' : currentBalance < alertLevel && alertLevel > 0 ? '#FEF3C7' : '#F0FFF4', border: currentBalance < alertLevel && alertLevel > 0 ? '1px solid var(--amber)' : ''}}>
+          <div className="stat-label">Current Cash Balance</div>
           <div className={`stat-value ${currentBalance < 0 ? 'red' : currentBalance < alertLevel && alertLevel > 0 ? 'amber' : 'green'}`}>{inr(currentBalance)}</div>
-          <div className="stat-sub" style={{fontSize:10}}>Opening ± overdue items</div>
+          <div className="stat-sub" style={{fontSize:10}}>Capital+Receipts − Advances−Bills−Expenses</div>
         </div>
-        <div className="stat-card" style={{background: lowestFuture < alertLevel && alertLevel > 0 ? '#FEF2F2' : ''}}>
-          <div className="stat-label">Lowest Projected</div>
+      </div>
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)',marginBottom:14}}>
+        <div className="stat-card">
+          <div className="stat-label">Lowest Future Balance</div>
           <div className={`stat-value ${lowestFuture < 0 ? 'red' : lowestFuture < alertLevel && alertLevel > 0 ? 'amber' : 'blue'}`}>{inr(lowestFuture)}</div>
-          <div className="stat-sub">Future low point</div>
+          <div className="stat-sub" style={{fontSize:10}}>Projected low point</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Closing Balance</div>
           <div className={`stat-value ${closingBalance >= 0 ? 'green' : 'red'}`}>{inr(closingBalance)}</div>
-          <div className="stat-sub">End of all transactions</div>
+          <div className="stat-sub" style={{fontSize:10}}>After all future transactions</div>
         </div>
         <div className="stat-card" style={{background: alertLevel > 0 ? '#FFF7ED' : ''}}>
           <div className="stat-label">Alert Level 🔔</div>
@@ -2674,7 +2673,7 @@ function CashFlow() {
       </div>
 
       {/* Chart */}
-      {rows.length > 1 && <CashFlowChart rows={rows} startBalance={openingBalance} alertLevel={alertLevel} />}
+      {rows.length > 1 && <CashFlowChart rows={rows} startBalance={currentBalance} alertLevel={alertLevel} />}
 
       {/* Transaction table */}
       <div className="card">
@@ -2694,9 +2693,9 @@ function CashFlow() {
               <tr><th>Date</th><th>Description</th><th>Category</th><th>Project</th><th>Inflow</th><th>Outflow</th><th>Balance</th></tr>
             </thead>
             <tbody>
-              <tr style={{background:'var(--primary-50)'}}>
-                <td colSpan={6} style={{fontSize:12,fontWeight:600,color:'var(--primary)',padding:'6px 12px'}}>Opening Balance</td>
-                <td className="amount fw-600" style={{color:'var(--primary)'}}>{inr(openingBalance)}</td>
+              <tr style={{background:'#F0FFF4'}}>
+                <td colSpan={6} style={{fontSize:12,fontWeight:600,color:'var(--green)',padding:'6px 12px'}}>Current Cash Balance (today)</td>
+                <td className="amount fw-600" style={{color:'var(--green)'}}>{inr(currentBalance)}</td>
               </tr>
               {rows.map((r,i) => {
                 const belowAlertRow = alertLevel > 0 && r.balance < alertLevel;
