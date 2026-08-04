@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Nirmaan Watertech Platform v2.8 - 2026-07-21 16:16 -->
+<!-- Nirmaan Watertech Platform v3.2 - sync-debug - 2026-08-03 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1124,157 +1124,135 @@ const STAGE_TYPES = ['Advance', 'Against Delivery'];
 const STAGE_TYPE_COLOR = { 'Advance': 'amber', 'Against Delivery': 'teal' };
 
 // ─── Core sync: PO/WO stage ↔ Advance & Bill ──────────
+const SYNC_VERSION = 'v3.2-' + '20260803';
 async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule, setScheduleParent, paymentDate) {
-  const { addDoc, deleteDoc, updateDoc, getDoc, getDocs } = window.fb;
-  const sType    = (stage.stageType || 'Against Delivery').trim();
+  const { addDoc, deleteDoc, updateDoc, getDocs } = window.fb;
+  const sType     = (stage.stageType || 'Against Delivery').trim();
   const isAdvance = sType === 'Advance';
-  const col      = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
-  const paidDate = paymentDate || stage.datePaid || stage.date || new Date().toISOString().slice(0,10);
-  const refNo    = parentType === 'po' ? (parentDoc.po||'') : (parentDoc.wo||'');
+  const col       = isAdvance ? ADVANCES_COLLECTION : BILLS_COLLECTION;
+  const paidDate  = paymentDate || stage.datePaid || stage.date || new Date().toISOString().slice(0,10);
+  const refNo     = parentType === 'po' ? (parentDoc.po||'') : (parentDoc.wo||'');
   const parentCol = parentType === 'po' ? PO_COLLECTION : WO_COLLECTION;
 
+  console.log(`[SYNC ${SYNC_VERSION}] stage="${sType}" paid=${stage.paid} target=${col} refNo="${refNo}" docId="${parentDoc.docId}" linkedEntryId="${stage.linkedEntryId||'none'}"`);
+
+  if (!parentDoc.docId) {
+    console.error('[SYNC] ABORT: parentDoc.docId missing', parentDoc);
+    alert('PO/WO record ID missing — please close and reopen the schedule.');
+    return;
+  }
+
   if (stage.paid) {
-    // ── CREATE or UPDATE linked entry ──────────────────
     const stageAmt = Number(stage.amount) || 0;
     const gstAmt   = stage.includesGst ? Number(stage.gstAmount||0) : 0;
-    const fullBase = Number(parentDoc.value || 0); // full PO base value
+    const fullBase = Number(parentDoc.value || 0);
 
-    // Find any unadjusted advance from same PO/WO
+    // Find unadjusted advance from same PO/WO
     let advEntryId = '', advAmt = 0;
     if (!isAdvance) {
       try {
-        const advSnap = await getDocs(userCol(ADVANCES_COLLECTION));
-        const found = advSnap.docs.find(d => {
+        const snap = await getDocs(userCol(ADVANCES_COLLECTION));
+        const found = snap.docs.find(d => {
           const a = d.data();
-          return a.fromSchedule &&
-            (a.linkedPO === refNo || a.linkedWO === refNo) &&
-            a.status !== 'Fully Adjusted';
+          return a.fromSchedule && (a.linkedPO===refNo||a.linkedWO===refNo) && a.status!=='Fully Adjusted';
         });
-        if (found) { advEntryId = found.id; advAmt = Number(found.data().balanceAmount || found.data().amount || 0); }
-      } catch(e) { console.warn('advance lookup failed:', e.message); }
+        if (found) { advEntryId = found.id; advAmt = Number(found.data().balanceAmount||found.data().amount||0); }
+      } catch(e) { console.warn('advance lookup:', e.message); }
     }
 
-    const advanceDeducted = advAmt;
-
-    const advanceEntry = {
-      vendor:        parentDoc.vendorName||'',
-      amount:        stageAmt,
-      datePaid:      paidDate,
-      paymentMode:   'NEFT',
-      refNumber:     '',
-      narration:     `Advance — ${refNo}`,
-      linkedPO:      parentType==='po' ? refNo : '',
-      linkedWO:      parentType==='wo' ? refNo : '',
-      project:       parentDoc.project||'',
-      split:         parentDoc.split||{pontoon:50,wtp:50},
-      status:        'Unadjusted',
-      balanceAmount: stageAmt,
-      adjustedAmount:0,
-      fromSchedule:  true,
+    const entryData = isAdvance ? {
+      vendor: parentDoc.vendorName||'', amount: stageAmt, datePaid: paidDate,
+      paymentMode: 'NEFT', refNumber: '', narration: `Advance — ${refNo}`,
+      linkedPO: parentType==='po'?refNo:'', linkedWO: parentType==='wo'?refNo:'',
+      project: parentDoc.project||'', split: parentDoc.split||{pontoon:50,wtp:50},
+      status: 'Unadjusted', balanceAmount: stageAmt, adjustedAmount: 0, fromSchedule: true,
+    } : {
+      payee: parentDoc.vendorName||'', category: 'Vendor',
+      invoiceNo: stage.invoiceNo||refNo, invoiceDate: paidDate, due: paidDate,
+      amount: fullBase, gstAmount: gstAmt, totalAmount: fullBase+gstAmt,
+      advanceDeducted: advAmt,
+      notes: `Against Delivery — ${refNo}`,
+      linkedPO: parentType==='po'?refNo:'', linkedWO: parentType==='wo'?refNo:'',
+      project: parentDoc.project||'', split: parentDoc.split||{pontoon:50,wtp:50},
+      gstPct: parentDoc.gstPct||'', paid: false, fromSchedule: true,
     };
 
-    const billEntry = {
-      payee:           parentDoc.vendorName||'',
-      category:        'Vendor',
-      invoiceNo:       stage.invoiceNo||refNo,
-      invoiceDate:     paidDate,
-      due:             paidDate,
-      amount:          fullBase,        // full PO base (₹1Cr)
-      gstAmount:       gstAmt,          // full GST (₹18L)
-      totalAmount:     fullBase + gstAmt,
-      advanceDeducted: advanceDeducted, // auto-deducted advance
-      notes:           `Against Delivery — ${refNo}`,
-      linkedPO:        parentType==='po' ? refNo : '',
-      linkedWO:        parentType==='wo' ? refNo : '',
-      project:         parentDoc.project||'',
-      split:           parentDoc.split||{pontoon:50,wtp:50},
-      gstPct:          parentDoc.gstPct||'',
-      paid:            false,
-      fromSchedule:    true,
-    };
-
-    const entryData = isAdvance ? advanceEntry : billEntry;
-
-    let entryId = stage.linkedEntryId;
+    // Update existing or create new
+    let entryId = stage.linkedEntryId||'';
     if (entryId) {
-      // Update existing entry
-      try { await updateDoc(userDoc(col, entryId), entryData); }
-      catch(e) {
-        // Entry may have been deleted — recreate it
+      try {
+        await updateDoc(userDoc(col, entryId), entryData);
+        console.log(`[SYNC] Updated existing entry ${entryId} in ${col}`);
+      }
+      catch(e) { console.warn('[SYNC] update failed, will recreate:', e.message); entryId = ''; }
+    }
+    if (!entryId) {
+      try {
         const ref = await addDoc(userCol(col), {...entryData, createdAt: Date.now()});
         entryId = ref.id;
+        console.log(`[SYNC] ✓ Created new entry ${entryId} in ${col}`);
+      } catch(e) {
+        console.error('[SYNC] ✗ CREATE FAILED:', e);
+        alert('Could not create ' + (isAdvance?'Advance':'Bill') + ' entry: ' + e.message);
+        return;
       }
-    } else {
-      // Create new entry
-      const ref = await addDoc(userCol(col), {...entryData, createdAt: Date.now()});
-      entryId = ref.id;
     }
 
-    // After creating Bill: auto-adjust the advance
-    // Store billId on advance, store advanceEntryId on bill
-    if (!isAdvance && advEntryId && advanceDeducted > 0) {
+    // Auto-link and adjust the advance when bill is created/updated
+    if (!isAdvance && advEntryId && advAmt > 0) {
       try {
-        const remaining = advAmt - advanceDeducted;
         await updateDoc(userDoc(ADVANCES_COLLECTION, advEntryId), {
-          adjustedAmount:  advanceDeducted,
-          balanceAmount:   Math.max(0, remaining),
-          status:          remaining <= 0 ? 'Fully Adjusted' : 'Partially Adjusted',
-          adjustedAgainst: entryId,     // link advance → bill
-          linkedBill:      entryId,
+          adjustedAmount: advAmt, balanceAmount: 0,
+          status: 'Fully Adjusted', adjustedAgainst: entryId, linkedBill: entryId,
         });
-        // Also store the advanceEntryId on the bill so the link is bidirectional
-        await updateDoc(userDoc(BILLS_COLLECTION, entryId), { linkedAdvance: advEntryId });
-      } catch(e) { console.warn('advance adjustment failed:', e.message); }
+        await updateDoc(userDoc(BILLS_COLLECTION, entryId), {linkedAdvance: advEntryId});
+      } catch(e) { console.warn('advance link failed:', e.message); }
     }
 
-    // Save linkedEntryId back to PO/WO schedule stage
+    // Write linkedEntryId back to PO/WO schedule
     const newSchedule = updatedSchedule.map(s =>
-      s.id === stage.id ? {...s, linkedEntryId: entryId} : s
+      s.id===stage.id ? {...s, linkedEntryId: entryId, paid: true, datePaid: paidDate} : s
     );
-    await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: newSchedule});
-    if (setScheduleParent) setScheduleParent(newSchedule);
+    try {
+      await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: newSchedule});
+      if (setScheduleParent) setScheduleParent(newSchedule);
+    } catch(e) { alert('Entry saved but PO update failed: ' + e.message); }
 
   } else {
-    // ── UNMARK: delete linked entry, restore advance ───
+    // UNMARK — delete entry, restore advance
     if (!stage.linkedEntryId) return;
     const entryId = stage.linkedEntryId;
 
-    // Delete the Advance or Bill entry (try both collections as fallback)
     let deleted = false;
     try { await deleteDoc(userDoc(col, entryId)); deleted = true; } catch(e) {}
     if (!deleted) {
       const alt = isAdvance ? BILLS_COLLECTION : ADVANCES_COLLECTION;
-      try { await deleteDoc(userDoc(alt, entryId)); deleted = true; } catch(e) {}
+      try { await deleteDoc(userDoc(alt, entryId)); } catch(e) {}
     }
 
-    // If we deleted a Bill → restore the linked advance
     if (!isAdvance) {
       try {
-        const advSnap = await getDocs(userCol(ADVANCES_COLLECTION));
-        const toRestore = advSnap.docs.filter(d =>
-          d.data().adjustedAgainst === entryId || d.data().linkedBill === entryId
+        const snap = await getDocs(userCol(ADVANCES_COLLECTION));
+        const toRestore = snap.docs.filter(d =>
+          d.data().adjustedAgainst===entryId || d.data().linkedBill===entryId
         );
-        for (let i = 0; i < toRestore.length; i++) {
+        for (let i=0;i<toRestore.length;i++) {
           const a = toRestore[i].data();
           await updateDoc(userDoc(ADVANCES_COLLECTION, toRestore[i].id), {
-            status:          'Unadjusted',
-            balanceAmount:   Number(a.amount||0),
-            adjustedAmount:  0,
-            adjustedAgainst: '',
-            linkedBill:      '',
+            status:'Unadjusted', balanceAmount:Number(a.amount||0),
+            adjustedAmount:0, adjustedAgainst:'', linkedBill:'',
           });
         }
-      } catch(e) { console.warn('advance restore failed:', e.message); }
+      } catch(e) { console.warn('advance restore:', e.message); }
     }
 
-    // Clear linkedEntryId from the schedule stage
     const newSchedule = updatedSchedule.map(s =>
-      s.id === stage.id
-        ? {...s, linkedEntryId: '', paid: false, paidAt: null, datePaid: '', invoiceNo: ''}
-        : s
+      s.id===stage.id ? {...s, linkedEntryId:'', paid:false, paidAt:null, datePaid:'', invoiceNo:''} : s
     );
-    await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: newSchedule});
-    if (setScheduleParent) setScheduleParent(newSchedule);
+    try {
+      await updateDoc(userDoc(parentCol, parentDoc.docId), {paymentSchedule: newSchedule});
+      if (setScheduleParent) setScheduleParent(newSchedule);
+    } catch(e) { console.error('schedule clear failed:', e); }
   }
 }
 
