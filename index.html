@@ -2433,7 +2433,7 @@ function PurchaseOrders() {
 }
 
 // ─── Cash Flow Chart ──────────────────────────────────
-function CashFlowChart({ rows, startBalance }) {
+function CashFlowChart({ rows, startBalance, alertLevel }) {
   if (!rows || rows.length < 2) return null;
   const W = Math.max(700, rows.length * 30);
   const H = 220;
@@ -2467,6 +2467,14 @@ function CashFlowChart({ rows, startBalance }) {
           {yTicks.map((v,i)=>(
             <line key={i} x1={padL} y1={yScale(v)} x2={W-padR} y2={yScale(v)} stroke="#F3F4F6" strokeWidth={1}/>
           ))}
+          {/* Alert level line */}
+          {alertLevel > 0 && alertLevel >= minB && alertLevel <= maxB && (
+            <line x1={padL} y1={yScale(alertLevel)} x2={W-padR} y2={yScale(alertLevel)}
+              stroke="#EF4444" strokeWidth={1.5} strokeDasharray="6,3"/>
+          )}
+          {alertLevel > 0 && alertLevel >= minB && alertLevel <= maxB && (
+            <text x={padL+4} y={yScale(alertLevel)-4} fontSize={9} fill="#EF4444">Alert: {inr(alertLevel)}</text>
+          )}
           {/* Zero line */}
           <line x1={padL} y1={zeroY} x2={W-padR} y2={zeroY} stroke="#E5E7EB" strokeWidth={1.5} strokeDasharray="5,4"/>
           {/* Area fill */}
@@ -2504,234 +2512,214 @@ function CashFlowChart({ rows, startBalance }) {
 
 // ─── Cash Flow Module ──────────────────────────────────
 function CashFlow() {
-  const [view, setView] = useState('all');
-  const [typeFilter, setTypeFilter] = useState('all');
-  const [projectFilter, setCFProjectFilter] = useState('all');
-  const [catFilter, setCatFilter] = useState('all');
-  const { items: bills,    loading: billsLoading    } = useBills();
-  const { items: advances, loading: advLoading      } = useAdvances();
-  const { items: receipts, loading: receiptsLoading } = useReceipts();
-  const { items: capital,  loading: capitalLoading  } = useCapitalLoans();
-  const { items: expenses, loading: expLoading      } = useExpenses();
-  const { items: petty,    loading: pettyLoading    } = usePettyCash();
-  const { items: pos,      loading: posLoading      } = usePurchaseOrders();
-  const { items: wos,      loading: wosLoading      } = useWorkOrders();
-  const { settings, loading: settingsLoading } = useCashSettings();
+  const { items: bills }    = useBills();
+  const { items: advances } = useAdvances();
+  const { items: receipts } = useReceipts();
+  const { items: capital }  = useCapitalLoans();
+  const { items: expenses } = useExpenses();
+  const { items: petty }    = usePettyCash();
+  const { items: pos }      = usePurchaseOrders();
+  const { items: wos }      = useWorkOrders();
+  const { settings }        = useCashSettings();
   const [editingBalance, setEditingBalance] = useState(false);
-  const [balanceInput, setBalanceInput] = useState('');
+  const [balanceInput, setBalanceInput]     = useState('');
+  const [alertInput, setAlertInput]         = useState('');
+  const [editingAlert, setEditingAlert]     = useState(false);
+  const [projectFilter, setProjectFilter]   = useState('all');
 
-  const loading = billsLoading||settingsLoading||receiptsLoading||capitalLoading||advLoading||expLoading||pettyLoading||posLoading||wosLoading;
   const todayStr = new Date().toISOString().slice(0,10);
+  const openingBalance = Number(settings.startingBalance)||0;
+  const alertLevel     = Number(settings.alertLevel)||0;
 
   function getITCDate(dateStr) {
     if (!dateStr) return '';
     const d = new Date(dateStr);
-    const nextMonth = d.getMonth() + 1;
-    const nextYear = nextMonth > 11 ? d.getFullYear() + 1 : d.getFullYear();
-    const itcMonth = nextMonth > 11 ? 1 : nextMonth + 1;
-    return `${nextYear}-${String(itcMonth).padStart(2,'0')}-20`;
+    const m = d.getMonth() + 2; // next month
+    const y = m > 11 ? d.getFullYear()+1 : d.getFullYear();
+    const mm = (m > 11 ? 0 : m);
+    return `${y}-${String(mm+1).padStart(2,'0')}-20`;
   }
 
   function scheduleRows(items, type) {
     return items.flatMap(doc => {
       const refNo = doc.po||doc.wo||'';
-      const label = doc.vendorName||doc.payee||'';
-      if (doc.paymentSchedule&&doc.paymentSchedule.length>0) {
-        return doc.paymentSchedule.flatMap(s => {
-          if (!s.amount) return [];
-          if (s.paid) {
-            // Stage already paid — only show ITC recovery inflow if GST was paid
-            if (s.includesGst && Number(s.gstAmount||0) > 0) {
-              const itcDate = getITCDate(s.datePaid||s.date||'');
-              if (itcDate && itcDate >= todayStr) {
-                return [{date:itcDate, label:`ITC Recovery — ${label}`, cat:'GST ITC Recovery', subcat:'', type:'in', amt:Number(s.gstAmount), project:doc.project||'', ref:refNo, isPast:false}];
-              }
-            }
-            return []; // paid stage, no future outflow
+      const label = doc.vendorName||'';
+      return (doc.paymentSchedule||[]).flatMap(s => {
+        if (!s.amount) return [];
+        if (s.paid) {
+          if (s.includesGst && Number(s.gstAmount||0)>0) {
+            const itcDate = getITCDate(s.datePaid||s.date||'');
+            if (itcDate && itcDate >= todayStr)
+              return [{date:itcDate, label:`ITC Recovery — ${label}`, cat:'GST ITC Recovery', type:'in', amt:Number(s.gstAmount), project:doc.project||'', isPast:false}];
           }
-          // Unpaid stage — show as future outflow
-          const rows = [{
-            date:s.date||'', label:`${refNo} — ${label} (${s.stageType||'Payment'})`,
-            cat:type, subcat:s.stageType||'', type:'out', amt:Number(s.amount||0),
-            project:doc.project||'', ref:refNo, isPast:(s.date||'')<todayStr,
-          }];
-          if (s.includesGst&&Number(s.gstAmount||0)>0) {
-            rows.push({date:s.date||'',label:`GST — ${label}`,cat:'GST Paid',subcat:'',type:'out',amt:Number(s.gstAmount),project:doc.project||'',ref:refNo,isPast:(s.date||'')<todayStr});
-            const itcDate = getITCDate(s.date||'');
-            if (itcDate) rows.push({date:itcDate,label:`ITC Recovery — ${label}`,cat:'GST ITC Recovery',subcat:'',type:'in',amt:Number(s.gstAmount),project:doc.project||'',ref:refNo,isPast:itcDate<todayStr});
-          }
-          return rows;
-        });
-      }
-      return [];
-    });
-  }
-
-  function billRows(bills) {
-    return bills.flatMap(b => {
-      if (b.paymentSchedule&&b.paymentSchedule.length>0) {
-        return b.paymentSchedule.flatMap(s => {
-          if (s.paid) {
-            // Paid — only show ITC if GST was included
-            if (s.includesGst&&Number(s.gstAmount||0)>0) {
-              const itcDate = getITCDate(s.datePaid||s.date||b.due||'');
-              if (itcDate && itcDate >= todayStr)
-                return [{date:itcDate,label:`ITC — ${b.payee}`,cat:'GST ITC Recovery',subcat:'',type:'in',amt:Number(s.gstAmount),project:b.project||'',ref:b.invoiceNo||'',isPast:false}];
-            }
-            return [];
-          }
-          const rows = [{date:s.date||b.due||'',label:`${b.payee} — ${s.stageType||'Payment'}`,cat:b.category||'Bill',subcat:'',type:'out',amt:Number(s.amount||0),project:b.project||'',ref:b.invoiceNo||'',isPast:(s.date||b.due||'')<todayStr}];
-          if (s.includesGst&&Number(s.gstAmount||0)>0) {
-            rows.push({date:s.date||b.due||'',label:`GST — ${b.payee}`,cat:'GST Paid',subcat:'',type:'out',amt:Number(s.gstAmount),project:b.project||'',ref:b.invoiceNo||'',isPast:(s.date||b.due||'')<todayStr});
-            const itcDate = getITCDate(s.date||b.due||'');
-            if (itcDate) rows.push({date:itcDate,label:`ITC — ${b.payee}`,cat:'GST ITC Recovery',subcat:'',type:'in',amt:Number(s.gstAmount),project:b.project||'',ref:b.invoiceNo||'',isPast:itcDate<todayStr});
-          }
-          return rows;
-        });
-      }
-      // No schedule — show if unpaid
-      if (b.paid) return [];
-      return [{date:b.due||b.invoiceDate||'',label:b.payee,cat:b.category||'Bill',subcat:'',type:'out',amt:Number(b.amount||0),project:b.project||'',ref:b.invoiceNo||'',isPast:(b.due||'')<todayStr}];
+          return [];
+        }
+        const rows = [{date:s.date||'', label:`${refNo} — ${label} (${s.stageType||'Payment'})`, cat:type, type:'out', amt:Number(s.amount), project:doc.project||'', isPast:(s.date||'')<todayStr}];
+        if (s.includesGst && Number(s.gstAmount||0)>0) {
+          rows.push({date:s.date||'', label:`GST — ${label}`, cat:'GST Paid', type:'out', amt:Number(s.gstAmount), project:doc.project||'', isPast:(s.date||'')<todayStr});
+          const itcDate = getITCDate(s.date||'');
+          if (itcDate) rows.push({date:itcDate, label:`ITC Recovery — ${label}`, cat:'GST ITC Recovery', type:'in', amt:Number(s.gstAmount), project:doc.project||'', isPast:itcDate<todayStr});
+        }
+        return rows;
+      });
     });
   }
 
   const allRows = [
-    ...billRows(bills.filter(b=>!b.fromSchedule)),
+    ...bills.filter(b=>!b.fromSchedule&&!b.paid).map(b=>({date:b.due||b.invoiceDate||'', label:b.payee, cat:'Bill', type:'out', amt:Number(b.amount||0)+(b.gstPct?Math.round(Number(b.amount||0)*parseFloat(b.gstPct)/100):0), project:b.project||'', isPast:(b.due||b.invoiceDate||'')<todayStr})),
     ...scheduleRows(pos,'Purchase Order'),
     ...scheduleRows(wos,'Work Order'),
-    ...advances.map(a=>({date:a.datePaid||'',label:`Advance — ${a.vendor}`,cat:'Advance',subcat:'',type:'out',amt:Number(a.amount||0),project:a.project||'',ref:a.refNumber||'',isPast:(a.datePaid||'')<=todayStr})),
-    ...expenses.map(e=>({date:e.date||'',label:e.description||(e.vendor||''),cat:e.category||'Expense',subcat:'',type:'out',amt:Number(e.amount||0),project:e.project||'',ref:'',isPast:(e.date||'')<=todayStr})),
-    ...petty.map(p=>({date:p.date||'',label:p.description||'Petty Cash',cat:`Petty — ${p.category||''}`,subcat:'',type:'out',amt:Number(p.amount||0),project:p.project||'',ref:'',isPast:(p.date||'')<=todayStr})),
-    ...receipts.map(r=>({date:r.dateReceived||'',label:`${r.client||'Client'} — Receipt`,cat:'Client Receipt',subcat:'',type:'in',amt:Number(r.amountReceived||0),project:r.project||'',ref:r.refNumber||'',isPast:(r.dateReceived||'')<=todayStr})),
-    ...capital.map(c=>({date:c.dateReceived||'',label:`${c.type} — ${c.source}`,cat:'Capital Inflow',subcat:'',type:'in',amt:Number(c.amount||0),project:c.project||'',ref:c.refNumber||'',isPast:(c.dateReceived||'')<=todayStr})),
-  ].filter(r=>r.date&&r.amt>0).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    ...expenses.filter(e=>!e.paid).map(e=>({date:e.date||'', label:e.description||'', cat:'General Expense', type:'out', amt:Number(e.amount||0), project:e.project||'', isPast:(e.date||'')<todayStr})),
+    ...petty.map(p=>({date:p.date||'', label:p.description||'Petty Cash', cat:'Petty Cash', type:'out', amt:Number(p.amount||0), project:p.project||'', isPast:(p.date||'')<todayStr})),
+    ...receipts.filter(r=>!r.received).map(r=>({date:r.dateReceived||'', label:`${r.client||'Client'} Receipt`, cat:'Client Receipt', type:'in', amt:Number(r.amountReceived||0), project:r.project||'', isPast:(r.dateReceived||'')<todayStr})),
+    ...capital.map(c=>({date:c.dateReceived||'', label:`${c.type||'Capital'} — ${c.source||''}`, cat:'Capital', type:'in', amt:Number(c.amount||0), project:c.project||'', isPast:(c.dateReceived||'')<todayStr})),
+  ].filter(r=>r.date&&r.amt>0).sort((a,b)=>a.date.localeCompare(b.date));
 
-  const filtered = allRows.filter(r=>
-    (view==='all'||(view==='past'&&r.isPast)||(view==='future'&&!r.isPast))&&
-    (typeFilter==='all'||r.type===typeFilter)&&
-    (projectFilter==='all'||r.project===projectFilter)&&
-    (catFilter==='all'||r.cat===catFilter||(catFilter==='Petty'&&r.cat.startsWith('Petty')))
-  ).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const filtered = projectFilter==='all' ? allRows : allRows.filter(r=>r.project===projectFilter);
 
-  let running = Number(settings.startingBalance)||0;
-  const rows = filtered.map(r=>{ if(r.type==='out') running-=r.amt; else running+=r.amt; return {...r,balance:running}; });
-  const totalIn  = filtered.filter(r=>r.type==='in').reduce((s,r)=>s+r.amt,0);
-  const totalOut = filtered.filter(r=>r.type==='out').reduce((s,r)=>s+r.amt,0);
-  const forecastEnd = rows.length ? rows[rows.length-1].balance : Number(settings.startingBalance)||0;
-  const forecastLow = rows.length ? Math.min(...rows.map(r=>r.balance)) : forecastEnd;
-  const outByCat = {}; filtered.filter(r=>r.type==='out').forEach(r=>{outByCat[r.cat]=(outByCat[r.cat]||0)+r.amt;});
-  const inByCat  = {}; filtered.filter(r=>r.type==='in').forEach(r=>{inByCat[r.cat]=(inByCat[r.cat]||0)+r.amt;});
+  // Build running balance starting from opening balance
+  let running = openingBalance;
+  const rows = filtered.map(r => {
+    if (r.type==='out') running -= r.amt; else running += r.amt;
+    return {...r, balance: running};
+  });
 
-  async function saveBalance() {
-    const {doc,setDoc} = window.fb;
-    try { await setDoc(doc(window.fb.db,SETTINGS_COLLECTION,SETTINGS_DOC),{...settings,startingBalance:Number(balanceInput)||0},{merge:true}); setEditingBalance(false); }
-    catch(e){console.error(e);}
+  const futureRows = rows.filter(r=>!r.isPast);
+  const pastRows   = rows.filter(r=>r.isPast);
+  const currentBalance = pastRows.length ? pastRows[pastRows.length-1].balance : openingBalance;
+  const lowestFuture   = futureRows.length ? Math.min(...futureRows.map(r=>r.balance)) : currentBalance;
+  const closingBalance = rows.length ? rows[rows.length-1].balance : openingBalance;
+  const belowAlert     = alertLevel > 0 && futureRows.some(r=>r.balance < alertLevel);
+
+  async function saveSetting(key, value) {
+    const { setDoc, doc, db } = window.fb;
+    try { await setDoc(doc(db, SETTINGS_COLLECTION, SETTINGS_DOC), {...settings, [key]: Number(value)||0}, {merge:true}); }
+    catch(e) { alert('Could not save: '+e.message); }
   }
 
   return (
     <div>
-      <div className="section-header"><div>
-        <div className="section-title">Cash Flow</div>
-        <div className="section-sub">{loading?'Loading…':`${allRows.length} transactions · Bills · POs · WOs · Advances · Expenses · Receipts · Capital`}</div>
-      </div></div>
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(6,1fr)',marginBottom:14}}>
+      <div className="section-header">
+        <div><div className="section-title">Cash Flow</div>
+          <div className="section-sub">{filtered.length} transactions · unpaid future outflows + incoming receipts</div>
+        </div>
+        <select className="form-input form-select" style={{width:140}} value={projectFilter} onChange={e=>setProjectFilter(e.target.value)}>
+          <option value="all">All Projects</option>
+          {PROJECTS.map(p=><option key={p}>{p}</option>)}
+        </select>
+      </div>
+
+      {belowAlert && (
+        <div style={{background:'#FEE2E2',border:'1px solid var(--red)',borderRadius:8,padding:'10px 16px',marginBottom:14,display:'flex',alignItems:'center',gap:10}}>
+          <span style={{fontSize:18}}>🚨</span>
+          <span style={{fontSize:13,fontWeight:600,color:'var(--red)'}}>
+            Cash balance will fall below alert level of {inr(alertLevel)} — lowest projected: {inr(lowestFuture)}
+          </span>
+        </div>
+      )}
+
+      {/* Summary cards */}
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(5,1fr)',marginBottom:14}}>
         <div className="stat-card">
           <div className="stat-label">Opening Balance</div>
-          {editingBalance?(
+          {editingBalance ? (
             <div style={{display:'flex',gap:4,marginTop:4}}>
-              <input className="form-input font-mono" style={{width:90,fontSize:12}} value={balanceInput} onChange={e=>setBalanceInput(e.target.value)} autoFocus onKeyDown={e=>e.key==='Enter'&&saveBalance()} />
-              <button className="btn btn-sm btn-primary" onClick={saveBalance}>✓</button>
-              <button className="btn btn-sm btn-ghost" onClick={()=>setEditingBalance(false)}>✕</button>
+              <input className="form-input font-mono" style={{width:100,fontSize:12}} value={balanceInput}
+                onChange={e=>setBalanceInput(e.target.value)} autoFocus
+                onKeyDown={e=>{if(e.key==='Enter'){saveSetting('startingBalance',balanceInput);setEditingBalance(false);}}} />
+              <button className="btn btn-sm btn-primary" onClick={()=>{saveSetting('startingBalance',balanceInput);setEditingBalance(false);}}>✓</button>
             </div>
-          ):(
+          ) : (
             <>
-              <div className="stat-value green">{inr(settings.startingBalance||0)}</div>
-              <div className="stat-sub" style={{cursor:'pointer',color:'var(--primary)'}} onClick={()=>{setBalanceInput(String(settings.startingBalance||0));setEditingBalance(true);}}>Edit</div>
+              <div className="stat-value">{inr(openingBalance)}</div>
+              <div className="stat-sub" style={{cursor:'pointer',color:'var(--primary)',fontSize:11}} onClick={()=>{setBalanceInput(String(openingBalance));setEditingBalance(true);}}>Edit</div>
             </>
           )}
         </div>
-        <div className="stat-card"><div className="stat-label">Total Inflows</div><div className="stat-value green">{inr(totalIn)}</div></div>
-        <div className="stat-card"><div className="stat-label">Total Outflows</div><div className="stat-value red">{inr(totalOut)}</div></div>
-        <div className="stat-card"><div className="stat-label">Net Flow</div><div className={`stat-value ${totalIn-totalOut>=0?'green':'red'}`}>{inr(Math.abs(totalIn-totalOut))}{totalIn-totalOut<0?' ↓':' ↑'}</div></div>
-        <div className="stat-card"><div className="stat-label">Balance Low</div><div className={`stat-value ${forecastLow<0?'red':'blue'}`}>{inr(forecastLow)}</div></div>
-        <div className="stat-card"><div className="stat-label">Closing Balance</div><div className={`stat-value ${forecastEnd>=0?'green':'red'}`}>{inr(forecastEnd)}</div></div>
-      </div>
-      {!loading&&rows.length>0&&(
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
-          <div className="card"><div className="card-header"><span className="card-title">Outflows by Category</span></div><div className="card-body">
-            {Object.entries(outByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
-              <div key={cat} style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
-                <span style={{fontSize:12,color:'var(--text-secondary)'}}>{cat}</span>
-                <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--red)'}}>{inr(amt)}</span>
-              </div>
-            ))}
-          </div></div>
-          <div className="card"><div className="card-header"><span className="card-title">Inflows by Source</span></div><div className="card-body">
-            {Object.entries(inByCat).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
-              <div key={cat} style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
-                <span style={{fontSize:12,color:'var(--text-secondary)'}}>{cat}</span>
-                <span className="amount" style={{fontSize:12,fontWeight:600,color:'var(--green)'}}>{inr(amt)}</span>
-              </div>
-            ))}
-          </div></div>
+        <div className="stat-card" style={{background: currentBalance < 0 ? '#FEF2F2' : currentBalance < alertLevel && alertLevel > 0 ? '#FEF3C7' : ''}}>
+          <div className="stat-label">Current Balance</div>
+          <div className={`stat-value ${currentBalance < 0 ? 'red' : currentBalance < alertLevel && alertLevel > 0 ? 'amber' : 'green'}`}>{inr(currentBalance)}</div>
+          <div className="stat-sub">After past transactions</div>
         </div>
-      )}
-      {!loading&&rows.length>1&&(
+        <div className="stat-card" style={{background: lowestFuture < alertLevel && alertLevel > 0 ? '#FEF2F2' : ''}}>
+          <div className="stat-label">Lowest Projected</div>
+          <div className={`stat-value ${lowestFuture < 0 ? 'red' : lowestFuture < alertLevel && alertLevel > 0 ? 'amber' : 'blue'}`}>{inr(lowestFuture)}</div>
+          <div className="stat-sub">Future low point</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Closing Balance</div>
+          <div className={`stat-value ${closingBalance >= 0 ? 'green' : 'red'}`}>{inr(closingBalance)}</div>
+          <div className="stat-sub">End of all transactions</div>
+        </div>
+        <div className="stat-card" style={{background: alertLevel > 0 ? '#FFF7ED' : ''}}>
+          <div className="stat-label">Alert Level 🔔</div>
+          {editingAlert ? (
+            <div style={{display:'flex',gap:4,marginTop:4}}>
+              <input className="form-input font-mono" style={{width:100,fontSize:12}} value={alertInput}
+                onChange={e=>setAlertInput(e.target.value)} autoFocus
+                onKeyDown={e=>{if(e.key==='Enter'){saveSetting('alertLevel',alertInput);setEditingAlert(false);}}} />
+              <button className="btn btn-sm btn-primary" onClick={()=>{saveSetting('alertLevel',alertInput);setEditingAlert(false);}}>✓</button>
+            </div>
+          ) : (
+            <>
+              <div className={`stat-value ${alertLevel > 0 ? 'amber' : ''}`}>{alertLevel > 0 ? inr(alertLevel) : '—'}</div>
+              <div className="stat-sub" style={{cursor:'pointer',color:'var(--primary)',fontSize:11}} onClick={()=>{setAlertInput(String(alertLevel));setEditingAlert(true);}}>
+                {alertLevel > 0 ? 'Edit threshold' : 'Set threshold'}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
 
-        <CashFlowChart rows={rows} startBalance={Number(settings.startingBalance)||0} />
+      {/* Chart */}
+      {rows.length > 1 && <CashFlowChart rows={rows} startBalance={openingBalance} alertLevel={alertLevel} />}
 
-      )}
-
+      {/* Transaction table */}
       <div className="card">
         <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
-          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
-            <div className="tabs" style={{marginBottom:0}}>
-              {[['all','All'],['past','Past'],['future','Future / Due']].map(([v,l])=>(
-                <div key={v} className={`tab ${view===v?'active':''}`} onClick={()=>setView(v)}>{l}</div>
-              ))}
-            </div>
-            <select className="form-input form-select" style={{width:140}} value={typeFilter} onChange={e=>setTypeFilter(e.target.value)}>
-              <option value="all">All Types</option><option value="in">Inflows only</option><option value="out">Outflows only</option>
-            </select>
-            <select className="form-input form-select" style={{width:130}} value={projectFilter} onChange={e=>setCFProjectFilter(e.target.value)}>
-              <option value="all">All Projects</option>{PROJECTS.map(p=><option key={p}>{p}</option>)}
-            </select>
-            <select className="form-input form-select" style={{width:160}} value={catFilter} onChange={e=>setCatFilter(e.target.value)}>
-              <option value="all">All Categories</option>
-              {['Bill','Purchase Order','Work Order','Advance','General Expense','Petty','Client Receipt','Capital Inflow','GST Paid','GST ITC Recovery'].map(c=><option key={c} value={c}>{c}</option>)}
-            </select>
+          <div className="tabs" style={{marginBottom:0}}>
+            <div className="tab active">Future Outflows & Inflows</div>
           </div>
         </div>
-
-        {loading ? <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
-
-
-        : rows.length===0 ? <div className="module-coming"><div className="big-icon">📈</div><h3>No transactions found</h3><p className="text-muted">All money movements will appear here.</p></div>
-
-        : (
+        {filtered.length===0
+          ? <div className="module-coming"><div className="big-icon">📈</div><h3>No transactions</h3><p className="text-muted">Unpaid PO stages, bills, and expected receipts appear here.</p></div>
+          : (
           <table>
-            <thead><tr><th>↑ Date</th><th>Description</th><th>Category</th><th>Project</th><th>Inflow</th><th>Outflow</th><th>Running Balance</th></tr></thead>
+            <thead>
+              <tr><th>Date</th><th>Description</th><th>Category</th><th>Project</th><th>Inflow</th><th>Outflow</th><th>Balance</th></tr>
+            </thead>
             <tbody>
               <tr style={{background:'var(--primary-50)'}}>
                 <td colSpan={6} style={{fontSize:12,fontWeight:600,color:'var(--primary)',padding:'6px 12px'}}>Opening Balance</td>
-                <td className="amount fw-600" style={{color:'var(--primary)'}}>{inr(settings.startingBalance||0)}</td>
+                <td className="amount fw-600" style={{color:'var(--primary)'}}>{inr(openingBalance)}</td>
               </tr>
-              {rows.map((r,i)=>(
-                <tr key={i} style={{background:r.type==='in'?'#F0FFF4':'',opacity:r.isPast?1:0.85,borderLeft:r.isPast?'none':'3px solid var(--amber)'}}>
-                  <td className="mono">{fmt(r.date)}{!r.isPast&&<span style={{fontSize:9,color:'var(--amber)',marginLeft:4}}>DUE</span>}</td>
-                  <td style={{maxWidth:220,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} className="fw-600">{r.label}</td>
-                  <td><span className="badge grey" style={{fontSize:10}}>{r.cat}</span></td>
-                  <td>{r.project?<span className={`badge ${PROJECT_COLOR[r.project]||'grey'}`} style={{fontSize:10}}>{r.project}</span>:'—'}</td>
-                  <td className="amount" style={{color:'var(--green)',fontWeight:600}}>{r.type==='in'?`+ ${inr(r.amt)}`:'—'}</td>
-                  <td className="amount" style={{color:'var(--red)',fontWeight:600}}>{r.type==='out'?`− ${inr(r.amt)}`:'—'}</td>
-                  <td className="amount fw-600" style={{color:r.balance<0?'var(--red)':'var(--text)'}}>{inr(r.balance)}</td>
-                </tr>
-              ))}
+              {rows.map((r,i) => {
+                const belowAlertRow = alertLevel > 0 && r.balance < alertLevel;
+                return (
+                  <tr key={i} style={{
+                    background: r.balance < 0 ? '#FEF2F2' : belowAlertRow ? '#FEF3C7' : r.type==='in' ? '#F0FFF4' : '',
+                    borderLeft: !r.isPast ? '3px solid var(--amber)' : 'none',
+                    opacity: r.isPast ? 0.7 : 1,
+                  }}>
+                    <td className="mono" style={{fontSize:11}}>{fmt(r.date)}{!r.isPast&&<span style={{fontSize:9,color:'var(--amber)',marginLeft:4}}>DUE</span>}</td>
+                    <td className="fw-600" style={{fontSize:12,maxWidth:220,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.label}</td>
+                    <td><span className="badge grey" style={{fontSize:10}}>{r.cat}</span></td>
+                    <td>{r.project?<span className={`badge ${PROJECT_COLOR[r.project]||'grey'}`} style={{fontSize:10}}>{r.project}</span>:'—'}</td>
+                    <td className="amount" style={{color:'var(--green)',fontWeight:600}}>{r.type==='in'?`+${inr(r.amt)}`:'—'}</td>
+                    <td className="amount" style={{color:'var(--red)',fontWeight:600}}>{r.type==='out'?`−${inr(r.amt)}`:'—'}</td>
+                    <td className="amount fw-600" style={{color: r.balance < 0 ? 'var(--red)' : belowAlertRow ? 'var(--amber)' : 'var(--text)'}}>
+                      {inr(r.balance)}
+                      {belowAlertRow && r.balance >= 0 && <span style={{fontSize:9,color:'var(--amber)',marginLeft:4}}>⚠ Below alert</span>}
+                      {r.balance < 0 && <span style={{fontSize:9,color:'var(--red)',marginLeft:4}}>⚠ Negative</span>}
+                    </td>
+                  </tr>
+                );
+              })}
               <tr style={{background:'var(--grey-50)',fontWeight:700}}>
-                <td colSpan={4} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Totals ({rows.length} transactions)</td>
-                <td className="amount" style={{color:'var(--green)',fontWeight:700}}>+ {inr(totalIn)}</td>
-                <td className="amount" style={{color:'var(--red)',fontWeight:700}}>− {inr(totalOut)}</td>
-                <td className="amount fw-600" style={{color:forecastEnd>=0?'var(--green)':'var(--red)'}}>{inr(forecastEnd)}</td>
+                <td colSpan={4} style={{padding:'8px 12px',fontSize:12}}>Closing</td>
+                <td className="amount" style={{color:'var(--green)',fontWeight:700}}>+{inr(rows.filter(r=>r.type==='in').reduce((s,r)=>s+r.amt,0))}</td>
+                <td className="amount" style={{color:'var(--red)',fontWeight:700}}>−{inr(rows.filter(r=>r.type==='out').reduce((s,r)=>s+r.amt,0))}</td>
+                <td className="amount fw-600" style={{color:closingBalance>=0?'var(--green)':'var(--red)'}}>{inr(closingBalance)}</td>
               </tr>
             </tbody>
           </table>
@@ -3469,8 +3457,6 @@ function BillPayments() {
                             <>
                               <button className="btn btn-sm btn-ghost" onClick={()=>setEditBill(b)}>Edit</button>
                               {b.paymentSchedule&&b.paymentSchedule.length>0&&<button className="btn btn-sm btn-outline" onClick={()=>setViewBillSchedule(b)}>Schedule</button>}
-                              {!b.paid && <button className="btn btn-sm btn-primary" onClick={()=>markBillPaid(b.docId)}>Mark Paid</button>}
-                              {b.paid && <button className="btn btn-sm btn-ghost" style={{color:'var(--amber)',border:'1px solid var(--amber)'}} onClick={()=>{if(confirm('Reverse payment? This will mark the bill as unpaid again.'))unmarkBillPaid(b.docId);}}>↩ Unmark Paid</button>}
                               <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteBill(b.docId);}}>Delete</button>
                             </>
                           )}
