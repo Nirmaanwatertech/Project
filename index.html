@@ -1174,7 +1174,7 @@ async function syncStageToModules(stage, parentDoc, parentType, updatedSchedule,
       notes: `Against Delivery — ${refNo}`,
       linkedPO: parentType==='po'?refNo:'', linkedWO: parentType==='wo'?refNo:'',
       project: parentDoc.project||'', split: parentDoc.split||{pontoon:50,wtp:50},
-      gstPct: parentDoc.gstPct||'', paid: false, fromSchedule: true,
+      gstPct: parentDoc.gstPct||'', paid: true, paidAt: Date.now(), paidDate: paidDate, fromSchedule: true,
     };
 
     // Update existing or create new
@@ -1273,11 +1273,15 @@ async function syncScheduleChanges(schedule, parentDoc, parentType) {
           balanceAmount: Number(stage.amount||0), project: parentDoc.project||'',
         });
       } else {
-        await updateDoc(userDoc(col, stage.linkedEntryId), {
+        const gstAmt = stage.includesGst ? Number(stage.gstAmount||0) : 0;
+        const fullBase = Number(parentDoc.value||0);
+        const upd = {
           payee: parentDoc.vendorName||'', project: parentDoc.project||'',
           due: stage.datePaid||stage.date||'', invoiceDate: stage.datePaid||stage.date||'',
-          amount: Number(stage.amount||0)+(stage.includesGst?Number(stage.gstAmount||0):0),
-        });
+          amount: fullBase, gstAmount: gstAmt, totalAmount: fullBase + gstAmt,
+        };
+        if (stage.invoiceNo) upd.invoiceNo = stage.invoiceNo;
+        await updateDoc(userDoc(col, stage.linkedEntryId), upd);
       }
     } catch(e) { console.warn('Could not sync stage change:', e.message); }
   }
@@ -1312,6 +1316,8 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
   async function handleTogglePaid(row) {
     if (!parentDoc || !onStagePaid) return;
     const newPaid = !row.paid;
+    // Single setter that updates BOTH local rows and parent form state
+    const setBoth = (newSchedule) => { setRows(newSchedule); if (onStagePaid) onStagePaid(newSchedule); };
     if (newPaid) {
       const paymentDate = payDateInputs[row.id]||'';
       if (!paymentDate) { alert('Please select a payment date.'); return; }
@@ -1319,9 +1325,9 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
       setStageSaving(row.id);
       try {
         const updatedRows = rows.map(r => r.id===row.id ? {...r, paid:true, paidAt:Date.now(), datePaid:paymentDate} : r);
-        setRows(updatedRows);
-        await syncStageToModules({...row, paid:true}, parentDoc, parentType, updatedRows, setRows, paymentDate);
-        if (onStagePaid) onStagePaid(updatedRows);
+        setBoth(updatedRows);
+        // syncStageToModules will call setBoth again with linkedEntryId included
+        await syncStageToModules({...row, paid:true, invoiceNo:row.invoiceNo||''}, parentDoc, parentType, updatedRows, setBoth, paymentDate);
         setPayDateInputs(p=>({...p, [row.id]:''}));
       } catch(e) { console.error(e); alert('Error: '+e.message); }
       finally { setStageSaving(null); }
@@ -1329,9 +1335,8 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
       setStageSaving(row.id);
       try {
         const updatedRows = rows.map(r => r.id===row.id ? {...r, paid:false, paidAt:null, datePaid:'', invoiceNo:''} : r);
-        setRows(updatedRows);
-        await syncStageToModules({...row, paid:false}, parentDoc, parentType, updatedRows, setRows, '');
-        if (onStagePaid) onStagePaid(updatedRows);
+        setBoth(updatedRows);
+        await syncStageToModules({...row, paid:false}, parentDoc, parentType, updatedRows, setBoth, '');
       } catch(e) { console.error(e); }
       finally { setStageSaving(null); }
     }
@@ -1665,7 +1670,7 @@ function NewPOModal({ onClose, nextNumber, quotations, prefill, existing }) {
   });
   const [schedule, setSchedule] = useState(
     isEdit && existing.paymentSchedule
-      ? existing.paymentSchedule.map(r=>({...r,id:genRowId()}))
+      ? existing.paymentSchedule.map(r=>({...r,id:r.id||genRowId()}))
       : prefill?.paymentSchedule ? prefill.paymentSchedule.map(r=>({...r,id:genRowId()})) : []
   );
   const [gstPct, setGstPct] = useState(isEdit ? (existing.gstPct||'') : (prefill?.gstPct||''));
@@ -1874,7 +1879,7 @@ function NewWOModal({ onClose, existing, quotations }) {
     issueDate: new Date().toISOString().slice(0,10), due: '', notes: '',
     project: '', split:{pontoon:50,wtp:50}
   });
-  const [schedule, setSchedule] = useState(isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:genRowId()})) : []);
+  const [schedule, setSchedule] = useState(isEdit && existing.paymentSchedule ? existing.paymentSchedule.map(r=>({...r,id:r.id||genRowId()})) : []);
   const [gstPct, setGstPct] = useState(isEdit ? (existing.gstPct||'') : '');
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
@@ -3243,11 +3248,14 @@ function BillPayments() {
     }
 
     // paidSoFar and netPayable
+    // If bill is fully paid → full amount. Else if advance linked → advance amount.
     const paidSoFar = hasSchedule
       ? paidStagesAmt
-      : advanceDeducted > 0
-        ? advanceDeducted          // advance linked to this bill
-        : b.paid ? totalBillAmt : 0;
+      : b.paid
+        ? totalBillAmt             // fully paid — full amount
+        : advanceDeducted > 0
+          ? advanceDeducted        // only advance paid so far
+          : 0;
 
     const netPayable = hasSchedule
       ? Math.max(0, unpaidStagesAmt - advanceDeducted)
@@ -3439,19 +3447,24 @@ function BillPayments() {
                             <>
                               <span style={{fontSize:10,color:'var(--text-muted)',padding:'3px 6px',background:'var(--grey-50)',borderRadius:4,border:'1px solid var(--border)'}}>📎 From PO/WO Schedule</span>
                               <button className="btn btn-sm btn-ghost" onClick={async()=>{
-                                // Refresh bill amount from linked PO/WO stage
+                                // Refresh bill from linked PO/WO stage (amounts + paid status)
                                 const {getDocs,updateDoc}=window.fb;
                                 const refNo=b.linkedPO||b.linkedWO;
                                 const col=b.linkedPO?PO_COLLECTION:WO_COLLECTION;
                                 const snap=await getDocs(userCol(col));
                                 const parent=snap.docs.find(d=>(d.data().po||d.data().wo)===refNo);
                                 if(!parent){alert('Could not find linked PO/WO');return;}
-                                const stage=(parent.data().paymentSchedule||[]).find(s=>s.linkedEntryId===b.docId);
+                                const pdata=parent.data();
+                                const stage=(pdata.paymentSchedule||[]).find(s=>s.linkedEntryId===b.docId);
                                 if(!stage){alert('Could not find linked stage');return;}
-                                const baseAmt=Number(stage.amount||0);
+                                const fullBase=Number(pdata.value||0);
                                 const gstAmt=stage.includesGst?Number(stage.gstAmount||0):0;
-                                await updateDoc(userDoc(BILLS_COLLECTION,b.docId),{amount:baseAmt+gstAmt,invoiceNo:stage.invoiceNo||b.invoiceNo});
-                                alert('Bill refreshed from PO/WO.');
+                                const upd={amount:fullBase,gstAmount:gstAmt,totalAmount:fullBase+gstAmt,
+                                  paid:!!stage.paid,payee:pdata.vendorName||b.payee,project:pdata.project||b.project};
+                                if(stage.invoiceNo)upd.invoiceNo=stage.invoiceNo;
+                                if(stage.datePaid){upd.due=stage.datePaid;upd.invoiceDate=stage.datePaid;upd.paidDate=stage.datePaid;}
+                                await updateDoc(userDoc(BILLS_COLLECTION,b.docId),upd);
+                                alert('Bill refreshed from PO/WO ✓');
                               }}>↺ Refresh</button>
                               <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this linked bill? This will NOT unmark the PO stage.'))deleteBill(b.docId);}}>Delete</button>
                             </>
