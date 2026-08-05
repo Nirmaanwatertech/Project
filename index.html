@@ -693,7 +693,7 @@ function useKnownNames() {
 
 
 const STATUS_COLOR = { 'In Progress':'blue','Scheduled':'teal','Overdue':'red','Completed':'green','Pending':'grey' };
-const BILL_STATUS_COLOR = { 'Overdue':'red','Due Today':'amber','Upcoming':'blue','Paid':'green' };
+const BILL_STATUS_COLOR = { 'Overdue':'red','Due Today':'amber','Upcoming':'blue','Paid':'green','Advance Adjusted':'teal' };
 
 
 // ─── Reusable Components ──────────────────────────────
@@ -3110,7 +3110,8 @@ function LinkAdvanceModal({ advance, onClose, pos, bills }) {
         adjustedAgainst: linkedBill || '',
       });
 
-      // Update the linked bill: set advanceDeducted and mark as paid if fully covered
+      // Update the linked bill: set advanceDeducted only
+      // Only mark bill as paid if advance fully covers the total bill amount
       if (linkedBill) {
         const { updateDoc, getDoc } = window.fb;
         try {
@@ -3120,21 +3121,13 @@ function LinkAdvanceModal({ advance, onClose, pos, bills }) {
             const billTotal = Number(b.totalAmount||0) || (Number(b.amount||0) + Number(b.gstAmount||0));
             const netPayable = Math.max(0, billTotal - adj);
             const isPaid = netPayable <= 0;
-            const update = {
+            // Only update advanceDeducted and paid status — never touch paymentSchedule
+            await updateDoc(userDoc(BILLS_COLLECTION, linkedBill), {
               advanceDeducted: adj,
               linkedAdvance: advance.docId,
               paid: isPaid,
-            };
-            if (isPaid) update.paidAt = Date.now();
-            // If bill has a payment schedule, mark the matching stage as paid
-            if (b.paymentSchedule && b.paymentSchedule.length > 0) {
-              const newSchedule = b.paymentSchedule.map((s, i) => {
-                if (i === 0 && !s.paid) return {...s, paid: true, paidAt: Date.now(), datePaid: advance.datePaid||''};
-                return s;
-              });
-              update.paymentSchedule = newSchedule;
-            }
-            await updateDoc(userDoc(BILLS_COLLECTION, linkedBill), update);
+              ...(isPaid ? {paidAt: Date.now()} : {paidAt: null}),
+            });
           }
         } catch(e) { console.warn('Could not update linked bill:', e.message); }
       }
@@ -3289,10 +3282,11 @@ function BillPayments() {
       ? Math.max(0, unpaidStagesAmt - advanceDeducted)
       : Math.max(0, totalBillAmt - paidSoFar);
 
-    const isFullyCovered = advanceDeducted >= totalBillAmt;
-
+    // Status: only mark Paid if b.paid is explicitly true
+    // Advance deduction reduces Net Payable but doesn't settle the bill
     let status;
-    if (b.paid || isFullyCovered || (hasSchedule && unpaidStagesAmt === 0)) status = 'Paid';
+    if (b.paid || (hasSchedule && unpaidStagesAmt === 0)) status = 'Paid';
+    else if (netPayable === 0 && advanceDeducted > 0) status = 'Advance Adjusted';
     else if (!effectiveDue) status = 'Upcoming';
     else if (effectiveDue === todayStr) status = 'Due Today';
     else if (effectiveDue < todayStr) status = 'Overdue';
