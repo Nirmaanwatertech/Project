@@ -3232,20 +3232,22 @@ function BillPayments() {
     // For manual bills: amount=base, gstPct used to calc GST
     let displayBase, displayGst, totalBillAmt;
     if (b.fromSchedule && b.gstAmount !== undefined) {
+      // fromSchedule bills created by new code: amount=base, gstAmount=GST stored separately
       displayBase  = Number(b.amount||0);
       displayGst   = Number(b.gstAmount||0);
-      totalBillAmt = Number(b.totalAmount||0) || (displayBase + displayGst);
-    } else if (b.fromSchedule && b.gstPct && parseFloat(b.gstPct) > 0) {
-      const rate = parseFloat(b.gstPct) / 100;
-      displayBase  = Math.round(Number(b.amount||0) / (1 + rate));
+      totalBillAmt = displayBase + displayGst; // always recalculate
+    } else if (b.fromSchedule) {
+      // Legacy fromSchedule: amount = base+GST combined, reverse-calculate
+      const rate = b.gstPct ? parseFloat(b.gstPct)/100 : 0;
+      displayBase  = rate > 0 ? Math.round(Number(b.amount||0)/(1+rate)) : Number(b.amount||0);
       displayGst   = Number(b.amount||0) - displayBase;
       totalBillAmt = Number(b.amount||0);
     } else {
-      // Manual bill — amount is base, gstPct gives GST
+      // Manual bill: amount=base, gstPct gives GST
       displayBase  = Number(b.amount||0);
       const gstRate = b.gstPct ? parseFloat(b.gstPct) : 0;
       displayGst   = gstRate > 0 ? Math.round(displayBase * gstRate / 100) : 0;
-      totalBillAmt = displayBase + displayGst;
+      totalBillAmt = displayBase + displayGst; // always recalculate from base+GST
     }
 
     const totalGstAmt = displayGst; // unified
@@ -6672,14 +6674,19 @@ function DataFixPanel() {
         const bill = bills.find(b=>b.docId===billId);
         if (!bill) { addLog(`  ⚠ Advance ${a.docId.slice(0,8)}: bill ${billId.slice(0,8)} missing`,'warn'); continue; }
 
-        // Correct adjusted amount — use amount if adjustedAmount is missing
-        const adjAmt = Number(a.adjustedAmount||0)||Number(a.amount||0);
-        const gstRate = bill.gstPct?parseFloat(bill.gstPct)/100:0;
-        const baseAmt = Number(bill.amount||0);
-        const gstAmt  = bill.gstAmount!==undefined?Number(bill.gstAmount||0):Math.round(baseAmt*gstRate);
-        const billTotal = bill.totalAmount?Number(bill.totalAmount):baseAmt+gstAmt;
+        // Correct adjusted amount — use adjustedAmount if set, else full advance amount
+        const adjAmt = Number(a.adjustedAmount||0) || Number(a.amount||0);
+
+        // Always recalculate billTotal from base + GST — never trust stored totalAmount
+        // which may have been set incorrectly
+        const gstRate2 = bill.gstPct ? parseFloat(bill.gstPct)/100 : 0;
+        const baseAmt  = Number(bill.amount||0);
+        const gstAmt   = bill.gstAmount !== undefined
+          ? Number(bill.gstAmount||0)
+          : Math.round(baseAmt * gstRate2);
+        const billTotal  = baseAmt + gstAmt;  // always recalculate
         const netPayable = Math.max(0, billTotal - adjAmt);
-        const isPaid = netPayable<=0;
+        const isPaid     = netPayable <= 0;
 
         // Fix the advance record
         const advUpdates = {};
