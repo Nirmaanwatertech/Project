@@ -3592,7 +3592,31 @@ function BillPayments() {
                           ) : (
                             <>
                               <button className="btn btn-sm btn-ghost" onClick={()=>setEditAdvance(a)}>Edit</button>
-                              {a.status !== 'Fully Adjusted' && (
+                              {(a.status === 'Fully Adjusted' || a.status === 'Partially Adjusted') ? (
+                                <>
+                                  <button className="btn btn-sm btn-ghost" style={{color:'var(--amber)',border:'1px solid var(--amber)'}}
+                                    onClick={async()=>{
+                                      if(!confirm('Unadjust this advance? This will restore the full balance and unlink the bill.')) return;
+                                      const {updateDoc} = window.fb;
+                                      // Restore advance to Unadjusted
+                                      await updateAdvance(a.docId, {
+                                        status:'Unadjusted', adjustedAmount:0,
+                                        balanceAmount:Number(a.amount||0),
+                                        adjustedAgainst:'', linkedBill:'',
+                                      });
+                                      // Reverse the bill update if linked
+                                      if (a.linkedBill || a.adjustedAgainst) {
+                                        const billId = a.linkedBill || a.adjustedAgainst;
+                                        try {
+                                          await updateDoc(userDoc(BILLS_COLLECTION, billId), {
+                                            advanceDeducted:0, linkedAdvance:'', paid:false, paidAt:null,
+                                          });
+                                        } catch(e) { console.warn('Could not update bill:', e.message); }
+                                      }
+                                    }}>↩ Unadjust</button>
+                                  <button className="btn btn-sm btn-ghost" onClick={()=>setLinkingAdvance(a)}>Re-link</button>
+                                </>
+                              ) : (
                                 <button className="btn btn-sm btn-ghost" onClick={()=>setLinkingAdvance(a)}>Link / Adjust</button>
                               )}
                               <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteAdvance(a.docId);}}>Delete</button>
@@ -6511,6 +6535,178 @@ function PermissionMatrix({ currentUser }) {
 }
 
 // ─── Settings ─────────────────────────────────────────
+// ─── Data Fix Panel ───────────────────────────────────
+function DataFixPanel() {
+  const [running, setRunning] = useState(false);
+  const [log, setLog] = useState([]);
+
+  function addLog(msg, type='info') {
+    setLog(l => [...l, {msg, type, t: Date.now()}]);
+  }
+
+  async function runFixAll() {
+    if (!confirm('This will scan ALL advances, bills, and PO/WO schedules and apply correct linkages, statuses and amounts. Continue?')) return;
+    setRunning(true);
+    setLog([]);
+    const { getDocs, updateDoc } = window.fb;
+
+    try {
+      addLog('Loading all data…');
+      const [advSnap, billSnap, poSnap, woSnap] = await Promise.all([
+        getDocs(userCol(ADVANCES_COLLECTION)),
+        getDocs(userCol(BILLS_COLLECTION)),
+        getDocs(userCol(PO_COLLECTION)),
+        getDocs(userCol(WO_COLLECTION)),
+      ]);
+
+      const advances = advSnap.docs.map(d => ({docId:d.id, ...d.data()}));
+      const bills    = billSnap.docs.map(d => ({docId:d.id, ...d.data()}));
+      const pos      = poSnap.docs.map(d => ({docId:d.id, ...d.data()}));
+      const wos      = woSnap.docs.map(d => ({docId:d.id, ...d.data()}));
+
+      addLog(`Loaded: ${advances.length} advances, ${bills.length} bills, ${pos.length} POs, ${wos.length} WOs`);
+
+      let fixed = 0;
+
+      // ── Fix 1: Advances with linkedBill → update bill's advanceDeducted ──
+      addLog('Fix 1: Syncing advance→bill linkages…');
+      for (const a of advances) {
+        const billId = a.linkedBill || a.adjustedAgainst;
+        if (!billId || !a.adjustedAmount) continue;
+        const bill = bills.find(b => b.docId === billId);
+        if (!bill) { addLog(`  ⚠ Advance ${a.docId}: linked bill ${billId} not found`, 'warn'); continue; }
+        const billTotal = Number(bill.totalAmount||0) || (Number(bill.amount||0) + Number(bill.gstAmount||0));
+        const adj = Number(a.adjustedAmount||0);
+        const isPaid = adj >= billTotal;
+        try {
+          await updateDoc(userDoc(BILLS_COLLECTION, billId), {
+            advanceDeducted: adj,
+            linkedAdvance: a.docId,
+            paid: isPaid,
+            ...(isPaid ? {paidAt: a.paidAt||Date.now()} : {}),
+          });
+          addLog(`  ✓ Bill ${bill.invoiceNo||billId}: advanceDeducted=${adj}, paid=${isPaid}`, 'ok');
+          fixed++;
+        } catch(e) { addLog(`  ✗ Bill ${billId}: ${e.message}`, 'err'); }
+      }
+
+      // ── Fix 2: PO/WO schedule paid stages → ensure Advance/Bill entries exist and are correct ──
+      addLog('Fix 2: Syncing PO/WO paid stages → entries…');
+      for (const doc of [...pos, ...wos]) {
+        const parentType = doc.po ? 'po' : 'wo';
+        const refNo = doc.po || doc.wo || '';
+        const schedule = doc.paymentSchedule || [];
+        for (const stage of schedule) {
+          if (!stage.paid || !stage.linkedEntryId) continue;
+          const sType = (stage.stageType||'Against Delivery').toLowerCase();
+          const isAdv = sType === 'advance';
+          const col = isAdv ? ADVANCES_COLLECTION : BILLS_COLLECTION;
+          const entry = isAdv
+            ? advances.find(a => a.docId === stage.linkedEntryId)
+            : bills.find(b => b.docId === stage.linkedEntryId);
+          if (!entry) {
+            addLog(`  ⚠ ${refNo} stage "${stage.stageType}" linkedEntryId ${stage.linkedEntryId} not found — will recreate`, 'warn');
+            // Recreate the entry
+            try {
+              await syncStageToModules({...stage}, doc, parentType, schedule, null, stage.datePaid||stage.date||'');
+              addLog(`  ✓ Recreated entry for ${refNo} ${stage.stageType}`, 'ok');
+              fixed++;
+            } catch(e) { addLog(`  ✗ Could not recreate: ${e.message}`, 'err'); }
+            continue;
+          }
+          // Entry exists — fix amounts
+          if (!isAdv) {
+            const fullBase = Number(doc.value||0);
+            const gstAmt = stage.includesGst ? Number(stage.gstAmount||0) : 0;
+            const currentAmt = Number(entry.amount||0);
+            if (currentAmt !== fullBase || !entry.paid) {
+              try {
+                await updateDoc(userDoc(BILLS_COLLECTION, stage.linkedEntryId), {
+                  amount: fullBase, gstAmount: gstAmt, totalAmount: fullBase+gstAmt,
+                  paid: true, paidAt: entry.paidAt||Date.now(),
+                  payee: doc.vendorName||entry.payee,
+                  project: doc.project||entry.project,
+                });
+                addLog(`  ✓ Fixed bill ${stage.linkedEntryId}: amount=${fullBase}, paid=true`, 'ok');
+                fixed++;
+              } catch(e) { addLog(`  ✗ ${e.message}`, 'err'); }
+            }
+          } else {
+            // Advance — fix datePaid, amount
+            if (!entry.datePaid && stage.datePaid) {
+              try {
+                await updateDoc(userDoc(ADVANCES_COLLECTION, stage.linkedEntryId), {
+                  datePaid: stage.datePaid,
+                });
+                addLog(`  ✓ Fixed advance ${stage.linkedEntryId}: datePaid=${stage.datePaid}`, 'ok');
+                fixed++;
+              } catch(e) { addLog(`  ✗ ${e.message}`, 'err'); }
+            }
+          }
+        }
+      }
+
+      // ── Fix 3: Bills with fromSchedule=true but paid=false → mark paid ──
+      addLog('Fix 3: Marking fromSchedule bills as paid…');
+      for (const b of bills) {
+        if (!b.fromSchedule || b.paid) continue;
+        // Find the PO/WO stage that points to this bill
+        const allDocs = [...pos, ...wos];
+        const parentDoc = allDocs.find(d => (d.paymentSchedule||[]).some(s => s.linkedEntryId === b.docId && s.paid));
+        if (parentDoc) {
+          try {
+            await updateDoc(userDoc(BILLS_COLLECTION, b.docId), {paid: true, paidAt: Date.now()});
+            addLog(`  ✓ Marked bill ${b.invoiceNo||b.docId} as paid`, 'ok');
+            fixed++;
+          } catch(e) { addLog(`  ✗ ${e.message}`, 'err'); }
+        }
+      }
+
+      addLog(`\n✅ Done. Fixed ${fixed} records.`, 'ok');
+    } catch(e) {
+      addLog('✗ Error: ' + e.message, 'err');
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <span className="card-title">🔧 Data Fix</span>
+        <span style={{fontSize:12,color:'var(--text-muted)'}}>Applies all latest sync logic to existing historical data</span>
+      </div>
+      <div className="card-body">
+        <div style={{marginBottom:16}}>
+          <p style={{fontSize:13,color:'var(--text-secondary)',marginBottom:8}}>
+            This scan fixes all past entries to match the current sync rules:
+          </p>
+          <ul style={{fontSize:12,color:'var(--text-secondary)',paddingLeft:18,lineHeight:2}}>
+            <li>Advances linked to bills → updates bill's Paid So Far and Net Payable</li>
+            <li>PO/WO paid stages → ensures linked Advance/Bill entries have correct amounts</li>
+            <li>Bills from PO schedule marked paid but showing Unpaid → marks them Paid</li>
+            <li>Missing linked entries → recreates them from PO/WO schedule data</li>
+          </ul>
+        </div>
+        <button className="btn btn-primary" onClick={runFixAll} disabled={running}
+          style={{background:'var(--secondary)',marginBottom:16}}>
+          {running ? '⏳ Running…' : '🔧 Run Fix All'}
+        </button>
+        {log.length > 0 && (
+          <div style={{background:'#0F172A',borderRadius:6,padding:'12px 14px',maxHeight:300,overflowY:'auto',fontFamily:'monospace',fontSize:11}}>
+            {log.map((l,i) => (
+              <div key={i} style={{color: l.type==='ok'?'#34D399':l.type==='err'?'#F87171':l.type==='warn'?'#FCD34D':'#94A3B8',marginBottom:2}}>
+                {l.msg}
+              </div>
+            ))}
+            {running && <div style={{color:'#60A5FA'}}>⏳ Working…</div>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Settings({ currentUser }) {
   const [tab, setTab] = useState('projects');
   const [projects, setProjects] = useState(null);
@@ -6580,7 +6776,7 @@ function Settings({ currentUser }) {
     <div>
       <div className="section-header"><div><div className="section-title">Settings</div></div></div>
       <div className="tabs" style={{marginBottom:16}}>
-        {[['projects','🗂 Projects'],['lists','📋 Lists'],['permissions','🔐 Permissions'],['danger','⚠️ Danger Zone']].map(([v,l])=>(
+        {[['projects','🗂 Projects'],['lists','📋 Lists'],['permissions','🔐 Permissions'],['datafix','🔧 Data Fix'],['danger','⚠️ Danger Zone']].map(([v,l])=>(
           <div key={v} className={`tab ${tab===v?'active':''}`} onClick={()=>setTab(v)}>{l}</div>
         ))}
       </div>
@@ -6629,6 +6825,8 @@ function Settings({ currentUser }) {
       {tab==='lists' && <ListsManager />}
 
       {tab==='permissions' && <PermissionMatrix currentUser={currentUser} />}
+
+      {tab==='datafix' && <DataFixPanel />}
 
       {tab==='danger' && (
         <div className="card">
