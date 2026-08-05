@@ -3221,9 +3221,10 @@ function BillPayments() {
       (b.fromSchedule && b.linkedPO && a.linkedPO === b.linkedPO && a.fromSchedule) ||
       (b.fromSchedule && b.linkedWO && a.linkedWO === b.linkedWO && a.fromSchedule)
     );
-    // Use b.advanceDeducted if stored (most accurate), else sum adjustedAmounts from linked advances
+    // Use b.advanceDeducted if stored, else calculate from linked advances
+    // For advances: use adjustedAmount if set, else full amount (advance was fully used)
     const advanceDeducted = Number(b.advanceDeducted||0) ||
-      linkedAdv.reduce((s,a) => s + Number(a.adjustedAmount||a.amount||0), 0);
+      linkedAdv.reduce((s,a) => s + (Number(a.adjustedAmount||0) || Number(a.amount||0)), 0);
 
     const hasSchedule = b.paymentSchedule && b.paymentSchedule.length > 0;
 
@@ -6560,26 +6561,48 @@ function DataFixPanel() {
 
       let fixed = 0;
 
-      // ── Fix 1: Advances with linkedBill → update bill's advanceDeducted ──
-      addLog('Fix 1: Syncing advance→bill linkages…');
+      // ── Fix 1: Advances with linkedBill → write correct advanceDeducted to bill ──
+      addLog('Fix 1: Syncing advance→bill advanceDeducted field…');
       for (const a of advances) {
         const billId = a.linkedBill || a.adjustedAgainst;
-        if (!billId || !a.adjustedAmount) continue;
+        if (!billId) continue;
         const bill = bills.find(b => b.docId === billId);
-        if (!bill) { addLog(`  ⚠ Advance ${a.docId}: linked bill ${billId} not found`, 'warn'); continue; }
-        const billTotal = Number(bill.totalAmount||0) || (Number(bill.amount||0) + Number(bill.gstAmount||0));
-        const adj = Number(a.adjustedAmount||0);
-        const isPaid = adj >= billTotal;
+        if (!bill) { addLog(`  ⚠ Advance ${a.docId.slice(0,8)}: linked bill not found`, 'warn'); continue; }
+
+        // Calculate correct amounts
+        const adjAmt = Number(a.adjustedAmount||0) || Number(a.amount||0);
+        const gstRate = bill.gstPct ? parseFloat(bill.gstPct)/100 : 0;
+        const baseAmt = Number(bill.amount||0);
+        const gstAmt  = bill.gstAmount !== undefined ? Number(bill.gstAmount||0)
+                      : gstRate > 0 ? Math.round(baseAmt * gstRate) : 0;
+        const billTotal = bill.totalAmount ? Number(bill.totalAmount) : baseAmt + gstAmt;
+        const netPayable = Math.max(0, billTotal - adjAmt);
+        const isPaid = netPayable <= 0;
+
         try {
           await updateDoc(userDoc(BILLS_COLLECTION, billId), {
-            advanceDeducted: adj,
-            linkedAdvance: a.docId,
-            paid: isPaid,
-            ...(isPaid ? {paidAt: a.paidAt||Date.now()} : {}),
+            advanceDeducted: adjAmt,
+            linkedAdvance:   a.docId,
+            paid:            isPaid,
+            ...(isPaid ? {paidAt: a.paidAt||Date.now()} : {paidAt: null}),
           });
-          addLog(`  ✓ Bill ${bill.invoiceNo||billId}: advanceDeducted=${adj}, paid=${isPaid}`, 'ok');
+          addLog(`  ✓ ${bill.payee||billId.slice(0,8)}: advanceDeducted=${adjAmt}, netPayable=${netPayable}, paid=${isPaid}`, 'ok');
           fixed++;
-        } catch(e) { addLog(`  ✗ Bill ${billId}: ${e.message}`, 'err'); }
+        } catch(e) { addLog(`  ✗ ${billId.slice(0,8)}: ${e.message}`, 'err'); }
+
+        // Also fix advance adjustedAmount if it was stored as 0
+        if (!a.adjustedAmount && a.amount) {
+          try {
+            const balance = Number(a.amount||0) - adjAmt;
+            await updateDoc(userDoc(ADVANCES_COLLECTION, a.docId), {
+              adjustedAmount: adjAmt,
+              balanceAmount:  Math.max(0, balance),
+              status: balance <= 0 ? 'Fully Adjusted' : 'Partially Adjusted',
+            });
+            addLog(`  ✓ Advance ${a.docId.slice(0,8)}: adjustedAmount=${adjAmt}`, 'ok');
+            fixed++;
+          } catch(e) { addLog(`  ✗ advance fix: ${e.message}`, 'err'); }
+        }
       }
 
       // ── Fix 2: PO/WO schedule paid stages → ensure Advance/Bill entries exist and are correct ──
