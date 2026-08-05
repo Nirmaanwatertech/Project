@@ -3214,13 +3214,16 @@ function BillPayments() {
 
   // Bills with computed status
   const withStatus = items.map(b => {
-    // Find advances linked to this bill directly OR to the same PO/WO (for fromSchedule bills)
+    // Find advances linked to this bill — use adjustedAmount (what was actually deducted)
     const linkedAdv = advances.filter(a =>
       a.linkedBill === b.docId ||
+      a.adjustedAgainst === b.docId ||
       (b.fromSchedule && b.linkedPO && a.linkedPO === b.linkedPO && a.fromSchedule) ||
       (b.fromSchedule && b.linkedWO && a.linkedWO === b.linkedWO && a.fromSchedule)
     );
-    const advanceDeducted = linkedAdv.reduce((s,a) => s + Number(a.amount||0), 0);
+    // Use b.advanceDeducted if stored (most accurate), else sum adjustedAmounts from linked advances
+    const advanceDeducted = Number(b.advanceDeducted||0) ||
+      linkedAdv.reduce((s,a) => s + Number(a.adjustedAmount||a.amount||0), 0);
 
     const hasSchedule = b.paymentSchedule && b.paymentSchedule.length > 0;
 
@@ -3268,25 +3271,20 @@ function BillPayments() {
       else if (b.paymentSchedule.every(s => s.paid)) effectiveDue = null;
     }
 
-    // paidSoFar and netPayable
-    // If bill is fully paid → full amount. Else if advance linked → advance amount.
+    // paidSoFar = what has actually been paid against this bill
     const paidSoFar = hasSchedule
       ? paidStagesAmt
       : b.paid
-        ? totalBillAmt
-        : advanceDeducted > 0
-          ? advanceDeducted
-          : 0;
+        ? totalBillAmt          // fully paid
+        : advanceDeducted;      // only advance deducted so far (may be partial)
 
     const netPayable = hasSchedule
       ? Math.max(0, unpaidStagesAmt - advanceDeducted)
       : Math.max(0, totalBillAmt - paidSoFar);
 
-    // Status: only mark Paid if b.paid is explicitly true
-    // Advance deduction reduces Net Payable but doesn't settle the bill
     let status;
     if (b.paid || (hasSchedule && unpaidStagesAmt === 0)) status = 'Paid';
-    else if (netPayable === 0 && advanceDeducted > 0) status = 'Advance Adjusted';
+    else if (netPayable === 0 && advanceDeducted > 0 && !b.paid) status = 'Advance Adjusted';
     else if (!effectiveDue) status = 'Upcoming';
     else if (effectiveDue === todayStr) status = 'Due Today';
     else if (effectiveDue < todayStr) status = 'Overdue';
