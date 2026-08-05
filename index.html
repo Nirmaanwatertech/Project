@@ -6531,155 +6531,231 @@ function PermissionMatrix({ currentUser }) {
 // ─── Data Fix Panel ───────────────────────────────────
 function DataFixPanel() {
   const [running, setRunning] = useState(false);
-  const [log, setLog] = useState([]);
+  const [log, setLog]         = useState([]);
+  const [done, setDone]       = useState(false);
 
   function addLog(msg, type='info') {
-    setLog(l => [...l, {msg, type, t: Date.now()}]);
+    setLog(l => [...l, {msg, type}]);
   }
 
   async function runFixAll() {
-    if (!confirm('This will scan ALL advances, bills, and PO/WO schedules and apply correct linkages, statuses and amounts. Continue?')) return;
-    setRunning(true);
-    setLog([]);
-    const { getDocs, updateDoc } = window.fb;
+    if (!confirm('This will scan and repair ALL data in Firestore to match the latest sync rules. Continue?')) return;
+    setRunning(true); setDone(false); setLog([]);
+    const { getDocs, updateDoc, addDoc, deleteDoc } = window.fb;
+    let fixed = 0, skipped = 0;
 
     try {
-      addLog('Loading all data…');
+      // ── Load all collections ──────────────────────────
+      addLog('📦 Loading all data…');
       const [advSnap, billSnap, poSnap, woSnap] = await Promise.all([
         getDocs(userCol(ADVANCES_COLLECTION)),
         getDocs(userCol(BILLS_COLLECTION)),
         getDocs(userCol(PO_COLLECTION)),
         getDocs(userCol(WO_COLLECTION)),
       ]);
+      const advances = advSnap.docs.map(d=>({docId:d.id,...d.data()}));
+      const bills    = billSnap.docs.map(d=>({docId:d.id,...d.data()}));
+      const pos      = poSnap.docs.map(d=>({docId:d.id,...d.data()}));
+      const wos      = woSnap.docs.map(d=>({docId:d.id,...d.data()}));
+      addLog(`✓ Loaded ${advances.length} advances, ${bills.length} bills, ${pos.length} POs, ${wos.length} WOs`,'ok');
 
-      const advances = advSnap.docs.map(d => ({docId:d.id, ...d.data()}));
-      const bills    = billSnap.docs.map(d => ({docId:d.id, ...d.data()}));
-      const pos      = poSnap.docs.map(d => ({docId:d.id, ...d.data()}));
-      const wos      = woSnap.docs.map(d => ({docId:d.id, ...d.data()}));
+      // ── FIX 1: PO/WO schedule stages → Advance/Bill entries ──
+      addLog('');
+      addLog('🔧 Fix 1: PO/WO paid stages → linked Advance & Bill entries');
+      for (const doc of [...pos,...wos]) {
+        const pType  = doc.po?'po':'wo';
+        const refNo  = doc.po||doc.wo||'';
+        const sched  = doc.paymentSchedule||[];
+        let schedChanged = false;
+        const newSched = [...sched];
 
-      addLog(`Loaded: ${advances.length} advances, ${bills.length} bills, ${pos.length} POs, ${wos.length} WOs`);
+        for (let i=0; i<newSched.length; i++) {
+          const s = newSched[i];
+          if (!s.paid) continue;
+          const isAdv = (s.stageType||'').toLowerCase()==='advance';
+          const col   = isAdv?ADVANCES_COLLECTION:BILLS_COLLECTION;
+          const fullBase = Number(doc.value||0);
+          const gstAmt   = s.includesGst?Number(s.gstAmount||0):0;
+          const stageAmt = Number(s.amount||0);
 
-      let fixed = 0;
+          if (s.linkedEntryId) {
+            // Entry exists — verify and correct it
+            const entry = isAdv
+              ? advances.find(a=>a.docId===s.linkedEntryId)
+              : bills.find(b=>b.docId===s.linkedEntryId);
 
-      // ── Fix 1: Advances with linkedBill → write correct advanceDeducted to bill ──
-      addLog('Fix 1: Syncing advance→bill advanceDeducted field…');
-      for (const a of advances) {
-        const billId = a.linkedBill || a.adjustedAgainst;
-        if (!billId) continue;
-        const bill = bills.find(b => b.docId === billId);
-        if (!bill) { addLog(`  ⚠ Advance ${a.docId.slice(0,8)}: linked bill not found`, 'warn'); continue; }
-
-        // Calculate correct amounts
-        const adjAmt = Number(a.adjustedAmount||0) || Number(a.amount||0);
-        const gstRate = bill.gstPct ? parseFloat(bill.gstPct)/100 : 0;
-        const baseAmt = Number(bill.amount||0);
-        const gstAmt  = bill.gstAmount !== undefined ? Number(bill.gstAmount||0)
-                      : gstRate > 0 ? Math.round(baseAmt * gstRate) : 0;
-        const billTotal = bill.totalAmount ? Number(bill.totalAmount) : baseAmt + gstAmt;
-        const netPayable = Math.max(0, billTotal - adjAmt);
-        const isPaid = netPayable <= 0;
-
-        try {
-          await updateDoc(userDoc(BILLS_COLLECTION, billId), {
-            advanceDeducted: adjAmt,
-            linkedAdvance:   a.docId,
-            paid:            isPaid,
-            ...(isPaid ? {paidAt: a.paidAt||Date.now()} : {paidAt: null}),
-          });
-          addLog(`  ✓ ${bill.payee||billId.slice(0,8)}: advanceDeducted=${adjAmt}, netPayable=${netPayable}, paid=${isPaid}`, 'ok');
-          fixed++;
-        } catch(e) { addLog(`  ✗ ${billId.slice(0,8)}: ${e.message}`, 'err'); }
-
-        // Also fix advance adjustedAmount if it was stored as 0
-        if (!a.adjustedAmount && a.amount) {
-          try {
-            const balance = Number(a.amount||0) - adjAmt;
-            await updateDoc(userDoc(ADVANCES_COLLECTION, a.docId), {
-              adjustedAmount: adjAmt,
-              balanceAmount:  Math.max(0, balance),
-              status: balance <= 0 ? 'Fully Adjusted' : 'Partially Adjusted',
-            });
-            addLog(`  ✓ Advance ${a.docId.slice(0,8)}: adjustedAmount=${adjAmt}`, 'ok');
-            fixed++;
-          } catch(e) { addLog(`  ✗ advance fix: ${e.message}`, 'err'); }
-        }
-      }
-
-      // ── Fix 2: PO/WO schedule paid stages → ensure Advance/Bill entries exist and are correct ──
-      addLog('Fix 2: Syncing PO/WO paid stages → entries…');
-      for (const doc of [...pos, ...wos]) {
-        const parentType = doc.po ? 'po' : 'wo';
-        const refNo = doc.po || doc.wo || '';
-        const schedule = doc.paymentSchedule || [];
-        for (const stage of schedule) {
-          if (!stage.paid || !stage.linkedEntryId) continue;
-          const sType = (stage.stageType||'Against Delivery').toLowerCase();
-          const isAdv = sType === 'advance';
-          const col = isAdv ? ADVANCES_COLLECTION : BILLS_COLLECTION;
-          const entry = isAdv
-            ? advances.find(a => a.docId === stage.linkedEntryId)
-            : bills.find(b => b.docId === stage.linkedEntryId);
-          if (!entry) {
-            addLog(`  ⚠ ${refNo} stage "${stage.stageType}" linkedEntryId ${stage.linkedEntryId} not found — will recreate`, 'warn');
-            // Recreate the entry
-            try {
-              await syncStageToModules({...stage}, doc, parentType, schedule, null, stage.datePaid||stage.date||'');
-              addLog(`  ✓ Recreated entry for ${refNo} ${stage.stageType}`, 'ok');
-              fixed++;
-            } catch(e) { addLog(`  ✗ Could not recreate: ${e.message}`, 'err'); }
-            continue;
-          }
-          // Entry exists — fix amounts
-          if (!isAdv) {
-            const fullBase = Number(doc.value||0);
-            const gstAmt = stage.includesGst ? Number(stage.gstAmount||0) : 0;
-            const currentAmt = Number(entry.amount||0);
-            if (currentAmt !== fullBase || !entry.paid) {
+            if (!entry) {
+              addLog(`  ⚠ ${refNo} "${s.stageType}" — entry ${s.linkedEntryId.slice(0,8)} missing, recreating…`,'warn');
               try {
-                await updateDoc(userDoc(BILLS_COLLECTION, stage.linkedEntryId), {
-                  amount: fullBase, gstAmount: gstAmt, totalAmount: fullBase+gstAmt,
-                  paid: true, paidAt: entry.paidAt||Date.now(),
-                  payee: doc.vendorName||entry.payee,
-                  project: doc.project||entry.project,
-                });
-                addLog(`  ✓ Fixed bill ${stage.linkedEntryId}: amount=${fullBase}, paid=true`, 'ok');
-                fixed++;
-              } catch(e) { addLog(`  ✗ ${e.message}`, 'err'); }
+                const data = isAdv ? {
+                  vendor:doc.vendorName||'', amount:stageAmt, datePaid:s.datePaid||s.date||'',
+                  paymentMode:'NEFT', refNumber:'', narration:`Advance — ${refNo}`,
+                  linkedPO:pType==='po'?refNo:'', linkedWO:pType==='wo'?refNo:'',
+                  project:doc.project||'', split:doc.split||{}, status:'Unadjusted',
+                  balanceAmount:stageAmt, adjustedAmount:0, fromSchedule:true, createdAt:Date.now(),
+                } : {
+                  payee:doc.vendorName||'', category:'Vendor', invoiceNo:s.invoiceNo||refNo,
+                  invoiceDate:s.datePaid||s.date||'', due:s.datePaid||s.date||'',
+                  amount:fullBase, gstAmount:gstAmt, totalAmount:fullBase+gstAmt,
+                  notes:`Against Delivery — ${refNo}`, linkedPO:pType==='po'?refNo:'',
+                  linkedWO:pType==='wo'?refNo:'', project:doc.project||'', split:doc.split||{},
+                  gstPct:doc.gstPct||'', paid:true, paidAt:Date.now(), fromSchedule:true, createdAt:Date.now(),
+                };
+                const ref = await addDoc(userCol(col), data);
+                newSched[i] = {...s, linkedEntryId:ref.id};
+                schedChanged = true;
+                addLog(`  ✓ Recreated ${isAdv?'advance':'bill'} for ${refNo}`,'ok'); fixed++;
+              } catch(e){addLog(`  ✗ Recreate failed: ${e.message}`,'err');}
+              continue;
             }
+
+            // Entry exists — fix fields
+            const updates = {};
+            if (!isAdv) {
+              if (Number(entry.amount||0)!==fullBase) updates.amount=fullBase;
+              if (Number(entry.gstAmount||0)!==gstAmt) updates.gstAmount=gstAmt;
+              if (Number(entry.totalAmount||0)!==fullBase+gstAmt) updates.totalAmount=fullBase+gstAmt;
+              if (!entry.paid) { updates.paid=true; updates.paidAt=Date.now(); }
+              if (s.invoiceNo && entry.invoiceNo!==s.invoiceNo) updates.invoiceNo=s.invoiceNo;
+              if (s.datePaid && entry.due!==s.datePaid) { updates.due=s.datePaid; updates.invoiceDate=s.datePaid; }
+            } else {
+              if (Number(entry.amount||0)!==stageAmt) updates.amount=stageAmt;
+              if (s.datePaid && !entry.datePaid) updates.datePaid=s.datePaid;
+            }
+            if (Object.keys(updates).length>0) {
+              try {
+                await updateDoc(userDoc(col,s.linkedEntryId),updates);
+                addLog(`  ✓ Fixed ${isAdv?'advance':'bill'} ${s.linkedEntryId.slice(0,8)}: ${Object.keys(updates).join(', ')}`,'ok'); fixed++;
+              } catch(e){addLog(`  ✗ ${e.message}`,'err');}
+            } else { skipped++; }
           } else {
-            // Advance — fix datePaid, amount
-            if (!entry.datePaid && stage.datePaid) {
-              try {
-                await updateDoc(userDoc(ADVANCES_COLLECTION, stage.linkedEntryId), {
-                  datePaid: stage.datePaid,
-                });
-                addLog(`  ✓ Fixed advance ${stage.linkedEntryId}: datePaid=${stage.datePaid}`, 'ok');
-                fixed++;
-              } catch(e) { addLog(`  ✗ ${e.message}`, 'err'); }
-            }
+            // No linkedEntryId — entry was never created, create now
+            addLog(`  ⚠ ${refNo} "${s.stageType}" paid but no linked entry — creating…`,'warn');
+            try {
+              const data = isAdv ? {
+                vendor:doc.vendorName||'', amount:stageAmt, datePaid:s.datePaid||s.date||'',
+                paymentMode:'NEFT', refNumber:'', narration:`Advance — ${refNo}`,
+                linkedPO:pType==='po'?refNo:'', linkedWO:pType==='wo'?refNo:'',
+                project:doc.project||'', split:doc.split||{}, status:'Unadjusted',
+                balanceAmount:stageAmt, adjustedAmount:0, fromSchedule:true, createdAt:Date.now(),
+              } : {
+                payee:doc.vendorName||'', category:'Vendor', invoiceNo:s.invoiceNo||refNo,
+                invoiceDate:s.datePaid||s.date||'', due:s.datePaid||s.date||'',
+                amount:fullBase, gstAmount:gstAmt, totalAmount:fullBase+gstAmt,
+                notes:`Against Delivery — ${refNo}`, linkedPO:pType==='po'?refNo:'',
+                linkedWO:pType==='wo'?refNo:'', project:doc.project||'', split:doc.split||{},
+                gstPct:doc.gstPct||'', paid:true, paidAt:Date.now(), fromSchedule:true, createdAt:Date.now(),
+              };
+              const ref = await addDoc(userCol(col), data);
+              newSched[i] = {...s, linkedEntryId:ref.id};
+              schedChanged = true;
+              addLog(`  ✓ Created ${isAdv?'advance':'bill'} ${ref.id.slice(0,8)} for ${refNo}`,'ok'); fixed++;
+            } catch(e){addLog(`  ✗ Create failed: ${e.message}`,'err');}
           }
         }
-      }
 
-      // ── Fix 3: Bills with fromSchedule=true but paid=false → mark paid ──
-      addLog('Fix 3: Marking fromSchedule bills as paid…');
-      for (const b of bills) {
-        if (!b.fromSchedule || b.paid) continue;
-        // Find the PO/WO stage that points to this bill
-        const allDocs = [...pos, ...wos];
-        const parentDoc = allDocs.find(d => (d.paymentSchedule||[]).some(s => s.linkedEntryId === b.docId && s.paid));
-        if (parentDoc) {
+        // Save schedule if changed
+        if (schedChanged) {
           try {
-            await updateDoc(userDoc(BILLS_COLLECTION, b.docId), {paid: true, paidAt: Date.now()});
-            addLog(`  ✓ Marked bill ${b.invoiceNo||b.docId} as paid`, 'ok');
-            fixed++;
-          } catch(e) { addLog(`  ✗ ${e.message}`, 'err'); }
+            await updateDoc(userDoc(pType==='po'?PO_COLLECTION:WO_COLLECTION, doc.docId),{paymentSchedule:newSched});
+            addLog(`  ✓ Updated schedule for ${refNo}`,'ok');
+          } catch(e){addLog(`  ✗ Schedule save: ${e.message}`,'err');}
         }
       }
 
-      addLog(`\n✅ Done. Fixed ${fixed} records.`, 'ok');
+      // ── FIX 2: Advances with linkedBill → write correct advanceDeducted to bill ──
+      addLog('');
+      addLog('🔧 Fix 2: Advance→Bill linkages and adjustedAmount');
+      for (const a of advances) {
+        const billId = a.linkedBill||a.adjustedAgainst;
+        if (!billId) continue;
+        const bill = bills.find(b=>b.docId===billId);
+        if (!bill) { addLog(`  ⚠ Advance ${a.docId.slice(0,8)}: bill ${billId.slice(0,8)} missing`,'warn'); continue; }
+
+        // Correct adjusted amount — use amount if adjustedAmount is missing
+        const adjAmt = Number(a.adjustedAmount||0)||Number(a.amount||0);
+        const gstRate = bill.gstPct?parseFloat(bill.gstPct)/100:0;
+        const baseAmt = Number(bill.amount||0);
+        const gstAmt  = bill.gstAmount!==undefined?Number(bill.gstAmount||0):Math.round(baseAmt*gstRate);
+        const billTotal = bill.totalAmount?Number(bill.totalAmount):baseAmt+gstAmt;
+        const netPayable = Math.max(0, billTotal - adjAmt);
+        const isPaid = netPayable<=0;
+
+        // Fix the advance record
+        const advUpdates = {};
+        if (!a.adjustedAmount && a.amount) { advUpdates.adjustedAmount=adjAmt; advUpdates.balanceAmount=Math.max(0,Number(a.amount||0)-adjAmt); }
+        if (!a.status||a.status==='Unadjusted') advUpdates.status=isPaid?'Fully Adjusted':'Partially Adjusted';
+        if (Object.keys(advUpdates).length>0) {
+          try { await updateDoc(userDoc(ADVANCES_COLLECTION,a.docId),advUpdates); addLog(`  ✓ Advance ${a.docId.slice(0,8)}: ${JSON.stringify(advUpdates)}`,'ok'); fixed++; }
+          catch(e){addLog(`  ✗ ${e.message}`,'err');}
+        }
+
+        // Fix the bill record
+        const billUpdates = {};
+        if (Number(bill.advanceDeducted||0)!==adjAmt) billUpdates.advanceDeducted=adjAmt;
+        if (!bill.linkedAdvance) billUpdates.linkedAdvance=a.docId;
+        if (bill.paid!==isPaid) { billUpdates.paid=isPaid; billUpdates.paidAt=isPaid?Date.now():null; }
+        if (Object.keys(billUpdates).length>0) {
+          try { await updateDoc(userDoc(BILLS_COLLECTION,billId),billUpdates); addLog(`  ✓ Bill ${bill.payee||billId.slice(0,8)}: advDed=${adjAmt}, net=${netPayable}, paid=${isPaid}`,'ok'); fixed++; }
+          catch(e){addLog(`  ✗ ${e.message}`,'err');}
+        } else { skipped++; }
+      }
+
+      // ── FIX 3: Against Delivery bills — ensure paid=true if linked to paid PO stage ──
+      addLog('');
+      addLog('🔧 Fix 3: fromSchedule bills — mark paid if PO stage is paid');
+      for (const b of bills) {
+        if (!b.fromSchedule||b.paid) continue;
+        const allDocs=[...pos,...wos];
+        const found=allDocs.find(d=>(d.paymentSchedule||[]).some(s=>s.linkedEntryId===b.docId&&s.paid));
+        if (found) {
+          try {
+            await updateDoc(userDoc(BILLS_COLLECTION,b.docId),{paid:true,paidAt:Date.now()});
+            addLog(`  ✓ ${b.payee||b.docId.slice(0,8)}: marked paid`,'ok'); fixed++;
+          } catch(e){addLog(`  ✗ ${e.message}`,'err');}
+        }
+      }
+
+      // ── FIX 4: Bills with gstPct but missing gstAmount/totalAmount fields ──
+      addLog('');
+      addLog('🔧 Fix 4: Bills missing gstAmount / totalAmount fields');
+      for (const b of bills) {
+        if (b.gstAmount!==undefined&&b.totalAmount) { skipped++; continue; }
+        if (!b.gstPct) { skipped++; continue; }
+        const base=Number(b.amount||0);
+        const gstAmt=Math.round(base*parseFloat(b.gstPct)/100);
+        const updates={};
+        if (b.gstAmount===undefined) updates.gstAmount=gstAmt;
+        if (!b.totalAmount) updates.totalAmount=base+gstAmt;
+        if (Object.keys(updates).length>0) {
+          try { await updateDoc(userDoc(BILLS_COLLECTION,b.docId),updates); addLog(`  ✓ ${b.payee||b.docId.slice(0,8)}: added gstAmount=${gstAmt}`,'ok'); fixed++; }
+          catch(e){addLog(`  ✗ ${e.message}`,'err');}
+        }
+      }
+
+      // ── FIX 5: Advances — fix balanceAmount ──
+      addLog('');
+      addLog('🔧 Fix 5: Advances — correct balanceAmount');
+      for (const a of advances) {
+        const adj=Number(a.adjustedAmount||0);
+        const amt=Number(a.amount||0);
+        const correctBalance=Math.max(0,amt-adj);
+        const correctStatus=adj===0?'Unadjusted':correctBalance<=0?'Fully Adjusted':'Partially Adjusted';
+        const updates={};
+        if (Math.abs(Number(a.balanceAmount||0)-correctBalance)>1) updates.balanceAmount=correctBalance;
+        if (a.status!==correctStatus) updates.status=correctStatus;
+        if (Object.keys(updates).length>0) {
+          try { await updateDoc(userDoc(ADVANCES_COLLECTION,a.docId),updates); addLog(`  ✓ Advance ${a.docId.slice(0,8)}: balance=${correctBalance}, status=${correctStatus}`,'ok'); fixed++; }
+          catch(e){addLog(`  ✗ ${e.message}`,'err');}
+        } else { skipped++; }
+      }
+
+      addLog('');
+      addLog(`✅ Complete! Fixed ${fixed} records, ${skipped} already correct.`,'ok');
+      setDone(true);
+
     } catch(e) {
-      addLog('✗ Error: ' + e.message, 'err');
+      addLog('✗ Fatal error: '+e.message,'err');
     } finally {
       setRunning(false);
     }
@@ -6689,39 +6765,37 @@ function DataFixPanel() {
     <div className="card">
       <div className="card-header">
         <span className="card-title">🔧 Data Fix</span>
-        <span style={{fontSize:12,color:'var(--text-muted)'}}>Applies all latest sync logic to existing historical data</span>
+        <span style={{fontSize:12,color:'var(--text-muted)'}}>Repairs all historical data to match current sync rules</span>
       </div>
       <div className="card-body">
-        <div style={{marginBottom:16}}>
-          <p style={{fontSize:13,color:'var(--text-secondary)',marginBottom:8}}>
-            This scan fixes all past entries to match the current sync rules:
-          </p>
-          <ul style={{fontSize:12,color:'var(--text-secondary)',paddingLeft:18,lineHeight:2}}>
-            <li>Advances linked to bills → updates bill's Paid So Far and Net Payable</li>
-            <li>PO/WO paid stages → ensures linked Advance/Bill entries have correct amounts</li>
-            <li>Bills from PO schedule marked paid but showing Unpaid → marks them Paid</li>
-            <li>Missing linked entries → recreates them from PO/WO schedule data</li>
-          </ul>
+        <div style={{marginBottom:12,padding:'10px 14px',background:'var(--grey-50)',borderRadius:6,fontSize:12,color:'var(--text-secondary)'}}>
+          Fixes applied:
+          <ol style={{paddingLeft:18,marginTop:6,lineHeight:2.2}}>
+            <li>PO/WO paid stages → creates missing Advance/Bill entries, corrects amounts</li>
+            <li>Advance→Bill links → writes correct <code>advanceDeducted</code>, fixes <code>adjustedAmount</code></li>
+            <li>fromSchedule bills → marks as Paid if linked PO stage is paid</li>
+            <li>Bills missing <code>gstAmount</code>/<code>totalAmount</code> → calculates and stores them</li>
+            <li>Advances → corrects <code>balanceAmount</code> and <code>status</code></li>
+          </ol>
         </div>
         <button className="btn btn-primary" onClick={runFixAll} disabled={running}
-          style={{background:'var(--secondary)',marginBottom:16}}>
-          {running ? '⏳ Running…' : '🔧 Run Fix All'}
+          style={{background:done?'var(--green)':'var(--secondary)',marginBottom:14,minWidth:160}}>
+          {running?'⏳ Running…':done?'✅ Done — Run Again':'🔧 Run Fix All'}
         </button>
-        {log.length > 0 && (
-          <div style={{background:'#0F172A',borderRadius:6,padding:'12px 14px',maxHeight:300,overflowY:'auto',fontFamily:'monospace',fontSize:11}}>
-            {log.map((l,i) => (
-              <div key={i} style={{color: l.type==='ok'?'#34D399':l.type==='err'?'#F87171':l.type==='warn'?'#FCD34D':'#94A3B8',marginBottom:2}}>
+        {log.length>0&&(
+          <div style={{background:'#0F172A',borderRadius:6,padding:'12px 14px',maxHeight:360,overflowY:'auto',fontFamily:'monospace',fontSize:11,lineHeight:1.7}}>
+            {log.map((l,i)=>(
+              <div key={i} style={{color:l.type==='ok'?'#34D399':l.type==='err'?'#F87171':l.type==='warn'?'#FCD34D':'#94A3B8'}}>
                 {l.msg}
               </div>
             ))}
-            {running && <div style={{color:'#60A5FA'}}>⏳ Working…</div>}
+            {running&&<div style={{color:'#60A5FA',animation:'pulse 1s infinite'}}>⏳ Working…</div>}
           </div>
         )}
       </div>
     </div>
   );
 }
-
 function Settings({ currentUser }) {
   const [tab, setTab] = useState('projects');
   const [projects, setProjects] = useState(null);
