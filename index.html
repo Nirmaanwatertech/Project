@@ -643,7 +643,7 @@ function useKnownNames() {
       const { db, collection, getDocs } = window.fb;
       async function load() {
         try {
-          const [bills, advances, pos, wos, quotes, petty, capital] = await Promise.all([
+          const [bills, advances, pos, wos, quotes, petty, capital, exps] = await Promise.all([
             getDocs(userCol('bills')),
             getDocs(userCol('advances')),
             getDocs(userCol('purchaseorders')),
@@ -651,6 +651,7 @@ function useKnownNames() {
             getDocs(userCol('quotations')),
             getDocs(userCol('petty_cash')),
             getDocs(userCol('capital_loans')),
+            getDocs(userCol('expenses')),
           ]);
 
           const vendorNames = [
@@ -658,12 +659,14 @@ function useKnownNames() {
             ...wos.docs.map(d=>d.data().vendorName),
             ...quotes.docs.map(d=>d.data().vendorName),
             ...advances.docs.map(d=>d.data().vendor),
+            ...exps.docs.map(d=>d.data().vendor),
           ].filter(Boolean);
 
           const payeeNames = [
             ...bills.docs.map(d=>d.data().payee),
             ...advances.docs.map(d=>d.data().vendor),
             ...petty.docs.map(d=>d.data().paidBy),
+            ...exps.docs.map(d=>d.data().vendor),
           ].filter(Boolean);
 
           const clientNames = [].filter(Boolean);
