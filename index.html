@@ -3102,7 +3102,43 @@ function LinkAdvanceModal({ advance, onClose, pos, bills }) {
       const adj = Number(adjustedAmount) || 0;
       const balance = Number(advance.amount) - adj;
       const status = adj === 0 ? 'Unadjusted' : balance <= 0 ? 'Fully Adjusted' : 'Partially Adjusted';
-      await updateAdvance(advance.docId, { linkedPO, linkedBill, adjustedAmount: adj, balanceAmount: Math.max(0, balance), status });
+
+      // Update the advance record
+      await updateAdvance(advance.docId, {
+        linkedPO, linkedBill,
+        adjustedAmount: adj, balanceAmount: Math.max(0, balance), status,
+        adjustedAgainst: linkedBill || '',
+      });
+
+      // Update the linked bill: set advanceDeducted and mark as paid if fully covered
+      if (linkedBill) {
+        const { updateDoc, getDoc } = window.fb;
+        try {
+          const billSnap = await getDoc(userDoc(BILLS_COLLECTION, linkedBill));
+          if (billSnap.exists()) {
+            const b = billSnap.data();
+            const billTotal = Number(b.totalAmount||0) || (Number(b.amount||0) + Number(b.gstAmount||0));
+            const netPayable = Math.max(0, billTotal - adj);
+            const isPaid = netPayable <= 0;
+            const update = {
+              advanceDeducted: adj,
+              linkedAdvance: advance.docId,
+              paid: isPaid,
+            };
+            if (isPaid) update.paidAt = Date.now();
+            // If bill has a payment schedule, mark the matching stage as paid
+            if (b.paymentSchedule && b.paymentSchedule.length > 0) {
+              const newSchedule = b.paymentSchedule.map((s, i) => {
+                if (i === 0 && !s.paid) return {...s, paid: true, paidAt: Date.now(), datePaid: advance.datePaid||''};
+                return s;
+              });
+              update.paymentSchedule = newSchedule;
+            }
+            await updateDoc(userDoc(BILLS_COLLECTION, linkedBill), update);
+          }
+        } catch(e) { console.warn('Could not update linked bill:', e.message); }
+      }
+
       onClose();
     } catch(e) { console.error(e); alert('Could not update advance.'); }
     finally { setSaving(false); }
@@ -3244,9 +3280,9 @@ function BillPayments() {
     const paidSoFar = hasSchedule
       ? paidStagesAmt
       : b.paid
-        ? totalBillAmt             // fully paid — full amount
+        ? totalBillAmt
         : advanceDeducted > 0
-          ? advanceDeducted        // only advance paid so far
+          ? advanceDeducted
           : 0;
 
     const netPayable = hasSchedule
