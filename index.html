@@ -2571,7 +2571,8 @@ function CashFlow() {
   const totalBillsPaid = bills.filter(b => b.paid).reduce((s,b) => s + (Number(b.totalAmount||0) || Number(b.amount||0) + Number(b.gstAmount||0)), 0);
   const totalExpenses  = expenses.reduce((s,e) => s + Number(e.amount||0), 0);
   const totalPetty     = petty.reduce((s,p)   => s + Number(p.amount||0), 0);
-  const currentBalance = totalCapital + totalReceipts - totalAdvances - totalBillsPaid - totalExpenses - totalPetty;
+  const totalRepayments = capital.reduce((s,c) => s + Number(c.totalRepaid||0), 0);
+  const currentBalance = totalCapital + totalReceipts - totalAdvances - totalBillsPaid - totalExpenses - totalPetty - totalRepayments;
 
   function getITCDate(dateStr) {
     if (!dateStr) return '';
@@ -2739,7 +2740,8 @@ function CashFlow() {
               {label:'Bills & Invoices (paid)', amt:totalBillsPaid, icon:'📑'},
               {label:'General Expenses',  amt:totalExpenses,  icon:'🧾'},
               {label:'Petty Cash',        amt:totalPetty,     icon:'🪙'},
-            ].map(row=>(
+              {label:'Loan Repayments',                amt:totalRepayments, icon:'🏦'},
+            ].filter(r=>r.amt>0).map(row=>(
               <div key={row.label} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:'1px solid var(--grey-50)'}}>
                 <span style={{fontSize:13}}>{row.icon} {row.label}</span>
                 <span className="amount" style={{fontWeight:700,color:'var(--red)',fontSize:14}}>{inr(row.amt)}</span>
@@ -5321,6 +5323,128 @@ async function clearAllCapital() {
   await batch.commit();
 }
 
+// ─── Repay Capital Modal ──────────────────────────────
+function RepayCapitalModal({ entry, onClose }) {
+  const [date, setDate]     = useState(new Date().toISOString().slice(0,10));
+  const [amount, setAmount] = useState('');
+  const [mode, setMode]     = useState('NEFT');
+  const [ref, setRef]       = useState('');
+  const [notes, setNotes]   = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const totalRepaid    = Number(entry.totalRepaid||0);
+  const outstanding    = Math.max(0, Number(entry.amount||0) - totalRepaid);
+  const repayAmt       = Number(amount)||0;
+  const newTotalRepaid = totalRepaid + repayAmt;
+  const newOutstanding = Math.max(0, Number(entry.amount||0) - newTotalRepaid);
+  const isFullyRepaid  = newOutstanding <= 0;
+
+  async function handleSave() {
+    if (!amount || !date) return;
+    setSaving(true);
+    try {
+      const { updateDoc } = window.fb;
+      const repayment = { date, amount: repayAmt, mode, ref, notes, createdAt: Date.now() };
+      const repayments = [...(entry.repayments||[]), repayment];
+      await updateDoc(userDoc(CAPITAL_COLLECTION, entry.docId), {
+        repayments,
+        totalRepaid: newTotalRepaid,
+        fullyRepaid: isFullyRepaid,
+      });
+      onClose();
+    } catch(e) { console.error(e); alert('Could not save repayment.'); }
+    finally { setSaving(false); }
+  }
+
+  const lists = useLists();
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:480,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--red)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Record Repayment — {entry.source}</span>
+        </div>
+        <div style={{padding:'16px 20px'}}>
+          {/* Summary */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginBottom:16}}>
+            <div style={{padding:'8px 12px',background:'#F0FFF4',borderRadius:6,border:'1px solid var(--green)'}}>
+              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600}}>LOAN AMOUNT</div>
+              <div className="amount" style={{fontWeight:700,color:'var(--green)'}}>{inr(entry.amount||0)}</div>
+            </div>
+            <div style={{padding:'8px 12px',background:'#FEF2F2',borderRadius:6,border:'1px solid var(--red)'}}>
+              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600}}>REPAID SO FAR</div>
+              <div className="amount" style={{fontWeight:700,color:'var(--red)'}}>{inr(totalRepaid)}</div>
+            </div>
+            <div style={{padding:'8px 12px',background:'#FFF7ED',borderRadius:6,border:'1px solid var(--amber)'}}>
+              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600}}>OUTSTANDING</div>
+              <div className="amount" style={{fontWeight:700,color:'var(--amber)'}}>{inr(outstanding)}</div>
+            </div>
+          </div>
+
+          {/* Past repayments */}
+          {(entry.repayments||[]).length > 0 && (
+            <div style={{marginBottom:14,background:'var(--grey-50)',borderRadius:6,padding:'8px 12px'}}>
+              <div style={{fontSize:11,fontWeight:600,color:'var(--text-muted)',marginBottom:6}}>Past Repayments</div>
+              {(entry.repayments||[]).map((r,i)=>(
+                <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:12,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                  <span>{fmt(r.date)} — {r.mode}</span>
+                  <span className="amount" style={{fontWeight:600,color:'var(--red)'}}>{inr(r.amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* New repayment form */}
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Repayment Date *</label>
+              <input className="form-input" type="date" value={date} onChange={e=>setDate(e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Amount (₹) *</label>
+              <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                <input className="form-input font-mono" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" autoFocus />
+                {outstanding > 0 && <button className="btn btn-sm btn-ghost" style={{fontSize:11,whiteSpace:'nowrap'}} onClick={()=>setAmount(String(outstanding))}>Full {inr(outstanding)}</button>}
+              </div>
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Payment Mode</label>
+              <select className="form-input form-select" value={mode} onChange={e=>setMode(e.target.value)}>
+                {(lists.paymentModes||DEFAULT_LISTS.paymentModes).map(m=><option key={m}>{m}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Reference #</label>
+              <input className="form-input font-mono" value={ref} onChange={e=>setRef(e.target.value)} placeholder="UTR / Ref number" />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Notes</label>
+            <input className="form-input" value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Optional" />
+          </div>
+
+          {/* Preview */}
+          {repayAmt > 0 && (
+            <div style={{padding:'10px 14px',background:isFullyRepaid?'#F0FFF4':'#FFF7ED',borderRadius:6,border:`1px solid ${isFullyRepaid?'var(--green)':'var(--amber)'}`,fontSize:12}}>
+              {isFullyRepaid
+                ? <span style={{color:'var(--green)',fontWeight:600}}>✓ After this payment the loan will be <strong>Fully Repaid</strong></span>
+                : <span style={{color:'var(--amber)'}}>Outstanding after repayment: <strong>{inr(newOutstanding)}</strong></span>}
+            </div>
+          )}
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!amount||!date} className="btn btn-primary" style={{background:'var(--red)',opacity:saving||!amount||!date?0.6:1}}>
+            {saving?'Saving…':'Record Repayment'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function NewCapitalModal({ onClose, existing }) {
   const isEdit = !!existing;
   const knownNames = useKnownNames();
@@ -5461,19 +5585,27 @@ function CapitalLoans() {
   const { items, loading } = useCapitalLoans();
   const [showNew, setShowNew] = useState(false);
   const [editCapital, setEditCapital] = useState(null);
+  const [repayEntry, setRepayEntry] = useState(null);
   const [sortBy, setSortBy] = useState('date_desc');
   const [capTypeFilter, setCapTypeFilter] = useState('all');
   const [capProjectFilter, setCapProjectFilter] = useState('all');
   const [capMonthFilter, setCapMonthFilter] = useState('all');
 
-  const totalInflow = items.reduce((s,i) => s + Number(i.amount||0), 0);
-  const totalRepayable = items.filter(i=>i.isRepayable).reduce((s,i) => s + Number(i.emiAmount||0)*Number(i.tenureMonths||0), 0);
-  const investorFunds = items.filter(i=>!i.isRepayable).reduce((s,i) => s + Number(i.amount||0), 0);
+  const totalInflow    = items.reduce((s,i) => s + Number(i.amount||0), 0);
+  const totalRepaid    = items.reduce((s,i) => s + Number(i.totalRepaid||0), 0);
+  const totalOutstanding = items.filter(i=>i.isRepayable).reduce((s,i) => s + Math.max(0, Number(i.amount||0) - Number(i.totalRepaid||0)), 0);
+  const investorFunds  = items.filter(i=>!i.isRepayable).reduce((s,i) => s + Number(i.amount||0), 0);
 
   const TYPE_COLOR = {
     'Bank Loan':'blue','Overdraft':'amber','Investor Fund':'green',
     'Owner Capital Injection':'teal','Grant':'green','Other':'grey'
   };
+
+  const filtered = [...items].filter(item=>
+    (capTypeFilter==='all'||item.type===capTypeFilter) &&
+    (capProjectFilter==='all'||item.project===capProjectFilter) &&
+    (capMonthFilter==='all'||(item.dateReceived||'').startsWith(capMonthFilter))
+  ).sort((a,b)=>sortBy==='date_asc'?(a.dateReceived||'').localeCompare(b.dateReceived||''):sortBy==='amount_desc'?Number(b.amount||0)-Number(a.amount||0):sortBy==='amount_asc'?Number(a.amount||0)-Number(b.amount||0):sortBy==='vendor_asc'?(a.source||'').localeCompare(b.source||''):(b.dateReceived||'').localeCompare(a.dateReceived||''));
 
   return (
     <div>
@@ -5488,10 +5620,11 @@ function CapitalLoans() {
         </div>
       </div>
 
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
         <div className="stat-card"><div className="stat-label">Total Capital Received</div><div className="stat-value green">{inr(totalInflow)}</div></div>
-        <div className="stat-card"><div className="stat-label">Non-Repayable (Equity)</div><div className="stat-value teal" style={{color:'var(--secondary)'}}>{inr(investorFunds)}</div></div>
-        <div className="stat-card"><div className="stat-label">Total Loan Repayment</div><div className="stat-value red">{inr(totalRepayable)}</div><div className="stat-sub">Total EMIs over tenure</div></div>
+        <div className="stat-card"><div className="stat-label">Non-Repayable (Equity)</div><div className="stat-value teal">{inr(investorFunds)}</div></div>
+        <div className="stat-card"><div className="stat-label">Total Repaid</div><div className="stat-value red">{inr(totalRepaid)}</div></div>
+        <div className="stat-card"><div className="stat-label">Outstanding Balance</div><div className="stat-value amber">{inr(totalOutstanding)}</div></div>
       </div>
 
       <div className="card">
@@ -5501,7 +5634,7 @@ function CapitalLoans() {
           <div className="module-coming">
             <div className="big-icon">🏦</div>
             <h3>No capital entries yet</h3>
-            <p className="text-muted">Record investor funds, bank loans, owner capital injections, or any other financing inflow.</p>
+            <p className="text-muted">Record investor funds, bank loans, owner capital injections.</p>
           </div>
         ) : (
           <>
@@ -5528,47 +5661,67 @@ function CapitalLoans() {
               </select>
             </div>
           </div>
-          <table>
+          <div style={{overflowX:'auto'}}>
+          <table style={{minWidth:900}}>
             <thead>
-              <tr><th>Type</th><th>Source</th><th>Project</th><th>Date</th><th>Amount</th><th>Mode</th><th>Ref #</th><th>EMI</th><th>Tenure</th><th>Total Repayment</th><th>Actions</th></tr>
+              <tr><th>Type</th><th>Source</th><th>Project</th><th>Date</th><th>Amount</th><th>Mode</th><th>Ref #</th><th>Total Repaid</th><th>Outstanding</th><th>Status</th><th>Actions</th></tr>
             </thead>
             <tbody>
-              {[...items].filter(item=>
-                  (capTypeFilter==='all'||item.type===capTypeFilter) &&
-                  (capProjectFilter==='all'||item.project===capProjectFilter) &&
-                  (capMonthFilter==='all'||(item.dateReceived||'').startsWith(capMonthFilter))
-                ).sort((a,b)=>sortBy==='date_asc'?(a.dateReceived||'').localeCompare(b.dateReceived||''):sortBy==='amount_desc'?Number(b.amount||0)-Number(a.amount||0):sortBy==='amount_asc'?Number(a.amount||0)-Number(b.amount||0):sortBy==='vendor_asc'?(a.source||'').localeCompare(b.source||''):(b.dateReceived||'').localeCompare(a.dateReceived||'')).map(item => (
-                <tr key={item.docId}>
-                  <td><span className={`badge ${TYPE_COLOR[item.type]||'grey'}`}>{item.type}</span></td>
-                  <td className="fw-600">{item.source}</td>
-                  <td>{item.project?<span className={`badge ${PROJECT_COLOR[item.project]||'grey'}`}>{item.project}</span>:<span className="text-muted">—</span>}</td>
-                  <td>{fmt(item.dateReceived)}</td>
-                  <td className="amount fw-600" style={{color:'var(--green)'}}>{inr(item.amount||0)}</td>
-                  <td><span className="badge grey">{item.paymentMode}</span></td>
-                  <td className="mono" style={{fontSize:11}}>{item.refNumber||'—'}</td>
-                  <td className="amount">{item.emiAmount > 0 ? inr(item.emiAmount) : '—'}</td>
-                  <td>{item.tenureMonths > 0 ? `${item.tenureMonths}m` : '—'}</td>
-                  <td className="amount" style={{color:'var(--red)'}}>{item.isRepayable && item.emiAmount > 0 ? inr(Number(item.emiAmount)*Number(item.tenureMonths)) : '—'}</td>
-                  <td>
-                    <button className="btn btn-sm btn-ghost" onClick={()=>setEditCapital(item)}>Edit</button>
-                    <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this entry?'))deleteCapitalEntry(item.docId);}}>Delete</button>
-                  </td>
-                </tr>
-              ))}
+              {filtered.map(item => {
+                const totalRepaidAmt = Number(item.totalRepaid||0);
+                const outstanding    = Math.max(0, Number(item.amount||0) - totalRepaidAmt);
+                const isFullyRepaid  = item.isRepayable && outstanding <= 0;
+                const repayments     = item.repayments || [];
+                return (
+                  <tr key={item.docId} style={{background:isFullyRepaid?'#F0FFF4':''}}>
+                    <td><span className={`badge ${TYPE_COLOR[item.type]||'grey'}`}>{item.type}</span></td>
+                    <td className="fw-600">{item.source}</td>
+                    <td>{item.project?<span className={`badge ${PROJECT_COLOR[item.project]||'grey'}`}>{item.project}</span>:<span className="text-muted">—</span>}</td>
+                    <td>{fmt(item.dateReceived)}</td>
+                    <td className="amount fw-600" style={{color:'var(--green)'}}>{inr(item.amount||0)}</td>
+                    <td><span className="badge grey">{item.paymentMode}</span></td>
+                    <td className="mono" style={{fontSize:11}}>{item.refNumber||'—'}</td>
+                    <td className="amount" style={{color:'var(--red)',fontWeight:600}}>{totalRepaidAmt>0?inr(totalRepaidAmt):'—'}</td>
+                    <td className="amount fw-600" style={{color:outstanding>0?'var(--amber)':'var(--green)'}}>
+                      {item.isRepayable ? inr(outstanding) : '—'}
+                    </td>
+                    <td>
+                      {!item.isRepayable ? <span className="badge teal">Equity</span>
+                        : isFullyRepaid ? <span className="badge green">✓ Fully Repaid</span>
+                        : totalRepaidAmt > 0 ? <span className="badge amber">Partial</span>
+                        : <span className="badge grey">Pending</span>}
+                    </td>
+                    <td style={{whiteSpace:'nowrap'}}>
+                      <div className="flex gap-2">
+                        <button className="btn btn-sm btn-ghost" onClick={()=>setEditCapital(item)}>Edit</button>
+                        {item.isRepayable && <button className="btn btn-sm btn-primary" style={{background:'var(--red)',fontSize:11}} onClick={()=>setRepayEntry(item)}>Repay</button>}
+                        <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteCapitalEntry(item.docId);}}>Delete</button>
+                      </div>
+                      {repayments.length>0 && (
+                        <div style={{marginTop:4}}>
+                          {repayments.slice(-2).map((r,i)=>(
+                            <div key={i} style={{fontSize:10,color:'var(--text-muted)'}}>{fmt(r.date)}: {inr(r.amount)}</div>
+                          ))}
+                          {repayments.length>2&&<div style={{fontSize:10,color:'var(--text-muted)'}}>+{repayments.length-2} more</div>}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
+          </div>
           </>
         )}
       </div>
       {showNew && <NewCapitalModal onClose={()=>setShowNew(false)} />}
       {editCapital && <NewCapitalModal onClose={()=>setEditCapital(null)} existing={editCapital} />}
+      {repayEntry && <RepayCapitalModal entry={repayEntry} onClose={()=>setRepayEntry(null)} />}
     </div>
   );
 }
 
-// ════════════════════════════════════════════════════
-// PROJECT P&L — Pontoon vs WTP side by side
-// ════════════════════════════════════════════════════
 function ProjectPnL() {
   const { items: bills }     = useBills();
   const { items: advances }  = useAdvances();
