@@ -3447,7 +3447,7 @@ function BillPayments() {
   const dueTodayTotal = withStatus.filter(b=>b.computedStatus==='Due Today').reduce((s,b)=>s+b.netPayable,0);
   const next7 = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
   const dueWeekTotal = withStatus.filter(b=>!b.paid&&b.due>=todayStr&&b.due<=next7).reduce((s,b)=>s+b.netPayable,0);
-  const paidTotal = withStatus.filter(b=>b.paid).reduce((s,b)=>s+Number(b.amount||0),0);
+  const paidTotal = withStatus.filter(b=>b.paid).reduce((s,b)=>s+b.totalBillAmt,0);
 
   // Advance stats
   const totalAdvances = advances.reduce((s,a)=>s+Number(a.amount||0),0);
@@ -3510,7 +3510,7 @@ function BillPayments() {
             <div className="stat-card"><div className="stat-label">Overdue (Net)</div><div className="stat-value red">{inr(overdueTotal)}</div><div className="stat-sub">{overdueCount} bill{overdueCount===1?'':'s'}</div></div>
             <div className="stat-card"><div className="stat-label">Due Today (Net)</div><div className="stat-value amber">{inr(dueTodayTotal)}</div></div>
             <div className="stat-card"><div className="stat-label">Due This Week (Net)</div><div className="stat-value blue">{inr(dueWeekTotal)}</div></div>
-            <div className="stat-card"><div className="stat-label">Paid Total</div><div className="stat-value green">{inr(paidTotal)}</div></div>
+            <div className="stat-card"><div className="stat-label">Total Paid (incl. GST)</div><div className="stat-value green">{inr(paidTotal)}</div><div className="stat-sub" style={{fontSize:10}}>{withStatus.filter(b=>b.paid).length} bills fully settled</div></div>
           </div>
           <div className="card">
             <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
