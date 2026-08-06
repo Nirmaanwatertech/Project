@@ -2592,7 +2592,13 @@ function CashFlow() {
     ...scheduleRows(pos,'Purchase Order'),
     ...scheduleRows(wos,'Work Order'),
     ...expenses.filter(e=>!e.paid).map(e=>({date:e.date||'', label:e.description||'', cat:'General Expense', type:'out', amt:Number(e.amount||0), project:e.project||'', isPast:(e.date||'')<todayStr})),
-    ...petty.map(p=>({date:p.date||'', label:p.description||'Petty Cash', cat:'Petty Cash', type:'out', amt:Number(p.amount||0), project:p.project||'', isPast:(p.date||'')<todayStr})),
+    ...petty.map(p=>({date:p.date||'', label:p.description||'Petty Cash', cat:'Petty Cash', type:'out', amt:Number(p.totalAmount||p.amount||0), project:p.project||'', isPast:(p.date||'')<todayStr})),
+    // ITC recovery for petty cash entries with GST
+    ...petty.filter(p=>p.gstPct&&Number(p.gstPct)>0).map(p=>{
+      const gstAmt = Number(p.gstAmount||0)||Math.round(Number(p.amount||0)*parseFloat(p.gstPct)/100);
+      const itcDate = getITCDate(p.date||'');
+      return {date:itcDate, label:`ITC Recovery — ${p.description||'Petty Cash'}`, cat:'GST ITC Recovery', type:'in', amt:gstAmt, project:p.project||'', isPast:itcDate<todayStr};
+    }).filter(r=>r.date&&r.amt>0),
     ...receipts.filter(r=>!r.received).map(r=>({date:r.dateReceived||'', label:`${r.client||'Client'} Receipt`, cat:'Client Receipt', type:'in', amt:Number(r.amountReceived||0), project:r.project||'', isPast:(r.dateReceived||'')<todayStr})),
     ...capital.map(c=>({date:c.dateReceived||'', label:`${c.type||'Capital'} — ${c.source||''}`, cat:'Capital', type:'in', amt:Number(c.amount||0), project:c.project||'', isPast:(c.dateReceived||'')<todayStr})),
   ].filter(r=>r.date&&r.amt>0).sort((a,b)=>a.date.localeCompare(b.date));
@@ -4579,25 +4585,32 @@ function NewPettyModal({ onClose, currentUser, existing }) {
     date: existing.date||'', amount: existing.amount ? String(existing.amount) : '',
     category: existing.category||'Auto / Fuel', paidBy: existing.paidBy||'',
     description: existing.description||'', project: existing.project||'',
-    split: existing.split||{pontoon:50,wtp:50}
+    split: existing.split||{pontoon:50,wtp:50}, gstPct: existing.gstPct||'',
   } : {
     date: new Date().toISOString().slice(0,10),
     amount: '', category: 'Auto / Fuel',
     paidBy: currentUser ? currentUser.name : 'Neer',
-    description: '', project: '', split: {pontoon:50,wtp:50},
+    description: '', project: '', split: {pontoon:50,wtp:50}, gstPct: '',
   });
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
+
+  const baseAmt  = Number(form.amount)||0;
+  const gstRate  = parseFloat(form.gstPct||0)/100;
+  const gstAmt   = gstRate > 0 ? Math.round(baseAmt * gstRate) : 0;
+  const totalAmt = baseAmt + gstAmt;
 
   async function handleSave() {
     if (!form.amount || !form.description.trim() || !form.date) return;
     setSaving(true);
     try {
+      const data = {...form, amount: Number(form.amount),
+        gstPct: form.gstPct||'', gstAmount: gstAmt, totalAmount: totalAmt};
       if (isEdit) {
-        const { db, doc, updateDoc } = window.fb;
-        await updateDoc(userDoc(PETTY_COLLECTION, existing.docId), {...form, amount: Number(form.amount)});
+        const { updateDoc } = window.fb;
+        await updateDoc(userDoc(PETTY_COLLECTION, existing.docId), data);
       } else {
-        await addPettyEntry({...form, amount: Number(form.amount)});
+        await addPettyEntry(data);
       }
       onClose();
     } catch(e){ console.error(e); alert('Could not save entry.'); }
@@ -4617,23 +4630,32 @@ function NewPettyModal({ onClose, currentUser, existing }) {
               <input className="form-input" type="date" value={form.date} onChange={e=>set('date',e.target.value)} />
             </div>
             <div className="form-group">
-              <label className="form-label">Amount (₹)</label>
+              <label className="form-label">Amount (₹) <span style={{color:'var(--text-muted)',fontWeight:400,fontSize:11}}>base</span></label>
               <input className="form-input font-mono" value={form.amount} onChange={e=>set('amount',e.target.value)} placeholder="0" autoFocus />
             </div>
           </div>
           <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">GST % <span style={{color:'var(--text-muted)',fontWeight:400,fontSize:11}}>(optional)</span></label>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <input className="form-input font-mono" style={{width:80}} value={form.gstPct} onChange={e=>set('gstPct',e.target.value)} placeholder="0" />
+                {gstAmt > 0 && <span style={{fontSize:12,color:'var(--primary)',whiteSpace:'nowrap'}}>
+                  GST: {inr(gstAmt)} · Total: {inr(totalAmt)}
+                </span>}
+              </div>
+            </div>
             <div className="form-group">
               <label className="form-label">Category</label>
               <select className="form-input form-select" value={form.category} onChange={e=>set('category',e.target.value)}>
                 {(lists.pettyCategories||DEFAULT_LISTS.pettyCategories).map(c=><option key={c}>{c}</option>)}
               </select>
             </div>
-            <div className="form-group">
-              <label className="form-label">Paid By</label>
-              <select className="form-input form-select" value={form.paidBy} onChange={e=>set('paidBy',e.target.value)}>
-                {(lists.employees||DEFAULT_LISTS.employees).map(n=><option key={n}>{n}</option>)}
-              </select>
-            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Paid By</label>
+            <select className="form-input form-select" value={form.paidBy} onChange={e=>set('paidBy',e.target.value)}>
+              {(lists.employees||DEFAULT_LISTS.employees).map(n=><option key={n}>{n}</option>)}
+            </select>
           </div>
           <div className="form-group">
             <label className="form-label">Description</label>
@@ -4828,7 +4850,7 @@ function PettyCash({ currentUser }) {
         ) : (
           <table>
             <thead>
-              <tr><th>Date</th><th>Category</th><th>Description</th><th>Paid By</th><th>Project</th><th>Amount</th><th>Actions</th></tr>
+              <tr><th>Date</th><th>Category</th><th>Description</th><th>Paid By</th><th>Project</th><th>Amount</th><th>GST</th><th>Total</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {filtered.map(i=>(
@@ -4846,6 +4868,8 @@ function PettyCash({ currentUser }) {
                   </td>
                   <td>{i.project?<span className={`badge ${PROJECT_COLOR[i.project]||'grey'}`}>{i.project}</span>:<span className="text-muted">—</span>}</td>
                   <td className="amount fw-600" style={{color:'var(--red)'}}>{inr(i.amount||0)}</td>
+                  <td className="amount" style={{color:'var(--text-muted)',fontSize:12}}>{i.gstPct&&Number(i.gstPct)>0?inr(i.gstAmount||Math.round(Number(i.amount||0)*parseFloat(i.gstPct)/100)):'—'}</td>
+                  <td className="amount fw-600">{i.gstPct&&Number(i.gstPct)>0?inr(i.totalAmount||Number(i.amount||0)+(i.gstAmount||0)):'—'}</td>
                   <td>
                     <button className="btn btn-sm btn-ghost" onClick={()=>setEditEntry(i)}>Edit</button>
                     <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete this entry?'))deletePettyEntry(i.docId);}}>Delete</button>
@@ -4855,6 +4879,10 @@ function PettyCash({ currentUser }) {
               {/* Totals row */}
               <tr style={{background:'var(--grey-50)',fontWeight:700}}>
                 <td colSpan={5} style={{padding:'8px 12px',fontSize:12,fontWeight:700,color:'var(--text-secondary)'}}>Subtotal ({filtered.length} entries)</td>
+                <td className="amount fw-600" style={{color:'var(--red)'}}>{inr(filtered.reduce((s,i)=>s+Number(i.amount||0),0))}</td>
+                <td className="amount fw-600" style={{color:'var(--text-muted)'}}>{inr(filtered.reduce((s,i)=>s+Number(i.gstAmount||0),0))}</td>
+                <td className="amount fw-600">{inr(filtered.reduce((s,i)=>s+Number(i.totalAmount||i.amount||0),0))}</td>
+                <td></td>
                 <td className="amount" style={{color:'var(--red)',fontWeight:700}}>{inr(total)}</td>
                 <td></td>
               </tr>
