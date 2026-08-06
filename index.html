@@ -1988,9 +1988,19 @@ function NewWOModal({ onClose, existing, quotations }) {
 function BillScheduleModal({ bill, onClose, onUpdate }) {
   const [stages, setStages] = useState((bill.paymentSchedule||[]).map(s=>({...s})));
   const [saving, setSaving] = useState(false);
+  const [payDates, setPayDates] = useState({});
 
   function toggleStage(i) {
-    setStages(prev => prev.map((s,idx) => idx===i ? {...s, paid:!s.paid, paidAt:!s.paid?Date.now():null} : s));
+    const s = stages[i];
+    if (!s.paid) {
+      // Marking paid — date required
+      const pd = payDates[i] || '';
+      if (!pd) { alert('Please select a payment date.'); return; }
+      setStages(prev => prev.map((st,idx) => idx===i ? {...st, paid:true, paidAt:Date.now(), datePaid:pd} : st));
+    } else {
+      // Unmarking
+      setStages(prev => prev.map((st,idx) => idx===i ? {...st, paid:false, paidAt:null, datePaid:''} : st));
+    }
   }
 
   async function handleSave() {
@@ -2011,10 +2021,10 @@ function BillScheduleModal({ bill, onClose, onUpdate }) {
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:560,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:620,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
           <div style={{fontWeight:700,fontSize:14,color:'#fff'}}>Payment Schedule — {bill.payee}</div>
-          <div style={{fontSize:11,color:'rgba(255,255,255,.7)',marginTop:2}}>Mark/unmark each stage individually</div>
+          <div style={{fontSize:11,color:'rgba(255,255,255,.7)',marginTop:2}}>Select payment date and mark each stage as paid</div>
         </div>
         <div style={{padding:'16px 20px'}}>
           <div style={{display:'flex',gap:12,marginBottom:14}}>
@@ -2023,54 +2033,51 @@ function BillScheduleModal({ bill, onClose, onUpdate }) {
               <div className="amount" style={{fontSize:15,fontWeight:700,color:'var(--green)'}}>{inr(paidAmt)}</div>
             </div>
             <div style={{flex:1,padding:'8px 12px',background:'#FFF7ED',borderRadius:6,border:'1px solid var(--amber)'}}>
-              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Remaining (incl. GST)</div>
+              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Remaining</div>
               <div className="amount" style={{fontSize:15,fontWeight:700,color:'var(--amber)'}}>{inr(totalRemaining)}</div>
             </div>
             <div style={{flex:1,padding:'8px 12px',background:'var(--grey-50)',borderRadius:6,border:'1px solid var(--border)'}}>
-              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Bill Total (excl. GST)</div>
+              <div style={{fontSize:10,color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase'}}>Bill Total</div>
               <div className="amount" style={{fontSize:15,fontWeight:700}}>{inr(bill.amount||0)}</div>
             </div>
           </div>
-          <table style={{width:'100%',borderCollapse:'collapse'}}>
-            <thead>
-              <tr style={{background:'var(--grey-50)'}}>
-                <th style={{padding:'7px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Stage</th>
-                <th style={{padding:'7px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Amount</th>
-                <th style={{padding:'7px 10px',fontSize:11,textAlign:'left',color:'var(--text-muted)'}}>Due Date</th>
-                <th style={{padding:'7px 10px',fontSize:11,textAlign:'center',color:'var(--text-muted)'}}>Status</th>
-                <th style={{padding:'7px 10px',fontSize:11,textAlign:'center',color:'var(--text-muted)'}}>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stages.map((s,i)=>(
-                <tr key={i} style={{borderTop:'1px solid var(--grey-50)',background:s.paid?'#F0FFF4':''}}>
-                  <td style={{padding:'10px',fontSize:12.5,fontWeight:600}}>{s.stageType||s.name||`Stage ${i+1}`}</td>
-                  <td className="amount" style={{padding:'10px',fontSize:12.5,fontWeight:700,color:s.paid?'var(--green)':'var(--red)'}}>{inr(s.amount||0)}</td>
-                  <td style={{padding:'10px',fontSize:12,color:'var(--text-muted)'}}>{fmt(s.date)||'—'}</td>
-                  <td style={{padding:'10px',textAlign:'center'}}>
-                    {s.paid ? <span className="badge green">✓ Paid</span> : <span className="badge grey">Pending</span>}
-                  </td>
-                  <td style={{padding:'10px',textAlign:'center'}}>
-                    {s.paid
-                      ? <button className="btn btn-sm btn-ghost" style={{color:'var(--amber)',border:'1px solid var(--amber)',fontSize:11}} onClick={()=>toggleStage(i)}>↩ Unmark</button>
-                      : <button className="btn btn-sm btn-primary" style={{fontSize:11}} onClick={()=>toggleStage(i)}>Mark Paid</button>}
-                  </td>
-                </tr>
-              ))}
-              {gstAmt > 0 && (
-                <tr style={{borderTop:'2px solid var(--border)',background:'#EFF6FF'}}>
-                  <td style={{padding:'10px',fontSize:12.5,fontWeight:600,color:'var(--primary)'}}>GST ({bill.gstPct}%) — On Invoice</td>
-                  <td className="amount" style={{padding:'10px',fontSize:12.5,fontWeight:700,color:'var(--primary)'}}>{inr(gstAmt)}</td>
-                  <td style={{padding:'10px',fontSize:11,color:'var(--text-muted)'}}>On receipt of invoice</td>
-                  <td style={{padding:'10px',textAlign:'center'}}><span className="badge blue" style={{fontSize:10}}>Invoice stage</span></td>
-                  <td></td>
-                </tr>
+          {stages.map((s,i)=>(
+            <div key={i} style={{border:'1px solid var(--border)',borderRadius:8,padding:'14px 16px',marginBottom:10,background:s.paid?'#F0FFF4':'var(--surface)'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <span style={{fontWeight:700,fontSize:13}}>{s.stageType||s.name||`Stage ${i+1}`}</span>
+                  <span className="amount" style={{fontWeight:700,fontSize:13,color:s.paid?'var(--green)':'var(--text)'}}>{inr(Number(s.amount||0)+(s.includesGst?Number(s.gstAmount||0):0))}</span>
+                  {s.includesGst&&Number(s.gstAmount||0)>0&&<span style={{fontSize:11,color:'var(--primary)'}}>incl. GST {inr(s.gstAmount)}</span>}
+                </div>
+                {s.date&&<span style={{fontSize:11,color:'var(--text-muted)'}}>Due: {fmt(s.date)}</span>}
+              </div>
+              {s.paid ? (
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <span className="badge green">✓ Paid — {fmt(s.datePaid)||'date not set'}</span>
+                  <button className="btn btn-sm btn-ghost" style={{color:'var(--amber)',border:'1px solid var(--amber)',fontSize:11}} onClick={()=>toggleStage(i)}>↩ Unmark</button>
+                </div>
+              ) : (
+                <div style={{display:'flex',gap:8,alignItems:'flex-end'}}>
+                  <div>
+                    <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:3}}>Payment Date *</div>
+                    <input type="date" value={payDates[i]||''} onChange={e=>setPayDates(p=>({...p,[i]:e.target.value}))}
+                      style={{fontSize:12,padding:'5px 8px',border:`1px solid ${payDates[i]?'var(--primary)':'var(--border)'}`,borderRadius:4,width:145}} />
+                  </div>
+                  <button className="btn btn-primary" style={{fontSize:12,padding:'6px 14px',background:'var(--green)',
+                    opacity:payDates[i]?1:0.5}} onClick={()=>toggleStage(i)}>Mark Paid</button>
+                </div>
               )}
-            </tbody>
-          </table>
-          <div style={{marginTop:10,fontSize:11.5,color:'var(--text-muted)',background:'var(--grey-50)',padding:'8px 10px',borderRadius:4}}>
+            </div>
+          ))}
+          {gstAmt > 0 && (
+            <div style={{border:'1px solid #BFDBFE',borderRadius:8,padding:'10px 14px',background:'#EFF6FF',marginBottom:10}}>
+              <span style={{fontSize:12,fontWeight:600,color:'var(--primary)'}}>GST ({bill.gstPct}%) </span>
+              <span className="amount" style={{fontWeight:700,color:'var(--primary)'}}>{inr(gstAmt)}</span>
+              <span style={{fontSize:11,color:'var(--text-muted)',marginLeft:8}}>payable on invoice — ITC on 20th of next month</span>
+            </div>
+          )}
+          <div style={{fontSize:11.5,color:'var(--text-muted)',background:'var(--grey-50)',padding:'8px 10px',borderRadius:4}}>
             💡 Bill is marked <strong>Paid</strong> automatically when ALL stages are marked paid.
-            Unmarking any stage will revert the bill to unpaid.
           </div>
         </div>
         <div style={{padding:'0 20px 16px',display:'flex',gap:8,justifyContent:'flex-end'}}>
@@ -3170,24 +3177,42 @@ function LinkAdvanceModal({ advance, onClose, pos, bills }) {
         adjustedAgainst: linkedBill || '',
       });
 
-      // Update the linked bill: set advanceDeducted only
-      // Only mark bill as paid if advance fully covers the total bill amount
+      // Update the linked bill: set advanceDeducted and payment date from advance
       if (linkedBill) {
         const { updateDoc, getDoc } = window.fb;
         try {
           const billSnap = await getDoc(userDoc(BILLS_COLLECTION, linkedBill));
           if (billSnap.exists()) {
             const b = billSnap.data();
-            const billTotal = Number(b.totalAmount||0) || (Number(b.amount||0) + Number(b.gstAmount||0));
+            const baseAmt  = Number(b.amount||0);
+            const gstAmt   = b.gstAmount !== undefined ? Number(b.gstAmount||0)
+                           : (b.gstPct ? Math.round(baseAmt * parseFloat(b.gstPct)/100) : 0);
+            const billTotal  = baseAmt + gstAmt;
             const netPayable = Math.max(0, billTotal - adj);
-            const isPaid = netPayable <= 0;
-            // Only update advanceDeducted and paid status — never touch paymentSchedule
-            await updateDoc(userDoc(BILLS_COLLECTION, linkedBill), {
+            const isPaid     = netPayable <= 0;
+
+            // Use advance's datePaid as the payment date for the bill
+            const advDate = advance.datePaid || '';
+
+            const billUpdate = {
               advanceDeducted: adj,
-              linkedAdvance: advance.docId,
-              paid: isPaid,
-              ...(isPaid ? {paidAt: Date.now()} : {paidAt: null}),
-            });
+              linkedAdvance:   advance.docId,
+              paid:            isPaid,
+              paidAt:          isPaid ? Date.now() : null,
+            };
+
+            // If bill has a payment schedule, set datePaid on the first unpaid stage
+            if (b.paymentSchedule && b.paymentSchedule.length > 0 && advDate) {
+              const newSchedule = b.paymentSchedule.map(s => {
+                if (!s.paid) return {...s, paid: isPaid, paidAt: isPaid ? Date.now() : null, datePaid: isPaid ? advDate : ''};
+                return s;
+              });
+              billUpdate.paymentSchedule = newSchedule;
+            }
+            // Store advance date on bill for display
+            if (advDate) billUpdate.paidDate = advDate;
+
+            await updateDoc(userDoc(BILLS_COLLECTION, linkedBill), billUpdate);
           }
         } catch(e) { console.warn('Could not update linked bill:', e.message); }
       }
