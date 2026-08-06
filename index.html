@@ -1986,7 +1986,18 @@ function NewWOModal({ onClose, existing, quotations }) {
 
 // ─── BillScheduleModal — per-stage paid tracking ──────
 function BillScheduleModal({ bill, onClose, onUpdate }) {
-  const [stages, setStages] = useState((bill.paymentSchedule||[]).map(s=>({...s})));
+  const [stages, setStages] = useState(() => {
+    const sched = bill.paymentSchedule || [];
+    // If bill is paid but has no schedule stages, create one synthetic stage
+    if (sched.length === 0 && bill.paid) {
+      return [{
+        id: 'synthetic-0', stageType: 'Against Delivery',
+        amount: String(bill.amount||0), date: bill.paidDate||bill.due||'',
+        paid: true, paidAt: bill.paidAt||Date.now(), datePaid: bill.paidDate||bill.due||'',
+      }];
+    }
+    return sched.map(s => ({...s}));
+  });
   const [saving, setSaving] = useState(false);
   const [payDates, setPayDates] = useState({});
 
@@ -3201,15 +3212,26 @@ function LinkAdvanceModal({ advance, onClose, pos, bills }) {
               paidAt:          isPaid ? Date.now() : null,
             };
 
-            // If bill has a payment schedule, set datePaid on the first unpaid stage
+            // Always update payment schedule stages with advance date
             if (b.paymentSchedule && b.paymentSchedule.length > 0 && advDate) {
               const newSchedule = b.paymentSchedule.map(s => {
-                if (!s.paid) return {...s, paid: isPaid, paidAt: isPaid ? Date.now() : null, datePaid: isPaid ? advDate : ''};
+                if (!s.paid) {
+                  return {...s, paid: isPaid, paidAt: isPaid ? Date.now() : null, datePaid: isPaid ? advDate : ''};
+                }
                 return s;
               });
               billUpdate.paymentSchedule = newSchedule;
+            } else if (!b.paymentSchedule || b.paymentSchedule.length === 0) {
+              // No schedule — create a single synthetic paid stage so modal shows correctly
+              if (isPaid && advDate) {
+                billUpdate.paymentSchedule = [{
+                  id: 'adv-' + advance.docId.slice(0,8),
+                  stageType: 'Against Delivery', amount: String(baseAmt),
+                  date: advDate, paid: true, paidAt: Date.now(), datePaid: advDate,
+                  linkedEntryId: advance.docId,
+                }];
+              }
             }
-            // Store advance date on bill for display
             if (advDate) billUpdate.paidDate = advDate;
 
             await updateDoc(userDoc(BILLS_COLLECTION, linkedBill), billUpdate);
