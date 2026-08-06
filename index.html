@@ -2576,9 +2576,9 @@ function CashFlow() {
   function getITCDate(dateStr) {
     if (!dateStr) return '';
     const d = new Date(dateStr);
-    const m = d.getMonth() + 2; // next month
+    const m = d.getMonth() + 1; // next month (0-based: Aug=7, so +1 = Sep=8)
     const y = m > 11 ? d.getFullYear()+1 : d.getFullYear();
-    const mm = (m > 11 ? 0 : m);
+    const mm = m > 11 ? 0 : m;
     return `${y}-${String(mm+1).padStart(2,'0')}-20`;
   }
 
