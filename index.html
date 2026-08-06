@@ -2300,6 +2300,11 @@ function WorkOrders() {
                   </td>
                 </tr>
               ))}
+              <tr style={{background:'var(--grey-50)',fontWeight:700,borderTop:'2px solid var(--border)'}}>
+                <td colSpan={5} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Subtotal ({filtered.length} of {items.length})</td>
+                <td className="amount" style={{fontWeight:700,color:'var(--primary)',fontSize:13}}>{inr(filtered.reduce((s,w)=>s+Number(w.value||0),0))}</td>
+                <td colSpan={3}></td>
+              </tr>
             </tbody>
           </table>
           </div>
@@ -2423,6 +2428,11 @@ function PurchaseOrders() {
                   </td>
                 </tr>
               ))}
+              <tr style={{background:'var(--grey-50)',fontWeight:700,borderTop:'2px solid var(--border)'}}>
+                <td colSpan={5} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Subtotal ({filtered.length} of {items.length})</td>
+                <td className="amount" style={{fontWeight:700,color:'var(--primary)',fontSize:13}}>{inr(filtered.reduce((s,p)=>s+Number(p.value||0),0))}</td>
+                <td colSpan={3}></td>
+              </tr>
             </tbody>
           </table>
           </div>
@@ -3546,6 +3556,14 @@ function BillPayments() {
                       </td>
                     </tr>
                   ))}
+                  <tr style={{background:'var(--grey-50)',fontWeight:700,borderTop:'2px solid var(--border)'}}>
+                    <td colSpan={4} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Subtotal ({filtered.length} bills)</td>
+                    <td className="amount" style={{fontWeight:700,color:'var(--primary)',fontSize:13}}>{inr(filtered.reduce((s,b)=>s+(b.displayBase||Number(b.amount||0)),0))}</td>
+                    <td className="amount" style={{fontWeight:700,color:'var(--text-muted)',fontSize:12}}>{inr(filtered.reduce((s,b)=>s+(b.displayGst||0),0))}</td>
+                    <td className="amount" style={{fontWeight:700,color:'var(--green)',fontSize:13}}>{inr(filtered.reduce((s,b)=>s+b.paidSoFar,0))}</td>
+                    <td className="amount" style={{fontWeight:700,color:'var(--red)',fontSize:13}}>{inr(filtered.reduce((s,b)=>s+b.netPayable,0))}</td>
+                    <td colSpan={3}></td>
+                  </tr>
                 </tbody>
               </table>
               </div>
@@ -3665,6 +3683,13 @@ function BillPayments() {
                       </td>
                     </tr>
                   ))}
+                  <tr style={{background:'var(--grey-50)',fontWeight:700,borderTop:'2px solid var(--border)'}}>
+                    <td colSpan={3} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Subtotal ({filteredAdvances.length} advances)</td>
+                    <td className="amount" style={{fontWeight:700,color:'var(--primary)',fontSize:13}}>{inr(filteredAdvances.reduce((s,a)=>s+Number(a.amount||0),0))}</td>
+                    <td className="amount" style={{fontWeight:700,color:'var(--green)',fontSize:13}}>{inr(filteredAdvances.reduce((s,a)=>s+Number(a.adjustedAmount||0),0))}</td>
+                    <td className="amount" style={{fontWeight:700,color:'var(--red)',fontSize:13}}>{inr(filteredAdvances.reduce((s,a)=>s+Number(a.balanceAmount||a.amount||0),0))}</td>
+                    <td colSpan={4}></td>
+                  </tr>
                 </tbody>
               </table>
             )}
@@ -4829,7 +4854,7 @@ function PettyCash({ currentUser }) {
               ))}
               {/* Totals row */}
               <tr style={{background:'var(--grey-50)',fontWeight:700}}>
-                <td colSpan={5} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Total ({filtered.length} entries)</td>
+                <td colSpan={5} style={{padding:'8px 12px',fontSize:12,fontWeight:700,color:'var(--text-secondary)'}}>Subtotal ({filtered.length} entries)</td>
                 <td className="amount" style={{color:'var(--red)',fontWeight:700}}>{inr(total)}</td>
                 <td></td>
               </tr>
@@ -5162,7 +5187,7 @@ function Expenses({ currentUser }) {
                 </tr>
               ))}
               <tr style={{background:'var(--grey-50)',fontWeight:700}}>
-                <td colSpan={7} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Total ({filtered.length} entries)</td>
+                <td colSpan={7} style={{padding:'8px 12px',fontSize:12,fontWeight:700,color:'var(--text-secondary)'}}>Subtotal ({filtered.length} entries)</td>
                 <td className="amount" style={{color:'var(--red)',fontWeight:700}}>{inr(total)}</td>
                 <td></td>
               </tr>
