@@ -2568,7 +2568,12 @@ function CashFlow() {
   // Only unadjusted advances (advances that haven't been settled against a bill yet)
   const totalAdvances  = advances.filter(a => a.status !== 'Fully Adjusted').reduce((s,a) => s + Number(a.amount||0), 0);
   // Only paid bills (bills that have been fully paid/settled)
-  const totalBillsPaid = bills.filter(b => b.paid).reduce((s,b) => s + (Number(b.totalAmount||0) || Number(b.amount||0) + Number(b.gstAmount||0)), 0);
+  const totalBillsPaid = bills.filter(b => b.paid).reduce((s,b) => {
+    const base = Number(b.amount||0);
+    const gst  = b.gstAmount !== undefined ? Number(b.gstAmount||0)
+               : (b.gstPct ? Math.round(base * parseFloat(b.gstPct)/100) : 0);
+    return s + base + gst;
+  }, 0);
   const totalExpenses  = expenses.reduce((s,e) => s + Number(e.amount||0), 0);
   const totalPetty     = petty.reduce((s,p)   => s + Number(p.amount||0), 0);
   const totalRepayments = capital.reduce((s,c) => s + Number(c.totalRepaid||0), 0);
