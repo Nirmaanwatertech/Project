@@ -3573,7 +3573,11 @@ function BillPayments() {
                       <td className="amount" style={{color:'var(--green)'}}>
                         {b.hasSchedule
                           ? (b.paidSoFar > 0 ? inr(b.paidSoFar) : <span className="text-muted">—</span>)
-                          : (b.advanceDeducted > 0 ? <>− {inr(b.advanceDeducted)}</> : <span className="text-muted">—</span>)}
+                          : b.paid
+                            ? inr(b.totalBillAmt)
+                            : b.advanceDeducted > 0
+                              ? <>− {inr(b.advanceDeducted)}</>
+                              : <span className="text-muted">—</span>}
                       </td>
                       <td className="amount fw-600" style={{color: b.netPayable > 0 ? 'var(--red)' : 'var(--green)'}}>
                         {b.netPayable > 0 ? inr(b.netPayable) : <span style={{color:'var(--green)'}}>✓ Settled</span>}
