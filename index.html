@@ -2565,8 +2565,10 @@ function CashFlow() {
   // Current balance = all actual money that has moved (regardless of date)
   const totalCapital   = capital.reduce((s,c)  => s + Number(c.amount||0), 0);
   const totalReceipts  = receipts.reduce((s,r) => s + Number(r.amountReceived||0), 0);
-  const totalAdvances  = advances.reduce((s,a) => s + Number(a.amount||0), 0);
-  const totalBillsPaid = bills.filter(b=>b.paid).reduce((s,b) => s + Number(b.totalAmount||0) || s + Number(b.amount||0), 0);
+  // Only unadjusted advances (advances that haven't been settled against a bill yet)
+  const totalAdvances  = advances.filter(a => a.status !== 'Fully Adjusted').reduce((s,a) => s + Number(a.amount||0), 0);
+  // Only paid bills (bills that have been fully paid/settled)
+  const totalBillsPaid = bills.filter(b => b.paid).reduce((s,b) => s + (Number(b.totalAmount||0) || Number(b.amount||0) + Number(b.gstAmount||0)), 0);
   const totalExpenses  = expenses.reduce((s,e) => s + Number(e.amount||0), 0);
   const totalPetty     = petty.reduce((s,p)   => s + Number(p.amount||0), 0);
   const currentBalance = totalCapital + totalReceipts - totalAdvances - totalBillsPaid - totalExpenses - totalPetty;
@@ -2670,12 +2672,12 @@ function CashFlow() {
         <div className="stat-card" style={{background:'#FEF2F2'}}>
           <div className="stat-label">Total Outflows</div>
           <div className="stat-value red">{inr(totalAdvances + totalBillsPaid + totalExpenses + totalPetty)}</div>
-          <div className="stat-sub" style={{fontSize:10}}>Advances {inr(totalAdvances)} · Bills {inr(totalBillsPaid)} · Exp {inr(totalExpenses + totalPetty)}</div>
+          <div className="stat-sub" style={{fontSize:10}}>Advances (unadj.) {inr(totalAdvances)} · Bills (paid) {inr(totalBillsPaid)} · Exp {inr(totalExpenses + totalPetty)}</div>
         </div>
         <div className="stat-card" style={{background: currentBalance < 0 ? '#FEF2F2' : currentBalance < alertLevel && alertLevel > 0 ? '#FEF3C7' : '#F0FFF4', border: currentBalance < alertLevel && alertLevel > 0 ? '1px solid var(--amber)' : ''}}>
           <div className="stat-label">Current Cash Balance</div>
           <div className={`stat-value ${currentBalance < 0 ? 'red' : currentBalance < alertLevel && alertLevel > 0 ? 'amber' : 'green'}`}>{inr(currentBalance)}</div>
-          <div className="stat-sub" style={{fontSize:10}}>Capital+Receipts − Advances−Bills−Expenses</div>
+          <div className="stat-sub" style={{fontSize:10}}>Capital+Receipts − Unadj.Advances − Paid Bills − Expenses</div>
         </div>
       </div>
       <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)',marginBottom:14}}>
@@ -2733,8 +2735,8 @@ function CashFlow() {
           <div className="card-header"><span className="card-title" style={{color:'var(--red)'}}>↓ Total Outflows — {inr(totalAdvances+totalBillsPaid+totalExpenses+totalPetty)}</span></div>
           <div className="card-body" style={{padding:'10px 16px'}}>
             {[
-              {label:'Advance Payments', amt:totalAdvances,  icon:'💰'},
-              {label:'Bills & Invoices',  amt:totalBillsPaid, icon:'📑'},
+              {label:'Advance Payments (unadjusted)', amt:totalAdvances, icon:'💰'},
+              {label:'Bills & Invoices (paid)', amt:totalBillsPaid, icon:'📑'},
               {label:'General Expenses',  amt:totalExpenses,  icon:'🧾'},
               {label:'Petty Cash',        amt:totalPetty,     icon:'🪙'},
             ].map(row=>(
