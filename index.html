@@ -2575,7 +2575,7 @@ function CashFlow() {
     return s + base + gst;
   }, 0);
   const totalExpenses  = expenses.reduce((s,e) => s + Number(e.amount||0), 0);
-  const totalPetty     = petty.reduce((s,p)   => s + Number(p.amount||0), 0);
+  const totalPetty     = petty.reduce((s,p)   => s + (Number(p.totalAmount||0) || Number(p.amount||0)), 0);
   const totalRepayments = capital.reduce((s,c) => s + Number(c.totalRepaid||0), 0);
   const currentBalance = totalCapital + totalReceipts - totalAdvances - totalBillsPaid - totalExpenses - totalPetty - totalRepayments;
 
@@ -2618,7 +2618,7 @@ function CashFlow() {
     ...scheduleRows(pos,'Purchase Order'),
     ...scheduleRows(wos,'Work Order'),
     ...expenses.filter(e=>!e.paid).map(e=>({date:e.date||'', label:e.description||'', cat:'General Expense', type:'out', amt:Number(e.amount||0), project:e.project||'', isPast:(e.date||'')<todayStr})),
-    ...petty.map(p=>({date:p.date||'', label:p.description||'Petty Cash', cat:'Petty Cash', type:'out', amt:Number(p.totalAmount||p.amount||0), project:p.project||'', isPast:(p.date||'')<todayStr})),
+    ...petty.map(p=>({date:p.date||'', label:p.description||'Petty Cash', cat:'Petty Cash', type:'out', amt:(Number(p.totalAmount||0)||Number(p.amount||0)), project:p.project||'', isPast:(p.date||'')<todayStr})),
     // ITC recovery for petty cash entries with GST
     ...petty.filter(p=>p.gstPct&&Number(p.gstPct)>0).map(p=>{
       const gstAmt = Number(p.gstAmount||0)||Math.round(Number(p.amount||0)*parseFloat(p.gstPct)/100);
@@ -4761,14 +4761,14 @@ function PettyCash({ currentUser }) {
     (pettyProjectFilter==='all' || i.project===pettyProjectFilter)
   ));
 
-  const total = filtered.reduce((s,i)=>s+Number(i.amount||0),0);
-  const totalAll = items.reduce((s,i)=>s+Number(i.amount||0),0);
+  const total = filtered.reduce((s,i)=>s+(Number(i.totalAmount||0)||Number(i.amount||0)),0);
+  const totalAll = items.reduce((s,i)=>s+(Number(i.totalAmount||0)||Number(i.amount||0)),0);
 
   // Category breakdown for filtered period
   const activePettyCategories = window.appLists?.pettyCategories || DEFAULT_LISTS.pettyCategories;
   const byCategory = activePettyCategories.map(cat=>({
     cat,
-    amt: filtered.filter(i=>i.category===cat).reduce((s,i)=>s+Number(i.amount||0),0)
+    amt: filtered.filter(i=>i.category===cat).reduce((s,i)=>s+(Number(i.totalAmount||0)||Number(i.amount||0)),0)
   })).filter(c=>c.amt>0).sort((a,b)=>b.amt-a.amt);
 
   // Normalise paidBy: strip email domain if stored as email
@@ -4783,7 +4783,7 @@ function PettyCash({ currentUser }) {
   const personTotals = {};
   filtered.forEach(i => {
     const n = normName(i.paidBy) || 'Unknown';
-    personTotals[n] = (personTotals[n]||0) + Number(i.amount||0);
+    personTotals[n] = (personTotals[n]||0) + (Number(i.totalAmount||0)||Number(i.amount||0));
   });
   const byPerson = Object.entries(personTotals).map(([person,amt])=>({person,amt})).filter(p=>p.amt>0).sort((a,b)=>b.amt-a.amt);
 
@@ -4935,7 +4935,7 @@ function PettyCash({ currentUser }) {
               {/* Totals row */}
               <tr style={{background:'var(--grey-50)',fontWeight:700}}>
                 <td colSpan={5} style={{padding:'8px 12px',fontSize:12,fontWeight:700,color:'var(--text-secondary)'}}>Subtotal ({filtered.length} entries)</td>
-                <td className="amount fw-600" style={{color:'var(--red)'}}>{inr(filtered.reduce((s,i)=>s+Number(i.amount||0),0))}</td>
+                <td className="amount fw-600" style={{color:'var(--red)'}}>{inr(filtered.reduce((s,i)=>s+(Number(i.totalAmount||0)||Number(i.amount||0)),0))}</td>
                 <td className="amount fw-600" style={{color:'var(--text-muted)'}}>{inr(filtered.reduce((s,i)=>s+Number(i.gstAmount||0),0))}</td>
                 <td className="amount fw-600">{inr(filtered.reduce((s,i)=>s+Number(i.totalAmount||i.amount||0),0))}</td>
                 <td></td>
