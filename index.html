@@ -2675,6 +2675,50 @@ function CashFlow() {
         </div>
       </div>
 
+      {/* Inflow / Outflow Breakup */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
+        <div className="card">
+          <div className="card-header"><span className="card-title" style={{color:'var(--green)'}}>↑ Total Inflows — {inr(totalCapital+totalReceipts)}</span></div>
+          <div className="card-body" style={{padding:'10px 16px'}}>
+            {[
+              {label:'Capital & Loans', amt:totalCapital, icon:'🏦'},
+              {label:'Client Receipts', amt:totalReceipts, icon:'📥'},
+            ].map(row=>(
+              <div key={row.label} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:'1px solid var(--grey-50)'}}>
+                <span style={{fontSize:13}}>{row.icon} {row.label}</span>
+                <span className="amount" style={{fontWeight:700,color:'var(--green)',fontSize:14}}>{inr(row.amt)}</span>
+              </div>
+            ))}
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0 0'}}>
+              <span style={{fontSize:13,fontWeight:700}}>Total</span>
+              <span className="amount" style={{fontWeight:700,color:'var(--green)',fontSize:15}}>{inr(totalCapital+totalReceipts)}</span>
+            </div>
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-header"><span className="card-title" style={{color:'var(--red)'}}>↓ Total Outflows — {inr(totalAdvances+totalBillsPaid+totalExpenses+totalPetty)}</span></div>
+          <div className="card-body" style={{padding:'10px 16px'}}>
+            {[
+              {label:'Advance Payments', amt:totalAdvances,  icon:'💰'},
+              {label:'Bills & Invoices',  amt:totalBillsPaid, icon:'📑'},
+              {label:'General Expenses',  amt:totalExpenses,  icon:'🧾'},
+              {label:'Petty Cash',        amt:totalPetty,     icon:'🪙'},
+            ].map(row=>(
+              <div key={row.label} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:'1px solid var(--grey-50)'}}>
+                <span style={{fontSize:13}}>{row.icon} {row.label}</span>
+                <span className="amount" style={{fontWeight:700,color:'var(--red)',fontSize:14}}>{inr(row.amt)}</span>
+              </div>
+            ))}
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0 0'}}>
+              <span style={{fontSize:13,fontWeight:700}}>Total</span>
+              <span className="amount" style={{fontWeight:700,color:'var(--red)',fontSize:15}}>{inr(totalAdvances+totalBillsPaid+totalExpenses+totalPetty)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+
+
       {/* Chart */}
       {rows.length > 1 && <CashFlowChart rows={rows} startBalance={currentBalance} alertLevel={alertLevel} />}
 
