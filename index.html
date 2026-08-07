@@ -3393,9 +3393,9 @@ function BillPayments() {
     // paidSoFar = what has actually been paid against this bill
     const paidSoFar = hasSchedule
       ? paidStagesAmt
-      : (b.paid || advanceDeducted >= totalBillAmt)
-        ? totalBillAmt          // fully paid or advance covers full amount
-        : advanceDeducted;      // partial advance
+      : (b.paid || advanceDeducted >= totalBillAmt - 1)
+        ? totalBillAmt
+        : advanceDeducted;
 
     const netPayable = hasSchedule
       ? Math.max(0, unpaidStagesAmt - advanceDeducted)
@@ -3404,7 +3404,7 @@ function BillPayments() {
 
     let status;
     if (b.paid || (hasSchedule && unpaidStagesAmt === 0)) status = 'Paid';
-    else if (netPayable === 0 && advanceDeducted > 0 && !b.paid) status = 'Advance Adjusted';
+    else if (netPayable <= 1 && advanceDeducted > 0 && !b.paid) status = 'Advance Adjusted';
     else if (!effectiveDue) status = 'Upcoming';
     else if (effectiveDue === todayStr) status = 'Due Today';
     else if (effectiveDue < todayStr) status = 'Overdue';
@@ -3574,7 +3574,7 @@ function BillPayments() {
                       <td className="amount" style={{color:'var(--green)'}}>
                         {b.hasSchedule
                           ? (b.paidSoFar > 0 ? inr(b.paidSoFar) : <span className="text-muted">—</span>)
-                          : b.paid || b.netPayable === 0
+                          : b.paid || b.netPayable <= 1
                             ? inr(b.totalBillAmt)
                             : b.advanceDeducted > 0
                               ? inr(b.advanceDeducted)
@@ -6995,7 +6995,7 @@ function DataFixPanel() {
           : Math.round(baseAmt * gstRate2);
         const billTotal  = baseAmt + gstAmt;  // always recalculate
         const netPayable = Math.max(0, billTotal - adjAmt);
-        const isPaid     = netPayable <= 0;
+        const isPaid     = netPayable <= 1; // ≤ ₹1 rounding tolerance
 
         // Fix the advance record
         const advUpdates = {};
