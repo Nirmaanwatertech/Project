@@ -3393,13 +3393,14 @@ function BillPayments() {
     // paidSoFar = what has actually been paid against this bill
     const paidSoFar = hasSchedule
       ? paidStagesAmt
-      : b.paid
-        ? totalBillAmt          // fully paid
-        : advanceDeducted;      // only advance deducted so far (may be partial)
+      : (b.paid || advanceDeducted >= totalBillAmt)
+        ? totalBillAmt          // fully paid or advance covers full amount
+        : advanceDeducted;      // partial advance
 
     const netPayable = hasSchedule
       ? Math.max(0, unpaidStagesAmt - advanceDeducted)
       : Math.max(0, totalBillAmt - paidSoFar);
+
 
     let status;
     if (b.paid || (hasSchedule && unpaidStagesAmt === 0)) status = 'Paid';
@@ -3573,10 +3574,10 @@ function BillPayments() {
                       <td className="amount" style={{color:'var(--green)'}}>
                         {b.hasSchedule
                           ? (b.paidSoFar > 0 ? inr(b.paidSoFar) : <span className="text-muted">—</span>)
-                          : b.paid
+                          : b.paid || b.netPayable === 0
                             ? inr(b.totalBillAmt)
                             : b.advanceDeducted > 0
-                              ? <>− {inr(b.advanceDeducted)}</>
+                              ? inr(b.advanceDeducted)
                               : <span className="text-muted">—</span>}
                       </td>
                       <td className="amount fw-600" style={{color: b.netPayable > 0 ? 'var(--red)' : 'var(--green)'}}>
