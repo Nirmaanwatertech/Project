@@ -3211,8 +3211,9 @@ function LinkAdvanceModal({ advance, onClose, pos, bills }) {
             const netPayable = Math.max(0, billTotal - adj);
             const isPaid     = netPayable <= 0;
 
-            // Use advance's datePaid as the payment date for the bill
-            const advDate = advance.datePaid || '';
+            // Use advance's datePaid as the payment date for the bill; fall back to today
+            // so schedule stages still get synced even if the advance has no datePaid set
+            const advDate = advance.datePaid || b.due || new Date().toISOString().slice(0,10);
 
             const billUpdate = {
               advanceDeducted: adj,
@@ -3392,7 +3393,7 @@ function BillPayments() {
 
     // paidSoFar = what has actually been paid against this bill
     const paidSoFar = hasSchedule
-      ? paidStagesAmt
+      ? (b.paid ? totalBillAmt : paidStagesAmt)
       : (b.paid || advanceDeducted >= totalBillAmt - 1)
         ? totalBillAmt
         : advanceDeducted;
