@@ -6508,7 +6508,7 @@ function Statement() {
       project: a.project||'', dir:'out', amt: Number(a.balanceAmount!==undefined ? a.balanceAmount : a.amount||0)
     })),
     ...bills.filter(b=>b.paid).map(b => ({
-      date: b.paidDate||b.due||'', desc: b.payee||'', cat: b.category||'Bill', grp:'Bills & Invoices (paid)',
+      date: b.paidDate||b.due||(b.paidAt ? new Date(b.paidAt).toISOString().slice(0,10) : ''), desc: b.payee||'', cat: b.category||'Bill', grp:'Bills & Invoices (paid)',
       project: b.project||'', dir:'out', amt: billTotalAmt(b)
     })),
     // Partially-paid schedule-based bills: log each paid stage on its own date
