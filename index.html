@@ -6473,31 +6473,18 @@ function Statement() {
   const [projectFilter, setProjectFilter] = useState('all');
   const [typeFilter, setTypeFilter]     = useState('all');
 
-  // Compute a paid bill's total value and any advance already deducted against it,
-  // so we log only the balance actually paid at settlement (avoids double-counting
-  // an advance that was paid — and logged — on its own earlier date).
-  function billTotals(b) {
-    const linkedAdv = advances.filter(a =>
-      a.linkedBill === b.docId ||
-      a.adjustedAgainst === b.docId ||
-      (b.fromSchedule && b.linkedPO && a.linkedPO === b.linkedPO && a.fromSchedule) ||
-      (b.fromSchedule && b.linkedWO && a.linkedWO === b.linkedWO && a.fromSchedule)
-    );
-    const advanceDeducted = Number(b.advanceDeducted||0) ||
-      linkedAdv.reduce((s,a) => s + (Number(a.adjustedAmount||0) || Number(a.amount||0)), 0);
-
-    let totalBillAmt;
+  // Compute a bill's total value (base + GST), handling both schedule-synced
+  // and manually-entered bills.
+  function billTotalAmt(b) {
     if (b.fromSchedule && b.gstAmount !== undefined) {
-      totalBillAmt = Number(b.amount||0) + Number(b.gstAmount||0);
+      return Number(b.amount||0) + Number(b.gstAmount||0);
     } else if (b.fromSchedule) {
-      totalBillAmt = Number(b.amount||0);
-    } else {
-      const base = Number(b.amount||0);
-      const gstRate = b.gstPct ? parseFloat(b.gstPct) : 0;
-      const gst = gstRate > 0 ? Math.round(base * gstRate / 100) : 0;
-      totalBillAmt = base + gst;
+      return Number(b.amount||0);
     }
-    return { totalBillAmt, advanceDeducted };
+    const base = Number(b.amount||0);
+    const gstRate = b.gstPct ? parseFloat(b.gstPct) : 0;
+    const gst = gstRate > 0 ? Math.round(base * gstRate / 100) : 0;
+    return base + gst;
   }
 
   const rows = [
@@ -6511,15 +6498,12 @@ function Statement() {
     })),
     ...advances.map(a => ({
       date: a.datePaid||'', desc: `Advance — ${a.vendor||''}`, cat:'Advance',
-      project: a.project||'', dir:'out', amt: Number(a.amount||0)
+      project: a.project||'', dir:'out', amt: Number(a.balanceAmount!==undefined ? a.balanceAmount : a.amount||0)
     })),
-    ...bills.filter(b=>b.paid).map(b => {
-      const { totalBillAmt, advanceDeducted } = billTotals(b);
-      return {
-        date: b.paidDate||b.due||'', desc: b.payee||'', cat: b.category||'Bill',
-        project: b.project||'', dir:'out', amt: Math.max(0, totalBillAmt - advanceDeducted)
-      };
-    }),
+    ...bills.filter(b=>b.paid).map(b => ({
+      date: b.paidDate||b.due||'', desc: b.payee||'', cat: b.category||'Bill',
+      project: b.project||'', dir:'out', amt: billTotalAmt(b)
+    })),
     // Partially-paid schedule-based bills: log each paid stage on its own date
     ...bills.filter(b=>!b.paid && b.paymentSchedule && b.paymentSchedule.length>0).flatMap(b =>
       b.paymentSchedule.filter(s=>s.paid).map(s => ({
