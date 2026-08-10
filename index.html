@@ -5601,6 +5601,7 @@ function CapitalLoans() {
   const [capTypeFilter, setCapTypeFilter] = useState('all');
   const [capProjectFilter, setCapProjectFilter] = useState('all');
   const [capMonthFilter, setCapMonthFilter] = useState('all');
+  const [capLenderFilter, setCapLenderFilter] = useState('all');
 
   const totalInflow    = items.reduce((s,i) => s + Number(i.amount||0), 0);
   const totalRepaid    = items.reduce((s,i) => s + Number(i.totalRepaid||0), 0);
@@ -5612,9 +5613,12 @@ function CapitalLoans() {
     'Owner Capital Injection':'teal','Grant':'green','Other':'grey'
   };
 
+  const lenders = [...new Set(items.map(i=>i.source).filter(Boolean))];
+
   const filtered = [...items].filter(item=>
     (capTypeFilter==='all'||item.type===capTypeFilter) &&
     (capProjectFilter==='all'||item.project===capProjectFilter) &&
+    (capLenderFilter==='all'||item.source===capLenderFilter) &&
     (capMonthFilter==='all'||(item.dateReceived||'').startsWith(capMonthFilter))
   ).sort((a,b)=>sortBy==='date_asc'?(a.dateReceived||'').localeCompare(b.dateReceived||''):sortBy==='amount_desc'?Number(b.amount||0)-Number(a.amount||0):sortBy==='amount_asc'?Number(a.amount||0)-Number(b.amount||0):sortBy==='vendor_asc'?(a.source||'').localeCompare(b.source||''):(b.dateReceived||'').localeCompare(a.dateReceived||''));
 
@@ -5658,6 +5662,10 @@ function CapitalLoans() {
               <select className="form-input form-select" style={{width:130}} value={capProjectFilter} onChange={e=>setCapProjectFilter(e.target.value)}>
                 <option value="all">All Projects</option>
                 {PROJECTS.map(p=><option key={p}>{p}</option>)}
+              </select>
+              <select className="form-input form-select" style={{width:160}} value={capLenderFilter} onChange={e=>setCapLenderFilter(e.target.value)}>
+                <option value="all">All Lenders</option>
+                {lenders.map(l=><option key={l}>{l}</option>)}
               </select>
               <select className="form-input form-select" style={{width:140}} value={capMonthFilter} onChange={e=>setCapMonthFilter(e.target.value)}>
                 <option value="all">All Months</option>
@@ -5720,6 +5728,14 @@ function CapitalLoans() {
                   </tr>
                 );
               })}
+              <tr style={{background:'var(--grey-50)',fontWeight:700,borderTop:'2px solid var(--border)'}}>
+                <td colSpan={4} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Subtotal ({filtered.length} entries)</td>
+                <td className="amount" style={{fontWeight:700,color:'var(--green)',fontSize:13}}>{inr(filtered.reduce((s,i)=>s+Number(i.amount||0),0))}</td>
+                <td colSpan={2}></td>
+                <td className="amount" style={{fontWeight:700,color:'var(--red)',fontSize:13}}>{inr(filtered.reduce((s,i)=>s+Number(i.totalRepaid||0),0))}</td>
+                <td className="amount" style={{fontWeight:700,color:'var(--amber)',fontSize:13}}>{inr(filtered.reduce((s,i)=>s+(i.isRepayable?Math.max(0,Number(i.amount||0)-Number(i.totalRepaid||0)):0),0))}</td>
+                <td colSpan={2}></td>
+              </tr>
             </tbody>
           </table>
           </div>
