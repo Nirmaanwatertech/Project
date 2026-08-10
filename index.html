@@ -8,6 +8,9 @@
 <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
+<script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://unpkg.com/jspdf-autotable@3.8.2/dist/jspdf-autotable.min.js"></script>
 <style>
   :root {
     --primary: #1565C0;
@@ -6652,12 +6655,55 @@ function Statement() {
   const totalPettyCash = petty.reduce((s,p)=>s+(Number(p.totalAmount||0)||Number(p.amount||0)),0);
   const net = totalIn - totalOut - totalPettyCash;
 
+  function exportExcel() {
+    const sheetData = filtered.map(r => ({
+      Date: fmt(r.date), Description: r.desc, Category: r.cat, Project: r.project||'',
+      Type: r.dir==='in'?'In':'Out', Amount: r.dir==='in'?r.amt:-r.amt
+    }));
+    sheetData.push({});
+    sheetData.push({Date:'Total In', Amount: totalIn});
+    sheetData.push({Date:'Total Out', Amount: -totalOut});
+    sheetData.push({Date:'Petty Cash (not in Total Out)', Amount: -totalPettyCash});
+    sheetData.push({Date:'Net (incl. Petty Cash)', Amount: net});
+    const ws = window.XLSX.utils.json_to_sheet(sheetData);
+    ws['!cols'] = [{wch:12},{wch:32},{wch:16},{wch:10},{wch:8},{wch:14}];
+    const wb = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(wb, ws, 'Statement');
+    window.XLSX.writeFile(wb, `Statement_${new Date().toISOString().slice(0,10)}.xlsx`);
+  }
+
+  function exportPDF() {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({orientation:'landscape'});
+    doc.setFontSize(14);
+    doc.text('Nirmaan Watertech Solutions — Statement', 14, 15);
+    doc.setFontSize(9);
+    doc.text(`Generated ${fmt(new Date().toISOString().slice(0,10))}  ·  Total In ${inr(totalIn)}  ·  Total Out ${inr(totalOut)}  ·  Petty Cash ${inr(totalPettyCash)}  ·  Net ${inr(net)}`, 14, 22);
+    doc.autoTable({
+      startY: 28,
+      head: [['Date','Description','Category','Project','Type','Amount']],
+      body: filtered.map(r => [fmt(r.date), r.desc, r.cat, r.project||'—', r.dir==='in'?'In':'Out', (r.dir==='in'?'+':'−')+inr(r.amt)]),
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [30,58,95] },
+      didParseCell: (data) => {
+        if (data.section==='body' && data.column.index===5) {
+          data.cell.styles.textColor = data.row.raw[4]==='In' ? [22,163,74] : [220,38,38];
+        }
+      }
+    });
+    doc.save(`Statement_${new Date().toISOString().slice(0,10)}.pdf`);
+  }
+
   return (
     <div>
       <div className="section-header">
         <div>
           <div className="section-title">Statement</div>
           <div className="section-sub">All payments & incomes, datewise — excludes Petty Cash</div>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-sm btn-ghost" onClick={exportExcel}>⬇ Export Excel</button>
+          <button className="btn btn-sm btn-ghost" onClick={exportPDF}>⬇ Export PDF</button>
         </div>
       </div>
 
