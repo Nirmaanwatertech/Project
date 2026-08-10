@@ -6526,7 +6526,7 @@ function Statement() {
       date: r.date||'', desc: `Loan Repayment — ${c.source||''}`, cat:'Loan Repayment', grp:'Loan Repayments',
       project: c.project||'', dir:'out', amt: Number(r.amount||0)
     }))),
-  ].filter(r => r.date && r.amt > 0);
+  ].filter(r => r.amt > 0);
 
   const filtered = rows.filter(r =>
     (projectFilter==='all'||r.project===projectFilter) &&
