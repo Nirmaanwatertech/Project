@@ -6496,34 +6496,34 @@ function Statement() {
 
   const rows = [
     ...capital.map(c => ({
-      date: c.dateReceived||'', desc: `${c.type||'Capital'} — ${c.source||''}`, cat: c.type||'Capital',
+      date: c.dateReceived||'', desc: `${c.type||'Capital'} — ${c.source||''}`, cat: c.type||'Capital', grp:'Capital & Loans',
       project: c.project||'', dir:'in', amt: Number(c.amount||0)
     })),
     ...receipts.map(r => ({
-      date: r.dateReceived||'', desc: `${r.client||'Client'} Receipt${r.milestoneName?' — '+r.milestoneName:''}`, cat:'Client Receipt',
+      date: r.dateReceived||'', desc: `${r.client||'Client'} Receipt${r.milestoneName?' — '+r.milestoneName:''}`, cat:'Client Receipt', grp:'Client Receipts',
       project: r.project||'', dir:'in', amt: Number(r.amountReceived||0)
     })),
     ...advances.map(a => ({
-      date: a.datePaid||'', desc: `Advance — ${a.vendor||''}`, cat:'Advance',
+      date: a.datePaid||'', desc: `Advance — ${a.vendor||''}`, cat:'Advance', grp:'Advance Payments (unadj.)',
       project: a.project||'', dir:'out', amt: Number(a.balanceAmount!==undefined ? a.balanceAmount : a.amount||0)
     })),
     ...bills.filter(b=>b.paid).map(b => ({
-      date: b.paidDate||b.due||'', desc: b.payee||'', cat: b.category||'Bill',
+      date: b.paidDate||b.due||'', desc: b.payee||'', cat: b.category||'Bill', grp:'Bills & Invoices (paid)',
       project: b.project||'', dir:'out', amt: billTotalAmt(b)
     })),
     // Partially-paid schedule-based bills: log each paid stage on its own date
     ...bills.filter(b=>!b.paid && b.paymentSchedule && b.paymentSchedule.length>0).flatMap(b =>
       b.paymentSchedule.filter(s=>s.paid).map(s => ({
-        date: s.datePaid||s.date||'', desc: `${b.payee||''} (part payment)`, cat: b.category||'Bill',
+        date: s.datePaid||s.date||'', desc: `${b.payee||''} (part payment)`, cat: b.category||'Bill', grp:'Bills & Invoices (paid)',
         project: b.project||'', dir:'out', amt: Number(s.amount||0) + Number(s.includesGst ? s.gstAmount||0 : 0)
       }))
     ),
     ...expenses.map(e => ({
-      date: e.date||'', desc: e.description||'', cat: e.category||'General Expense',
+      date: e.date||'', desc: e.description||'', cat: e.category||'General Expense', grp:'General Expenses',
       project: e.project||'', dir:'out', amt: Number(e.amount||0)
     })),
     ...capital.flatMap(c => (c.repayments||[]).map(r => ({
-      date: r.date||'', desc: `Loan Repayment — ${c.source||''}`, cat:'Loan Repayment',
+      date: r.date||'', desc: `Loan Repayment — ${c.source||''}`, cat:'Loan Repayment', grp:'Loan Repayments',
       project: c.project||'', dir:'out', amt: Number(r.amount||0)
     }))),
   ].filter(r => r.date && r.amt > 0);
@@ -6556,6 +6556,25 @@ function Statement() {
         <div className="stat-card"><div className="stat-label">Total Out</div><div className="stat-value red">{inr(totalOut)}</div></div>
         <div className="stat-card"><div className="stat-label">Petty Cash</div><div className="stat-value red">{inr(totalPettyCash)}</div><div className="stat-sub" style={{fontSize:10}}>Not in Total Out — included in Net</div></div>
         <div className="stat-card"><div className="stat-label">Net (incl. Petty Cash)</div><div className="stat-value" style={{color: net>=0?'var(--green)':'var(--red)'}}>{inr(net)}</div></div>
+      </div>
+
+      {/* Category breakdown — compare line-by-line against Cash Flow's outflow breakdown */}
+      <div className="card" style={{marginBottom:14}}>
+        <div className="card-header"><span className="card-title" style={{color:'var(--red)'}}>↓ Total Out by Category — {inr(totalOut)}</span></div>
+        <div className="card-body" style={{padding:'10px 16px'}}>
+          {Object.entries(
+            filtered.filter(r=>r.dir==='out').reduce((acc,r)=>{ acc[r.grp]=(acc[r.grp]||0)+r.amt; return acc; }, {})
+          ).sort((a,b)=>b[1]-a[1]).map(([grp,amt])=>(
+            <div key={grp} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:'1px solid var(--grey-50)'}}>
+              <span style={{fontSize:13}}>{grp}</span>
+              <span className="amount" style={{fontWeight:700,color:'var(--red)',fontSize:14}}>{inr(amt)}</span>
+            </div>
+          ))}
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0 0'}}>
+            <span style={{fontSize:13,fontWeight:700}}>Total</span>
+            <span className="amount" style={{fontWeight:700,color:'var(--red)',fontSize:15}}>{inr(totalOut)}</span>
+          </div>
+        </div>
       </div>
 
       <div className="card">
