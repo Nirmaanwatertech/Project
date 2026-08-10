@@ -272,7 +272,7 @@
 const { useState, useEffect, useRef } = React;
 
 // ─── Formatters ───────────────────────────────────────
-const inr = (n) => '₹' + Number(n).toLocaleString('en-IN');
+const inr = (n) => '₹' + Math.round(Number(n)).toLocaleString('en-IN');
 
 // Format YYYY-MM-DD → DD-MM-YYYY for display
 function fmt(dateStr) {
@@ -3454,7 +3454,7 @@ function BillPayments() {
   const dueTodayTotal = withStatus.filter(b=>b.computedStatus==='Due Today').reduce((s,b)=>s+b.netPayable,0);
   const next7 = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
   const dueWeekTotal = withStatus.filter(b=>!b.paid&&b.due>=todayStr&&b.due<=next7).reduce((s,b)=>s+b.netPayable,0);
-  const paidTotal = withStatus.filter(b=>b.paid).reduce((s,b)=>s+b.totalBillAmt,0);
+  const paidTotal = withStatus.reduce((s,b)=>s+b.paidSoFar,0);
 
   // Advance stats
   const totalAdvances = advances.reduce((s,a)=>s+Number(a.amount||0),0);
