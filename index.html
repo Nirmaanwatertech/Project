@@ -3625,7 +3625,7 @@ function BillPayments() {
                     </tr>
                   ))}
                   <tr style={{background:'var(--grey-50)',fontWeight:700,borderTop:'2px solid var(--border)'}}>
-                    <td colSpan={4} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Subtotal ({filtered.length} bills)</td>
+                    <td colSpan={5} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Subtotal ({filtered.length} bills)</td>
                     <td className="amount" style={{fontWeight:700,color:'var(--primary)',fontSize:13}}>{inr(filtered.reduce((s,b)=>s+(b.displayBase||Number(b.amount||0)),0))}</td>
                     <td className="amount" style={{fontWeight:700,color:'var(--text-muted)',fontSize:12}}>{inr(filtered.reduce((s,b)=>s+(b.displayGst||0),0))}</td>
                     <td className="amount" style={{fontWeight:700,color:'var(--green)',fontSize:13}}>{inr(filtered.reduce((s,b)=>s+b.paidSoFar,0))}</td>
