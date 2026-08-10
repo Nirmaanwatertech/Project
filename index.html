@@ -3939,6 +3939,10 @@ async function addBillingSchedule(data) {
   const { db, collection, addDoc } = window.fb;
   await addDoc(userCol(BILLING_COLLECTION), {...data, createdAt:Date.now()});
 }
+async function updateBillingSchedule(docId, data) {
+  const { db, doc, updateDoc } = window.fb;
+  await updateDoc(userDoc(BILLING_COLLECTION, docId), data);
+}
 async function deleteBillingSchedule(docId) {
   const { db, doc, deleteDoc } = window.fb;
   await deleteDoc(userDoc(BILLING_COLLECTION, docId));
@@ -3980,44 +3984,216 @@ function nextRABillNumber(existing) {
 }
 
 // ════════════════════════════════════════════════════
+// HIERARCHICAL BILLING TREE — Schedule → Item → Sub-item
+// A node with no children is a claimable leaf. Cap amounts are
+// stored explicitly at every level (not recomputed from wt%), so
+// they always match what's on the approved billing breakup.
+// ════════════════════════════════════════════════════
+function isLeafNode(node) { return !node.children || node.children.length === 0; }
+
+// Flatten every leaf with its full ancestor path, for pickers and opening-balance entry.
+function flattenLeaves(nodes, path) {
+  path = path || [];
+  let out = [];
+  (nodes||[]).forEach(n => {
+    const p = [...path, n.name];
+    if (isLeafNode(n)) out.push({ ...n, path: p });
+    else out = out.concat(flattenLeaves(n.children, p));
+  });
+  return out;
+}
+
+// Roll up claimed/received for a node from its own opening balance (if leaf) or its
+// children (if not) — RA Bills matched by leafId. Cap amount is always read directly
+// from the node itself, never recomputed, so it can't drift from the approved breakup.
+function computeNodeTotals(node, raBillsByLeaf) {
+  if (isLeafNode(node)) {
+    const bills = raBillsByLeaf[node.id] || [];
+    const claimed  = Number(node.openingClaimed||0)  + bills.reduce((s,b)=>s+Number(b.amountClaimed||0),0);
+    const received = Number(node.openingReceived||0) + bills.reduce((s,b)=>s+Number(b.amountReceived||0),0);
+    return { capAmount: Number(node.capAmount||0), claimed, received };
+  }
+  return (node.children||[]).reduce((acc,c) => {
+    const t = computeNodeTotals(c, raBillsByLeaf);
+    return { capAmount: acc.capAmount+t.capAmount, claimed: acc.claimed+t.claimed, received: acc.received+t.received };
+  }, { capAmount:0, claimed:0, received:0 });
+}
+
+// Index RA Bills by the leaf they're claimed against, for fast roll-up lookups.
+function indexRABillsByLeaf(raBills, projectDocId) {
+  const idx = {};
+  raBills.filter(b=>b.billingProjectId===projectDocId).forEach(b => {
+    (idx[b.leafId] = idx[b.leafId]||[]).push(b);
+  });
+  return idx;
+}
+
+// Pontoon billing breakup, parsed and verified from the OIL India approved
+// "Schedule & Billing Breakup" (Contract No. 6118456, dated 21-01-2025).
+// Every subtotal below has been checked against its parent and the grand total
+// (₹42,27,80,000) ties out exactly. Schedule 2's item/sub-item breakdown was not
+// yet approved by PMC/OIL at time of upload, so it's kept as a single leaf for now.
+function pontoonSeedTree() {
+  const leaf = (name, wtPct, capAmount) => ({ id: genRowId(), name, wtPct, capAmount, children: [], openingClaimed: 0, openingReceived: 0 });
+  const branch = (name, wtPct, capAmount, children) => ({ id: genRowId(), name, wtPct, capAmount, children });
+  return [
+    branch('Schedule 1: Completion of Fieldwork, Design Report, Working Drawings for Pontoon Type Raw Water In-Take including Allied Buildings', 5.00, 21139000, [
+      leaf('A. Residual Process Design', 12.00, 2536680),
+      leaf('B. Details Design & Engineering', 47.00, 9935330),
+      leaf('C. Vendors final documents for supply item duly certified', 31.00, 6553090),
+      leaf('D. As-Built Documentation', 10.00, 2113900),
+    ]),
+    leaf('Schedule 2: Supply, Installation and Testing of the Equipments (breakdown pending PMC/OIL approval)', 40.00, 169112000),
+    branch('Schedule 3: Construction of Civil Works and Allied Buildings', 25.00, 105695000, [
+      branch('A. Construction of Panel Room', 10.00, 10569500, [
+        leaf('a. Supply of Civil Items & Finishing Items', 10.00, 1056950),
+        leaf('b. Foundation Up to Plinth Beam', 30.00, 3170850),
+        leaf('c. Plinth Beam to roof i/c column & Beam', 20.00, 2113900),
+        leaf('d. Roof', 5.00, 528475),
+        leaf('e. Brick work & Plaster & Painting', 10.00, 1056950),
+        leaf('f. Soil Filling work', 15.00, 1585425),
+        leaf('g. Door & Window work', 10.00, 1056950),
+      ]),
+      branch('B. Construction of Transformer Yard and DG Shed', 2.00, 2113900, [
+        leaf('a. Supply of Civil Items & Finishing Items', 20.00, 422780),
+        leaf('b. Foundation work upto Plinth level', 25.00, 528475),
+        leaf('c. DG Shed', 20.00, 422780),
+        leaf('d. Soil filling', 35.00, 739865),
+      ]),
+      branch('C. Construction of boundary wall (100X80 M & 36X36 M)', 20.00, 21139000, [
+        leaf('a. Supply of Civil Items & Finishing Items', 10.00, 2113900),
+        leaf('b. Foundation Up to Plint Beam', 20.00, 4227800),
+        leaf('c. Plinth Beam to finishing level', 20.00, 4227800),
+        leaf('d. Brick work', 20.00, 4227800),
+        leaf('e. Plastering work', 10.00, 2113900),
+        leaf('f. Soil Filling work', 10.00, 2113900),
+        leaf('g. MS Gate & etc', 10.00, 2113900),
+      ]),
+      branch('D. Construction of Security room', 10.00, 10569500, [
+        leaf('a. Supply of Civil Items & Finishing Items', 10.00, 1056950),
+        leaf('b. Footing Up to Plint Beam', 30.00, 3170850),
+        leaf('c. Plinth Beam to roof', 25.00, 2642375),
+        leaf('d. Brick work', 10.00, 1056950),
+        leaf('e. Plaster work', 10.00, 1056950),
+        leaf('f. Soil Filling work', 10.00, 1056950),
+        leaf('g. Door & Window', 5.00, 528475),
+      ]),
+      branch('E. Construction of Drainage and inside road work', 15.00, 15854250, [
+        leaf('a. Supply of Civil Items & Finishing Items', 10.00, 1585425),
+        leaf('b. Drainage work', 10.00, 1585425),
+        leaf('c. Inside road soil filling', 20.00, 3170850),
+        leaf('d. Stone Pitching', 25.00, 3963562.50),
+        leaf('e. Sab Base Course', 15.00, 2378137.50),
+        leaf('f. Base Course & Top Level', 20.00, 3170850),
+      ]),
+      branch('F. Construction of External Road', 30.00, 31708500, [
+        leaf('a. Supply Items of soil', 20.00, 6341700),
+        leaf('b. Supply Items of Stone Pitching', 25.00, 7927125),
+        leaf('c. Sab Base Course', 20.00, 6341700),
+        leaf('d. Base Course & Top Level', 35.00, 11097975),
+      ]),
+      branch('G. Construction of Gangway Foundation, DED Pump, Backwash Pump Foundation with shed', 1.00, 1056950, [
+        leaf('a. Supply of Civil Items & Finishing Items', 60.00, 634170),
+        leaf('Construction of Foundations and Shed', 40.00, 422780),
+      ]),
+      branch('H. Construction of Retaining Wall', 10.00, 10569500, [
+        leaf('a. Supply of Civil Items', 20.00, 2113900),
+        leaf('b. Foundation work', 30.00, 3170850),
+        leaf('c. RCC Wall 50% Completion', 25.00, 2642375),
+        leaf('d. RCC Wall 100% Completion', 25.00, 2642375),
+      ]),
+      leaf('I. Construction of Road Crossing, Chamber, Thrust Block & Bridge foundation', 2.00, 2113900),
+    ]),
+    branch('Schedule 4: Pre-Commissioning, Mechanical Completion, Comissioning & Reliability Run/Site Acceptance Test Portion', 30.00, 126834000, [
+      leaf('A. Completion of Pre-Commissioning activity', 10.00, 12683400),
+      leaf('B. Mechanical Completion', 30.00, 38050200),
+      leaf('C. Completion of Commissioning', 50.00, 63417000),
+      leaf('D. Completion of Reliability Run/Site Acceptance Test for 03 months', 10.00, 12683400),
+    ]),
+  ];
+}
+
+// ════════════════════════════════════════════════════
 // MODAL 1 — New Billing Schedule
 // ════════════════════════════════════════════════════
-function NewBillingScheduleModal({ onClose }) {
-  const [form, setForm] = useState({ client:'', projectRef:'', contractValue:'', project:'' });
-  const [milestones, setMilestones] = useState([
-    { id:genRowId(), name:'Advance',    pct:'', amount:'', expectedDate:'' },
-    { id:genRowId(), name:'RA Bill 1',  pct:'', amount:'', expectedDate:'' },
-    { id:genRowId(), name:'Final Bill', pct:'', amount:'', expectedDate:'' },
-  ]);
+// Immutable tree helpers — operate on the whole tree by node id, used by the editor.
+function updateNodeInTree(tree, nodeId, patch) {
+  return tree.map(n => {
+    if (n.id === nodeId) return { ...n, ...patch };
+    if (n.children && n.children.length) return { ...n, children: updateNodeInTree(n.children, nodeId, patch) };
+    return n;
+  });
+}
+function addChildInTree(tree, parentId, newChild) {
+  return tree.map(n => {
+    if (n.id === parentId) return { ...n, children: [...(n.children||[]), newChild] };
+    if (n.children && n.children.length) return { ...n, children: addChildInTree(n.children, parentId, newChild) };
+    return n;
+  });
+}
+function removeNodeInTree(tree, nodeId) {
+  return tree.filter(n=>n.id!==nodeId).map(n =>
+    n.children && n.children.length ? { ...n, children: removeNodeInTree(n.children, nodeId) } : n
+  );
+}
+
+// Recursive row for building/editing the Schedule → Item → Sub-item tree.
+function TreeNodeEditor({ node, depth, onUpdate, onAddChild, onRemove }) {
+  return (
+    <div style={{marginLeft: depth*16, borderLeft: depth>0?'2px solid var(--border)':'none', paddingLeft: depth>0?10:0, marginTop:6}}>
+      <div className="flex gap-2" style={{alignItems:'center'}}>
+        <input className="form-input" style={{flex:1,fontSize:12,padding:'5px 7px'}} value={node.name}
+          onChange={e=>onUpdate(node.id,{name:e.target.value})} placeholder="Name" />
+        <input className="form-input font-mono" style={{width:56,fontSize:12,padding:'5px 7px'}} value={node.wtPct}
+          onChange={e=>onUpdate(node.id,{wtPct:e.target.value})} placeholder="Wt%" />
+        <input className="form-input font-mono" style={{width:120,fontSize:12,padding:'5px 7px'}} value={node.capAmount}
+          onChange={e=>onUpdate(node.id,{capAmount:e.target.value})} placeholder="Cap ₹" />
+        <button type="button" className="btn btn-sm btn-ghost" style={{fontSize:10,whiteSpace:'nowrap'}} onClick={()=>onAddChild(node.id)}>+ Child</button>
+        <span onClick={()=>onRemove(node.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:13}}>✕</span>
+      </div>
+      {(node.children||[]).map(c=>(
+        <TreeNodeEditor key={c.id} node={c} depth={depth+1} onUpdate={onUpdate} onAddChild={onAddChild} onRemove={onRemove} />
+      ))}
+    </div>
+  );
+}
+
+function NewBillingProjectModal({ onClose, existing }) {
+  const isEdit = !!existing;
+  const knownNames = useKnownNames();
+  const [form, setForm] = useState(isEdit ? {
+    client: existing.client||'', contractNo: existing.contractNo||'',
+    contractValue: String(existing.contractValue||''), project: existing.project||'',
+    split: existing.split||{pontoon:50,wtp:50},
+  } : { client:'', contractNo:'', contractValue:'', project:'', split:{pontoon:50,wtp:50} });
+  const [tree, setTree] = useState(isEdit ? (existing.tree||[]) : []);
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
 
-  function addMilestone(){setMilestones(m=>[...m,{id:genRowId(),name:'',pct:'',amount:'',expectedDate:''}]);}
-  function removeMilestone(id){setMilestones(m=>m.filter(r=>r.id!==id));}
-  function updateMilestone(id,field,value){
-    setMilestones(m=>m.map(r=>{
-      if(r.id!==id) return r;
-      const next={...r,[field]:value};
-      if(field==='pct'&&form.contractValue){
-        const pct=parseFloat(value);
-        if(!isNaN(pct)) next.amount=String(Math.round((pct/100)*Number(form.contractValue)));
-      }
-      return next;
-    }));
+  function loadPontoonTemplate() {
+    setTree(pontoonSeedTree());
+    set('contractValue','422780000');
+    if (!form.client) set('client','Oil India Limited');
+    if (!form.contractNo) set('contractNo','6118456');
+    if (!form.project) set('project','Pontoon');
   }
+  function addRootSchedule() {
+    setTree(t=>[...t, {id:genRowId(), name:'', wtPct:'', capAmount:'', children:[]}]);
+  }
+  function updateNode(nodeId, patch) { setTree(t=>updateNodeInTree(t, nodeId, patch)); }
+  function addChild(parentId) { setTree(t=>addChildInTree(t, parentId, {id:genRowId(), name:'', wtPct:'', capAmount:'', children:[]})); }
+  function removeNode(nodeId) { setTree(t=>removeNodeInTree(t, nodeId)); }
 
-  const pctTotal = milestones.reduce((s,m)=>s+(parseFloat(m.pct)||0),0);
-  const amtTotal = milestones.reduce((s,m)=>s+(Number(m.amount)||0),0);
+  const treeCapTotal = tree.reduce((s,n)=>s+(Number(n.capAmount)||0),0);
+  const capMismatch = form.contractValue && Math.abs(treeCapTotal-Number(form.contractValue))>1;
 
   async function handleSave(){
-    if(!form.client.trim()) return;
+    if(!form.client.trim()||!tree.length) return;
     setSaving(true);
     try {
-      await addBillingSchedule({
-        ...form,
-        contractValue: Number(form.contractValue)||0,
-        milestones: milestones.filter(m=>m.name.trim()),
-      });
+      const data = { ...form, contractValue: Number(form.contractValue)||0, tree: tree.filter(n=>n.name.trim()) };
+      if (isEdit) await updateBillingSchedule(existing.docId, data);
+      else await addBillingSchedule(data);
       onClose();
     } catch(e){ console.error(e); alert('Could not save.'); }
     finally{ setSaving(false); }
@@ -4025,83 +4201,56 @@ function NewBillingScheduleModal({ onClose }) {
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:640,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:760,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--green)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
-          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>+ New Billing Schedule</span>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>{isEdit?'✏ Edit':'+ New'} Billing Project</span>
         </div>
         <div style={{padding:'18px 20px'}}>
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Client Name</label>
-              <AutocompleteInput value={form.client} onChange={v=>set('client',v)} suggestions={knownNames.clients} placeholder="e.g. Green Valley CHS" />
+              <AutocompleteInput value={form.client} onChange={v=>set('client',v)} suggestions={knownNames.clients} placeholder="e.g. Oil India Limited" />
             </div>
             <div className="form-group">
-              <label className="form-label">Project / Site Reference</label>
-              <input className="form-input" value={form.projectRef} onChange={e=>set('projectRef',e.target.value)} placeholder="e.g. WTP installation, Thane" />
+              <label className="form-label">Contract No.</label>
+              <input className="form-input" value={form.contractNo} onChange={e=>set('contractNo',e.target.value)} placeholder="e.g. 6118456" />
             </div>
           </div>
-          <div className="form-group">
-            <label className="form-label">Contract Value (₹)</label>
-            <input className="form-input font-mono" value={form.contractValue}
-              onChange={e=>{set('contractValue',e.target.value);}}
-              placeholder="Total contract amount — entering this auto-calculates milestone amounts from %" />
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Contract Value, excl. GST (₹)</label>
+              <input className="form-input font-mono" value={form.contractValue} onChange={e=>set('contractValue',e.target.value)} placeholder="0" />
+            </div>
+            <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} required />
           </div>
 
+          {!isEdit && (
+            <button type="button" className="btn btn-sm btn-outline" onClick={loadPontoonTemplate} style={{marginBottom:14}}>
+              📋 Load Pontoon Template (from approved billing breakup)
+            </button>
+          )}
+
           <div style={{borderTop:'1px solid var(--border)',paddingTop:14,marginTop:4}}>
-            <label className="form-label" style={{marginBottom:8,display:'block'}}>Billing Milestones</label>
-            <div style={{border:'1px solid var(--border)',borderRadius:6,overflow:'hidden',marginBottom:8}}>
-              <table style={{width:'100%'}}>
-                <thead>
-                  <tr style={{background:'var(--grey-50)'}}>
-                    <th style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)'}}>Milestone Name</th>
-                    <th style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)',width:60}}>%</th>
-                    <th style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)',width:120}}>Amount (₹)</th>
-                    <th style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)',width:140}}>Expected Date</th>
-                    <th style={{width:30}}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {milestones.map(m=>(
-                    <tr key={m.id} style={{borderTop:'1px solid var(--grey-50)'}}>
-                      <td style={{padding:4}}>
-                        <input className="form-input" style={{fontSize:11.5,padding:'5px 7px'}} value={m.name}
-                          onChange={e=>updateMilestone(m.id,'name',e.target.value)} placeholder="e.g. Advance 20%" />
-                      </td>
-                      <td style={{padding:4}}>
-                        <input className="form-input font-mono" style={{fontSize:11.5,padding:'5px 7px'}} value={m.pct}
-                          onChange={e=>updateMilestone(m.id,'pct',e.target.value)} placeholder="20" />
-                      </td>
-                      <td style={{padding:4}}>
-                        <input className="form-input font-mono" style={{fontSize:11.5,padding:'5px 7px'}} value={m.amount}
-                          onChange={e=>updateMilestone(m.id,'amount',e.target.value)} placeholder="0" />
-                      </td>
-                      <td style={{padding:4}}>
-                        <input className="form-input" type="date" style={{fontSize:11.5,padding:'5px 7px'}} value={m.expectedDate}
-                          onChange={e=>updateMilestone(m.id,'expectedDate',e.target.value)} />
-                      </td>
-                      <td style={{padding:4,textAlign:'center'}}>
-                        <span onClick={()=>removeMilestone(m.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="flex items-center justify-between">
-              <button type="button" onClick={addMilestone} className="btn btn-sm btn-outline">+ Add Milestone</button>
-              <span style={{fontSize:11,color: Math.abs(pctTotal-100)>0.01&&pctTotal>0?'var(--red)':'var(--text-muted)',fontWeight:Math.abs(pctTotal-100)>0.01&&pctTotal>0?600:400}}>
-                Total: {pctTotal}% · {inr(amtTotal)}
-                {Math.abs(pctTotal-100)>0.01&&pctTotal>0&&' ⚠ should total 100%'}
+            <div className="flex items-center justify-between" style={{marginBottom:8}}>
+              <label className="form-label" style={{margin:0}}>Billing Tree — Schedule → Item → Sub-item</label>
+              <span style={{fontSize:11,color: capMismatch?'var(--red)':'var(--text-muted)'}}>
+                Schedules total: {inr(treeCapTotal)}{capMismatch?' ⚠ doesn\'t match Contract Value':''}
               </span>
             </div>
+            <div style={{border:'1px solid var(--border)',borderRadius:6,padding:'10px 12px',maxHeight:340,overflowY:'auto'}}>
+              {tree.length===0 && <div className="text-muted" style={{fontSize:12}}>No schedules yet — add one below, or load the Pontoon template above.</div>}
+              {tree.map(n=>(
+                <TreeNodeEditor key={n.id} node={n} depth={0} onUpdate={updateNode} onAddChild={addChild} onRemove={removeNode} />
+              ))}
+            </div>
+            <button type="button" onClick={addRootSchedule} className="btn btn-sm btn-outline" style={{marginTop:8}}>+ Add Schedule</button>
           </div>
-          <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} required />
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleSave} disabled={saving||!form.client.trim()} className="btn btn-primary"
-            style={{background:'var(--green)',opacity:saving||!form.client.trim()?0.6:1}}>
-            {saving?'Saving…':'Save Billing Schedule'}
+          <button onClick={handleSave} disabled={saving||!form.client.trim()||!tree.length} className="btn btn-primary"
+            style={{background:'var(--green)',opacity:saving||!form.client.trim()||!tree.length?0.6:1}}>
+            {saving?'Saving…':'Save Billing Project'}
           </button>
         </div>
       </div>
@@ -4109,40 +4258,170 @@ function NewBillingScheduleModal({ onClose }) {
   );
 }
 
+// Opening balance ("Point 0") entry — one-time, per leaf, for work already claimed/
+// received before this system existed. Not logged as a dated transaction anywhere.
+function OpeningBalanceModal({ project, onClose }) {
+  const leaves = flattenLeaves(project.tree);
+  const [values, setValues] = useState(() => {
+    const v = {};
+    leaves.forEach(l => { v[l.id] = { claimed: String(l.openingClaimed||''), received: String(l.openingReceived||'') }; });
+    return v;
+  });
+  const [saving, setSaving] = useState(false);
+  function set(leafId, field, val) {
+    setValues(s => ({ ...s, [leafId]: { ...s[leafId], [field]: val } }));
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      function applyOpening(nodes) {
+        return nodes.map(n => {
+          if (isLeafNode(n)) {
+            const v = values[n.id] || {};
+            return { ...n, openingClaimed: Number(v.claimed)||0, openingReceived: Number(v.received)||0 };
+          }
+          return { ...n, children: applyOpening(n.children) };
+        });
+      }
+      await updateBillingSchedule(project.docId, { tree: applyOpening(project.tree) });
+      onClose();
+    } catch(e) { console.error(e); alert('Could not save opening balances.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:640,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Opening Balances ("Point 0") — {project.client}</span>
+        </div>
+        <div style={{padding:'14px 18px'}}>
+          <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:12}}>
+            Enter what's already been claimed/received against each line item before this system started tracking it. This is a one-time snapshot — it reduces the remaining balance but isn't logged as a dated transaction.
+          </div>
+          {leaves.map(l => (
+            <div key={l.id} style={{borderBottom:'1px solid var(--grey-50)',padding:'8px 0'}}>
+              <div style={{fontSize:11.5,fontWeight:600,marginBottom:2}}>{l.path.join(' → ')}</div>
+              <div style={{fontSize:10.5,color:'var(--text-muted)',marginBottom:6}}>Cap: {inr(l.capAmount||0)}</div>
+              <div className="flex gap-2">
+                <input className="form-input font-mono" style={{fontSize:12,padding:'5px 7px'}} value={values[l.id]?.claimed||''}
+                  onChange={e=>set(l.id,'claimed',e.target.value)} placeholder="Already claimed ₹" />
+                <input className="form-input font-mono" style={{fontSize:12,padding:'5px 7px'}} value={values[l.id]?.received||''}
+                  onChange={e=>set(l.id,'received',e.target.value)} placeholder="Already received ₹" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{padding:'0 18px 18px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="btn btn-primary" style={{opacity:saving?0.6:1}}>
+            {saving?'Saving…':'Save Opening Balances'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Recursive collapsible progress row — shows roll-up (cap/claimed/%/received/pending)
+// at every level, same shape as the source billing breakup document.
+function BillingTreeRow({ node, depth, raBillsByLeaf, expanded, toggleExpanded, onClaim }) {
+  const totals = computeNodeTotals(node, raBillsByLeaf);
+  const leaf = isLeafNode(node);
+  const pct = totals.capAmount>0 ? Math.min(100, Math.round(totals.claimed/totals.capAmount*100)) : 0;
+  const pending = Math.max(0, totals.capAmount - totals.claimed);
+  const isOpen = leaf ? true : expanded[node.id]!==false; // default expanded
+  return (
+    <>
+      <tr style={{borderTop:'1px solid var(--grey-50)',background:depth===0?'var(--grey-50)':''}}>
+        <td style={{padding:'6px 8px',paddingLeft:8+depth*18,fontSize:depth===0?12.5:12,fontWeight:depth===0?700:leaf?400:600}}>
+          {!leaf && (
+            <span onClick={()=>toggleExpanded(node.id)} style={{cursor:'pointer',marginRight:6,color:'var(--text-muted)',display:'inline-block',width:12}}>
+              {isOpen?'▾':'▸'}
+            </span>
+          )}
+          {node.name}
+        </td>
+        <td style={{padding:'6px 8px',fontSize:11.5,color:'var(--text-muted)'}}>{node.wtPct?`${node.wtPct}%`:''}</td>
+        <td style={{padding:'6px 8px'}} className="amount">{inr(totals.capAmount)}</td>
+        <td style={{padding:'6px 8px'}} className="amount" style={{color:'var(--primary)'}}>{inr(totals.claimed)}</td>
+        <td style={{padding:'6px 8px',fontSize:11.5}}>{pct}%</td>
+        <td style={{padding:'6px 8px'}} className="amount" style={{color:'var(--green)'}}>{inr(totals.received)}</td>
+        <td style={{padding:'6px 8px'}} className="amount" style={{color:pending>0?'var(--amber)':'var(--green)'}}>{inr(pending)}</td>
+        <td style={{padding:'6px 8px'}}>
+          {leaf && pending>0 && (
+            <button className="btn btn-sm btn-primary" style={{fontSize:10,padding:'3px 8px'}} onClick={()=>onClaim(node)}>+ Claim</button>
+          )}
+        </td>
+      </tr>
+      {!leaf && isOpen && (node.children||[]).map(c=>(
+        <BillingTreeRow key={c.id} node={c} depth={depth+1} raBillsByLeaf={raBillsByLeaf} expanded={expanded} toggleExpanded={toggleExpanded} onClaim={onClaim} />
+      ))}
+    </>
+  );
+}
+
+function BillingTreeProgressView({ project, raBills, onClaim }) {
+  const [expanded, setExpanded] = useState({});
+  function toggleExpanded(id) { setExpanded(e=>({...e,[id]: e[id]===false ? true : false})); }
+  const raBillsByLeaf = indexRABillsByLeaf(raBills, project.docId);
+  return (
+    <div style={{overflowX:'auto'}}>
+      <table style={{width:'100%',minWidth:760}}>
+        <thead>
+          <tr style={{background:'var(--grey-100)'}}>
+            {['Description of Work','Wt%','Cap (excl. GST)','Claimed','%','Received','Pending',''].map(h=>(
+              <th key={h} style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)'}}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {project.tree.map(n=>(
+            <BillingTreeRow key={n.id} node={n} depth={0} raBillsByLeaf={raBillsByLeaf} expanded={expanded} toggleExpanded={toggleExpanded} onClaim={onClaim} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ════════════════════════════════════════════════════
 // MODAL 2 — Submit RA Bill
 // ════════════════════════════════════════════════════
-function SubmitRABillModal({ onClose, schedules, existingCount }) {
+function SubmitRABillModal({ onClose, schedules, raBills, existingCount, presetProjectId, presetLeafId }) {
   const [form, setForm] = useState({
     raBillNo: nextRABillNumber(existingCount),
-    scheduleId: '', client:'', projectRef:'', milestoneIndex: '',
+    billingProjectId: presetProjectId||'', leafId: presetLeafId||'',
     amountClaimed: '', gstPct: '', dateSubmitted: new Date().toISOString().slice(0,10),
     notes: ''
   });
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
 
-  const selectedSchedule = schedules.find(s=>s.docId===form.scheduleId);
-  const selectedMilestone = selectedSchedule && form.milestoneIndex!==''
-    ? selectedSchedule.milestones[Number(form.milestoneIndex)]
-    : null;
+  const selectedProject = schedules.find(s=>s.docId===form.billingProjectId);
+  const leaves = selectedProject ? flattenLeaves(selectedProject.tree) : [];
+  const raBillsByLeaf = selectedProject ? indexRABillsByLeaf(raBills, selectedProject.docId) : {};
+  const selectedLeaf = leaves.find(l=>l.id===form.leafId) || null;
+  const leafTotals = selectedLeaf ? computeNodeTotals(selectedLeaf, raBillsByLeaf) : null;
+  const leafPending = leafTotals ? Math.max(0, leafTotals.capAmount - leafTotals.claimed) : 0;
 
-  function handleScheduleSelect(docId){
-    const sc = schedules.find(s=>s.docId===docId);
-    set('scheduleId',docId);
-    set('client',sc?sc.client:'');
-    set('projectRef',sc?sc.projectRef:'');
-    set('milestoneIndex','');
+  function handleProjectSelect(docId){
+    set('billingProjectId',docId);
+    set('leafId','');
     set('amountClaimed','');
   }
-  function handleMilestoneSelect(idx){
-    set('milestoneIndex',idx);
-    const sc = schedules.find(s=>s.docId===form.scheduleId);
-    if(sc&&sc.milestones[idx]) set('amountClaimed',String(sc.milestones[idx].amount||''));
+  function handleLeafSelect(leafId){
+    set('leafId',leafId);
+    const leaf = leaves.find(l=>l.id===leafId);
+    if (leaf) {
+      const t = computeNodeTotals(leaf, raBillsByLeaf);
+      set('amountClaimed', String(Math.max(0, t.capAmount - t.claimed)));
+    }
   }
 
   async function handleSave(){
-    if(!form.scheduleId||!form.amountClaimed||!form.dateSubmitted) return;
+    if(!form.billingProjectId||!form.leafId||!form.amountClaimed||!form.dateSubmitted) return;
     setSaving(true);
     try {
       const gstPct = Number(form.gstPct)||0;
@@ -4154,8 +4433,9 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
         amountReceived: 0,
         balancePending: Number(form.amountClaimed),
         status: 'Submitted',
-        milestoneName: selectedMilestone?.name||'',
-        project: selectedSchedule?.project||'',
+        client: selectedProject?.client||'',
+        leafPath: selectedLeaf?.path.join(' → ')||'',
+        project: selectedProject?.project||'',
       });
       onClose();
     } catch(e){ console.error(e); alert('Could not submit RA Bill.'); }
@@ -4164,7 +4444,7 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:540,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:560,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
           <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>📄 Submit Running Bill</span>
         </div>
@@ -4181,36 +4461,34 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Client / Project</label>
-            <select className="form-input form-select" value={form.scheduleId} onChange={e=>handleScheduleSelect(e.target.value)}>
-              <option value="">Select billing schedule…</option>
+            <label className="form-label">Billing Project</label>
+            <select className="form-input form-select" value={form.billingProjectId} onChange={e=>handleProjectSelect(e.target.value)} disabled={!!presetProjectId}>
+              <option value="">Select billing project…</option>
               {schedules.map(sc=>(
-                <option key={sc.docId} value={sc.docId}>{sc.client} — {sc.projectRef||'No ref'}</option>
+                <option key={sc.docId} value={sc.docId}>{sc.client} — {sc.project||'No project'}{sc.contractNo?` (${sc.contractNo})`:''}</option>
               ))}
             </select>
           </div>
 
-          {selectedSchedule && (
+          {selectedProject && (
             <div className="form-group">
-              <label className="form-label">Against Billing Schedule Milestone</label>
-              <select className="form-input form-select" value={form.milestoneIndex} onChange={e=>handleMilestoneSelect(e.target.value)}>
-                <option value="">Select milestone this bill applies to…</option>
-                {(selectedSchedule.milestones||[]).map((m,i)=>(
-                  <option key={i} value={i}>{m.name} — {inr(m.amount||0)}{m.pct?` (${m.pct}%)`:''}</option>
-                ))}
+              <label className="form-label">Claim Against</label>
+              <select className="form-input form-select" value={form.leafId} onChange={e=>handleLeafSelect(e.target.value)} disabled={!!presetLeafId}>
+                <option value="">Select line item…</option>
+                {leaves.map(l=>{
+                  const t = computeNodeTotals(l, raBillsByLeaf);
+                  const pending = Math.max(0, t.capAmount - t.claimed);
+                  return <option key={l.id} value={l.id} disabled={pending<=0}>{l.path.join(' → ')} — Pending {inr(pending)}{pending<=0?' (fully claimed)':''}</option>;
+                })}
               </select>
             </div>
           )}
 
-          {selectedMilestone && (
+          {selectedLeaf && leafTotals && (
             <div style={{background:'var(--primary-50)',borderRadius:6,padding:'8px 12px',fontSize:12,marginBottom:14}}>
-              <div className="flex justify-between">
-                <span>Milestone: <strong>{selectedMilestone.name}</strong></span>
-                <span className="amount fw-600">{inr(selectedMilestone.amount||0)}</span>
-              </div>
-              {selectedMilestone.expectedDate && (
-                <div style={{fontSize:11,color:'var(--text-muted)',marginTop:2}}>Expected date: {selectedMilestone.expectedDate}</div>
-              )}
+              <div className="flex justify-between"><span>Cap Amount</span><span className="amount fw-600">{inr(leafTotals.capAmount)}</span></div>
+              <div className="flex justify-between mt-1"><span>Already Claimed</span><span className="amount">{inr(leafTotals.claimed)}</span></div>
+              <div className="flex justify-between mt-1 fw-600" style={{color:'var(--amber)'}}><span>Pending</span><span className="amount">{inr(leafPending)}</span></div>
             </div>
           )}
 
@@ -4218,6 +4496,9 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
             <div className="form-group">
               <label className="form-label">Amount Claimed (₹)</label>
               <input className="form-input font-mono" value={form.amountClaimed} onChange={e=>set('amountClaimed',e.target.value)} placeholder="0" />
+              {selectedLeaf && Number(form.amountClaimed)>leafPending && (
+                <div style={{fontSize:11,color:'var(--red)',marginTop:3}}>⚠ Exceeds pending balance by {inr(Number(form.amountClaimed)-leafPending)}</div>
+              )}
             </div>
             <div className="form-group">
               <label className="form-label">GST % (output liability)</label>
@@ -4236,8 +4517,8 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleSave} disabled={saving||!form.scheduleId||!form.amountClaimed} className="btn btn-primary"
-            style={{opacity:saving||!form.scheduleId||!form.amountClaimed?0.6:1}}>
+          <button onClick={handleSave} disabled={saving||!form.billingProjectId||!form.leafId||!form.amountClaimed} className="btn btn-primary"
+            style={{opacity:saving||!form.billingProjectId||!form.leafId||!form.amountClaimed?0.6:1}}>
             {saving?'Saving…':'Submit RA Bill'}
           </button>
         </div>
@@ -4316,11 +4597,11 @@ function RecordReceiptModal({ raBill, onClose, allReceipts }) {
       await addReceipt({
         raBillId:        raBill.docId,
         raBillNo:        raBill.raBillNo,
-        scheduleId:      raBill.scheduleId,
+        billingProjectId:raBill.billingProjectId,
+        leafId:          raBill.leafId,
+        leafPath:        raBill.leafPath,
         client:          raBill.client,
-        projectRef:      raBill.projectRef,
         project:         raBill.project || '',
-        milestoneName:   raBill.milestoneName,
         amountClaimed:   raBill.amountClaimed,
         amountReceived:  amt,
         dateReceived:    form.dateReceived,
@@ -4353,8 +4634,8 @@ function RecordReceiptModal({ raBill, onClose, allReceipts }) {
           <div style={{background:'var(--green-50)',border:'1px solid #C8E6C9',borderRadius:6,padding:'10px 14px',fontSize:12,marginBottom:16}}>
             <div style={{fontWeight:700,fontSize:12.5,marginBottom:6,color:'var(--green)'}}>Cross-Reference</div>
             <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Client</span><strong>{raBill.client}</strong></div>
-            <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Project</span><span>{raBill.projectRef||'—'}</span></div>
-            <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Billing Milestone</span><span>{raBill.milestoneName||'—'}</span></div>
+            <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Project</span><span>{raBill.project||'—'}</span></div>
+            <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Claimed Against</span><span style={{textAlign:'right',maxWidth:220}}>{raBill.leafPath||'—'}</span></div>
             <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>RA Bill No.</span><span className="mono">{raBill.raBillNo}</span></div>
             <div style={{borderTop:'1px solid #C8E6C9',marginTop:8,paddingTop:8}}>
               <div className="flex justify-between"><span style={{color:'var(--text-muted)'}}>Total Claimed</span><span className="amount fw-600">{inr(raBill.amountClaimed||0)}</span></div>
@@ -4416,43 +4697,44 @@ function Receipts() {
   const { items: raBills,    loading: raBillLoading  } = useRABills();
   const { items: receipts,   loading: recLoading     } = useReceipts();
 
-  const [tab, setTab] = useState('schedules');
-  const [showNewSchedule,  setShowNewSchedule]  = useState(false);
-  const [showNewRABill,    setShowNewRABill]     = useState(false);
-  const [recordingFor,     setRecordingFor]      = useState(null);
+  const [tab, setTab] = useState('projects');
+  const [showNewProject,   setShowNewProject]    = useState(false);
+  const [editingProject,   setEditingProject]     = useState(null);
+  const [openingBalanceFor,setOpeningBalanceFor]  = useState(null);
+  const [showNewRABill,    setShowNewRABill]      = useState(false);
+  const [claimContext,     setClaimContext]       = useState(null); // {projectId, leafId} from a tree "+Claim"
+  const [recordingFor,     setRecordingFor]       = useState(null);
   const [editingGSTFor,    setEditingGSTFor]      = useState(null);
-  const [expandedSchedule, setExpandedSchedule] = useState(null);
+  const [expandedProject,  setExpandedProject]    = useState(null);
 
-  // ── Computed helpers ──
-  function receivedForRABill(raBillId) {
-    return receipts.filter(r=>r.raBillId===raBillId).reduce((s,r)=>s+Number(r.amountReceived||0),0);
-  }
-  function raBillsForSchedule(scheduleId) {
-    return raBills.filter(b=>b.scheduleId===scheduleId);
-  }
-  function receiptsForRABill(raBillId) {
-    return receipts.filter(r=>r.raBillId===raBillId);
-  }
+  const RA_STATUS_COLOR = { 'Submitted':'blue','Partially Received':'amber','Fully Received':'green' };
 
-  // ── Stats ──
-  const totalContract   = schedules.reduce((s,sc)=>s+Number(sc.contractValue||0),0);
-  const totalClaimed    = raBills.reduce((s,b)=>s+Number(b.amountClaimed||0),0);
-  const totalReceived   = receipts.reduce((s,r)=>s+Number(r.amountReceived||0),0);
-  const totalPending    = raBills.reduce((s,b)=>s+Number(b.balancePending||0),0);
+  // ── Stats (rolled up across every billing project's tree) ──
+  const totalContract = schedules.reduce((s,sc)=>s+Number(sc.contractValue||0),0);
+  const projectTotals = schedules.map(sc => {
+    const byLeaf = indexRABillsByLeaf(raBills, sc.docId);
+    return (sc.tree||[]).reduce((acc,n) => {
+      const t = computeNodeTotals(n, byLeaf);
+      return { claimed: acc.claimed+t.claimed, received: acc.received+t.received };
+    }, {claimed:0, received:0});
+  });
+  const totalClaimed  = projectTotals.reduce((s,t)=>s+t.claimed,0);
+  const totalReceived = projectTotals.reduce((s,t)=>s+t.received,0);
+  const totalPending  = Math.max(0, totalClaimed - totalReceived);
 
-  const RA_STATUS_COLOR = {
-    'Submitted':'blue','Partially Received':'amber','Fully Received':'green'
-  };
+  function openClaimModal(projectId, leafId) {
+    setClaimContext({ projectId, leafId });
+  }
 
   return (
     <div>
       <div className="section-header">
         <div>
           <div className="section-title">Receipts</div>
-          <div className="section-sub">Billing schedules → RA Bills → Receipts</div>
+          <div className="section-sub">Billing Projects (Schedule → Item → Sub-item) → RA Bills → Receipts</div>
         </div>
         <div className="flex gap-2">
-          <button className="btn btn-primary" style={{background:'var(--green)'}} onClick={()=>setShowNewSchedule(true)}>+ Billing Schedule</button>
+          <button className="btn btn-primary" style={{background:'var(--green)'}} onClick={()=>setShowNewProject(true)}>+ Billing Project</button>
           <button className="btn btn-primary" onClick={()=>setShowNewRABill(true)}>+ Submit RA Bill</button>
           <ClearCollectionButton label="Clear All" count={schedules.length+raBills.length+receipts.length} onClear={clearAllReceipts} />
         </div>
@@ -4468,7 +4750,7 @@ function Receipts() {
 
       {/* Tabs */}
       <div className="tabs">
-        <div className={`tab ${tab==='schedules'?'active':''}`} onClick={()=>setTab('schedules')}>📋 Billing Schedules</div>
+        <div className={`tab ${tab==='projects'?'active':''}`} onClick={()=>setTab('projects')}>📋 Billing Projects</div>
         <div className={`tab ${tab==='rabills'?'active':''}`} onClick={()=>setTab('rabills')}>
           📄 RA Bills
           {totalPending>0 && <span className="nav-badge" style={{background:'var(--amber)',marginLeft:8}}>{raBills.filter(b=>b.status!=='Fully Received').length}</span>}
@@ -4476,42 +4758,43 @@ function Receipts() {
         <div className={`tab ${tab==='receipts'?'active':''}`} onClick={()=>setTab('receipts')}>✓ All Receipts</div>
       </div>
 
-      {/* ── TAB 1: BILLING SCHEDULES ── */}
-      {tab==='schedules' && (
+      {/* ── TAB 1: BILLING PROJECTS (tree view) ── */}
+      {tab==='projects' && (
         <div className="card">
           {schedLoading ? (
             <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
           ) : schedules.length===0 ? (
             <div className="module-coming">
               <div className="big-icon">📋</div>
-              <h3>No billing schedules yet</h3>
-              <p className="text-muted">Create a billing schedule per client to define milestones — Advance, RA Bill 1, RA Bill 2, Final, etc.</p>
+              <h3>No billing projects yet</h3>
+              <p className="text-muted">Create a billing project per client/contract — build the Schedule → Item → Sub-item tree from your approved billing breakup.</p>
             </div>
           ) : schedules.map(sc => {
-            const scRABills  = raBillsForSchedule(sc.docId);
-            const scReceived = scRABills.reduce((s,b)=>s+Number(b.amountReceived||0),0);
-            const scClaimed  = scRABills.reduce((s,b)=>s+Number(b.amountClaimed||0),0);
-            const scPending  = scRABills.reduce((s,b)=>s+Number(b.balancePending||0),0);
-            const pct        = sc.contractValue>0 ? Math.round((scReceived/sc.contractValue)*100) : 0;
-            const isExp      = expandedSchedule===sc.docId;
+            const byLeaf = indexRABillsByLeaf(raBills, sc.docId);
+            const totals = (sc.tree||[]).reduce((acc,n) => {
+              const t = computeNodeTotals(n, byLeaf);
+              return { capAmount: acc.capAmount+t.capAmount, claimed: acc.claimed+t.claimed, received: acc.received+t.received };
+            }, {capAmount:0, claimed:0, received:0});
+            const pending = Math.max(0, totals.claimed - totals.received);
+            const pct = sc.contractValue>0 ? Math.round((totals.received/sc.contractValue)*100) : 0;
+            const isExp = expandedProject===sc.docId;
 
             return (
               <div key={sc.docId} style={{borderBottom:'1px solid var(--border)'}}>
-                {/* Schedule header */}
                 <div style={{padding:'12px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:12}}
-                  onClick={()=>setExpandedSchedule(isExp?null:sc.docId)}>
+                  onClick={()=>setExpandedProject(isExp?null:sc.docId)}>
                   <div style={{flex:1}}>
-                    <div style={{fontWeight:700,fontSize:13}}>{sc.client}</div>
+                    <div style={{fontWeight:700,fontSize:13}}>{sc.client}{sc.contractNo?` — Contract ${sc.contractNo}`:''}</div>
                     <div style={{fontSize:11.5,color:'var(--text-muted)',marginTop:2}}>
-                      {sc.projectRef && <span>{sc.projectRef} · </span>}
-                      Contract: <span className="amount">{inr(sc.contractValue||0)}</span> · {sc.milestones?.length||0} milestones · {scRABills.length} RA bills submitted
+                      {sc.project && <span className={`badge ${PROJECT_COLOR[sc.project]||'grey'}`} style={{marginRight:6}}>{sc.project}</span>}
+                      Contract Value: <span className="amount">{inr(sc.contractValue||0)}</span>
                     </div>
                   </div>
-                  <div style={{textAlign:'right',minWidth:260}}>
+                  <div style={{textAlign:'right',minWidth:280}}>
                     <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginBottom:5,flexWrap:'wrap'}}>
-                      <span style={{fontSize:11.5}}>Billed: <strong className="amount">{inr(scClaimed)}</strong></span>
-                      <span style={{fontSize:11.5,color:'var(--green)'}}>Rcvd: <strong className="amount">{inr(scReceived)}</strong></span>
-                      <span style={{fontSize:11.5,color:scPending>0?'var(--red)':'var(--green)'}}>Pending: <strong className="amount">{inr(scPending)}</strong></span>
+                      <span style={{fontSize:11.5}}>Claimed: <strong className="amount">{inr(totals.claimed)}</strong></span>
+                      <span style={{fontSize:11.5,color:'var(--green)'}}>Rcvd: <strong className="amount">{inr(totals.received)}</strong></span>
+                      <span style={{fontSize:11.5,color:pending>0?'var(--red)':'var(--green)'}}>Pending: <strong className="amount">{inr(pending)}</strong></span>
                     </div>
                     <div style={{display:'flex',alignItems:'center',gap:8}}>
                       <div className="progress-wrap" style={{flex:1,height:8}}>
@@ -4523,91 +4806,17 @@ function Receipts() {
                   <span style={{fontSize:12,color:'var(--text-muted)',marginLeft:4}}>{isExp?'▲':'▼'}</span>
                 </div>
 
-                {/* Expanded: milestone + RA bills breakdown */}
                 {isExp && (
                   <div style={{background:'var(--grey-50)',borderTop:'1px solid var(--border)',padding:'12px 16px'}}>
-                    <div style={{fontSize:11.5,fontWeight:600,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.4,marginBottom:8}}>Billing Milestones</div>
-                    <table style={{width:'100%',background:'var(--surface)',borderRadius:6,overflow:'hidden',marginBottom:12}}>
-                      <thead>
-                        <tr style={{background:'var(--primary-50)'}}>
-                          {['Milestone','%','Amount','Expected','Billed (RA Bills)','Received','Status'].map(h=>(
-                            <th key={h} style={{fontSize:10,padding:'6px 10px',textAlign:'left',color:'var(--primary)'}}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(sc.milestones||[]).map((m,i)=>{
-                          const msRABills  = scRABills.filter(b=>b.milestoneName===m.name);
-                          const msClaimed  = msRABills.reduce((s,b)=>s+Number(b.amountClaimed||0),0);
-                          const msReceived = msRABills.reduce((s,b)=>s+Number(b.amountReceived||0),0);
-                          const msStatus   = msReceived>0 && msReceived>=msClaimed ? 'Received' : msClaimed>0 ? 'Partially Billed' : 'Not Yet Billed';
-                          return (
-                            <tr key={i} style={{borderTop:'1px solid var(--grey-50)',background:msStatus==='Received'?'var(--green-50)':''}}>
-                              <td style={{padding:'7px 10px',fontSize:12.5,fontWeight:600}}>{m.name}</td>
-                              <td style={{padding:'7px 10px',fontSize:12}}>{m.pct||'—'}%</td>
-                              <td style={{padding:'7px 10px'}} className="amount">{inr(m.amount||0)}</td>
-                              <td style={{padding:'7px 10px',fontSize:12,color:'var(--text-muted)'}}>{fmt(m.expectedDate)||'—'}</td>
-                              <td style={{padding:'7px 10px'}} className="amount" style={{color:'var(--primary)'}}>{msClaimed>0?inr(msClaimed):'—'}</td>
-                              <td style={{padding:'7px 10px'}} className="amount" style={{color:'var(--green)',fontWeight:600}}>{msReceived>0?inr(msReceived):'—'}</td>
-                              <td style={{padding:'7px 10px'}}>
-                                <span className={`badge ${msStatus==='Received'?'green':msStatus==='Partially Billed'?'amber':'grey'}`}>{msStatus}</span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-
-                    {scRABills.length>0 && (
-                      <>
-                        <div style={{fontSize:11.5,fontWeight:600,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.4,marginBottom:8}}>RA Bills Submitted</div>
-                        <table style={{width:'100%',background:'var(--surface)',borderRadius:6,overflow:'hidden',marginBottom:10}}>
-                          <thead>
-                            <tr style={{background:'var(--grey-50)'}}>
-                              {['RA Bill #','Milestone','Date','Claimed','GST','Received','Pending','Status',''].map(h=>(
-                                <th key={h} style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>{h}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {scRABills.map(b=>(
-                              <tr key={b.docId} style={{borderTop:'1px solid var(--grey-50)'}}>
-                                <td style={{padding:'6px 8px'}} className="mono">{b.raBillNo}</td>
-                                <td style={{padding:'6px 8px',fontSize:12}}>{b.milestoneName||'—'}</td>
-                                <td style={{padding:'6px 8px',fontSize:12}}>{b.dateSubmitted}</td>
-                                <td style={{padding:'6px 8px'}} className="amount">{inr(b.amountClaimed||0)}</td>
-                                <td style={{padding:'6px 8px'}}>
-                                  {Number(b.gstAmount||0)>0 ? (
-                                    <span className="amount" style={{color:'var(--primary)'}}>{inr(b.gstAmount)}</span>
-                                  ) : (
-                                    <span className="text-muted" style={{fontSize:11}}>—</span>
-                                  )}
-                                  <button className="btn btn-sm btn-ghost" style={{marginLeft:6,fontSize:10,padding:'2px 6px'}} onClick={()=>setEditingGSTFor(b)}>Edit</button>
-                                </td>
-                                <td style={{padding:'6px 8px'}} className="amount" style={{color:'var(--green)',fontWeight:600}}>{inr(b.amountReceived||0)}</td>
-                                <td style={{padding:'6px 8px'}} className="amount" style={{color:Number(b.balancePending||0)>0?'var(--red)':'var(--green)'}}>{inr(b.balancePending||0)}</td>
-                                <td style={{padding:'6px 8px'}}><span className={`badge ${RA_STATUS_COLOR[b.status]||'grey'}`}>{b.status}</span></td>
-                                <td style={{padding:'6px 8px'}}>
-                                  {b.status!=='Fully Received' && (
-                                    <button className="btn btn-sm btn-primary" style={{background:'var(--green)'}}
-                                      onClick={()=>setRecordingFor(b)}>
-                                      Record Receipt
-                                    </button>
-                                  )}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </>
-                    )}
-
-                    <div className="flex gap-2">
+                    <div className="flex gap-2" style={{marginBottom:10}}>
+                      <button className="btn btn-sm btn-outline" onClick={()=>setOpeningBalanceFor(sc)}>Set Opening Balances</button>
+                      <button className="btn btn-sm btn-outline" onClick={()=>setEditingProject(sc)}>Edit Tree</button>
                       <button className="btn btn-sm btn-ghost" style={{color:'var(--red)'}}
-                        onClick={()=>{if(confirm('Delete this billing schedule and all linked RA bills?'))deleteBillingSchedule(sc.docId);}}>
-                        Delete Schedule
+                        onClick={()=>{if(confirm('Delete this billing project and all linked RA bills?'))deleteBillingSchedule(sc.docId);}}>
+                        Delete Project
                       </button>
                     </div>
+                    <BillingTreeProgressView project={sc} raBills={raBills} onClaim={(leaf)=>openClaimModal(sc.docId, leaf.id)} />
                   </div>
                 )}
               </div>
@@ -4625,22 +4834,25 @@ function Receipts() {
             <div className="module-coming">
               <div className="big-icon">📄</div>
               <h3>No RA bills submitted yet</h3>
-              <p className="text-muted">Submit a running bill against a billing schedule milestone.</p>
+              <p className="text-muted">Submit a running bill against a billing project's line item.</p>
             </div>
           ) : (
             <table>
               <thead>
-                <tr><th>RA Bill #</th><th>Client</th><th>Project Tag</th><th>Milestone</th><th>Date Submitted</th><th>Claimed</th><th>Received</th><th>Pending</th><th>Status</th><th>Actions</th></tr>
+                <tr><th>RA Bill #</th><th>Client</th><th>Claimed Against</th><th>Date Submitted</th><th>Claimed</th><th>GST</th><th>Received</th><th>Pending</th><th>Status</th><th>Actions</th></tr>
               </thead>
               <tbody>
                 {raBills.map(b=>(
                   <tr key={b.docId} style={{background:b.status==='Fully Received'?'var(--green-50)':b.status==='Partially Received'?'var(--amber-50)':''}}>
                     <td className="mono" style={{whiteSpace:'nowrap'}}>{b.raBillNo}</td>
                     <td className="fw-600">{b.client}</td>
-                    <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{b.projectRef||'—'}</td>
-                    <td>{b.milestoneName||'—'}</td>
+                    <td style={{fontSize:11.5,color:'var(--text-muted)',maxWidth:260}}>{b.leafPath||'—'}</td>
                     <td>{b.dateSubmitted}</td>
                     <td className="amount fw-600">{inr(b.amountClaimed||0)}</td>
+                    <td>
+                      {Number(b.gstAmount||0)>0 ? <span className="amount" style={{color:'var(--primary)'}}>{inr(b.gstAmount)}</span> : <span className="text-muted" style={{fontSize:11}}>—</span>}
+                      <button className="btn btn-sm btn-ghost" style={{marginLeft:6,fontSize:10,padding:'2px 6px'}} onClick={()=>setEditingGSTFor(b)}>Edit</button>
+                    </td>
                     <td className="amount" style={{color:'var(--green)',fontWeight:600}}>{inr(b.amountReceived||0)}</td>
                     <td className="amount" style={{color:Number(b.balancePending||0)>0?'var(--red)':'var(--green)',fontWeight:600}}>{inr(b.balancePending||0)}</td>
                     <td><span className={`badge ${RA_STATUS_COLOR[b.status]||'grey'}`}>{b.status}</span></td>
@@ -4676,16 +4888,15 @@ function Receipts() {
           ) : (
             <table>
               <thead>
-                <tr><th>Date</th><th>Client</th><th>Project</th><th>RA Bill #</th><th>Milestone</th><th>Claimed</th><th>Received</th><th>Mode</th><th>Ref #</th><th>Actions</th></tr>
+                <tr><th>Date</th><th>Client</th><th>RA Bill #</th><th>Claimed Against</th><th>Claimed</th><th>Received</th><th>Mode</th><th>Ref #</th><th>Actions</th></tr>
               </thead>
               <tbody>
                 {receipts.map(r=>(
                   <tr key={r.docId} style={{background:'var(--green-50)'}}>
                     <td>{fmt(r.dateReceived)}</td>
                     <td className="fw-600">{r.client}</td>
-                    <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{r.projectRef||'—'}</td>
                     <td className="mono">{r.raBillNo}</td>
-                    <td>{r.milestoneName||'—'}</td>
+                    <td style={{fontSize:11.5,color:'var(--text-muted)'}}>{r.leafPath||r.milestoneName||'—'}</td>
                     <td className="amount">{inr(r.amountClaimed||0)}</td>
                     <td className="amount fw-600" style={{color:'var(--green)'}}>{inr(r.amountReceived||0)}</td>
                     <td><span className="badge teal">{r.paymentMode}</span></td>
@@ -4699,13 +4910,23 @@ function Receipts() {
         </div>
       )}
 
-      {showNewSchedule && <NewBillingScheduleModal onClose={()=>setShowNewSchedule(false)} />}
-      {showNewRABill   && <SubmitRABillModal onClose={()=>setShowNewRABill(false)} schedules={schedules} existingCount={raBills.length} />}
-      {recordingFor    && <RecordReceiptModal raBill={recordingFor} onClose={()=>setRecordingFor(null)} allReceipts={receipts} />}
-      {editingGSTFor   && <EditRABillGSTModal raBill={editingGSTFor} onClose={()=>setEditingGSTFor(null)} />}
+      {showNewProject   && <NewBillingProjectModal onClose={()=>setShowNewProject(false)} />}
+      {editingProject   && <NewBillingProjectModal existing={editingProject} onClose={()=>setEditingProject(null)} />}
+      {openingBalanceFor&& <OpeningBalanceModal project={openingBalanceFor} onClose={()=>setOpeningBalanceFor(null)} />}
+      {showNewRABill    && <SubmitRABillModal onClose={()=>setShowNewRABill(false)} schedules={schedules} raBills={raBills} existingCount={raBills.length} />}
+      {claimContext     && (
+        <SubmitRABillModal
+          onClose={()=>setClaimContext(null)}
+          schedules={schedules} raBills={raBills} existingCount={raBills.length}
+          presetProjectId={claimContext.projectId} presetLeafId={claimContext.leafId}
+        />
+      )}
+      {recordingFor     && <RecordReceiptModal raBill={recordingFor} onClose={()=>setRecordingFor(null)} allReceipts={receipts} />}
+      {editingGSTFor    && <EditRABillGSTModal raBill={editingGSTFor} onClose={()=>setEditingGSTFor(null)} />}
     </div>
   );
 }
+
 
 
 // ════════════════════════════════════════════════════
