@@ -2567,13 +2567,20 @@ function CashFlow() {
   const totalReceipts  = receipts.reduce((s,r) => s + Number(r.amountReceived||0), 0);
   // Only unadjusted advances — use remaining balanceAmount so partially-adjusted
   // advances aren't double-subtracted (once via the advance, again via the bill)
-  const totalAdvances  = advances.filter(a => a.status !== 'Fully Adjusted').reduce((s,a) => s + Number(a.balanceAmount||a.amount||0), 0);
+  const totalAdvances  = advances.filter(a => a.status !== 'Fully Adjusted').reduce((s,a) => s + Number(a.balanceAmount !== undefined ? a.balanceAmount : a.amount||0), 0);
   // Paid bills (full value) + partially-paid schedule-based bills (paid stages only)
   const totalBillsPaid = bills.reduce((s,b) => {
-    const base = Number(b.amount||0);
-    const gst  = b.gstAmount !== undefined ? Number(b.gstAmount||0)
-               : (b.gstPct ? Math.round(base * parseFloat(b.gstPct)/100) : 0);
-    if (b.paid) return s + base + gst;
+    let totalBillAmt;
+    if (b.fromSchedule && b.gstAmount !== undefined) {
+      totalBillAmt = Number(b.amount||0) + Number(b.gstAmount||0);
+    } else if (b.fromSchedule) {
+      totalBillAmt = Number(b.amount||0);
+    } else {
+      const base = Number(b.amount||0);
+      const gstRate = b.gstPct ? parseFloat(b.gstPct) : 0;
+      totalBillAmt = base + (gstRate > 0 ? Math.round(base * gstRate / 100) : 0);
+    }
+    if (b.paid) return s + totalBillAmt;
     const hasSchedule = b.paymentSchedule && b.paymentSchedule.length > 0;
     if (hasSchedule) {
       const paidStagesAmt = b.paymentSchedule.reduce((ss,st) =>
