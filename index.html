@@ -6451,6 +6451,154 @@ function QuotationApprovalAction({ quotation, currentUser, onApproved, onRejecte
   );
 }
 
+// ─── Statement — flat datewise ledger of all payments & incomes (excludes Petty Cash) ─
+function Statement() {
+  const { items: capital }  = useCapitalLoans();
+  const { items: receipts } = useReceipts();
+  const { items: bills }    = useBills();
+  const { items: advances } = useAdvances();
+  const { items: expenses } = useExpenses();
+
+  const [dateFrom, setDateFrom]         = useState('');
+  const [dateTo, setDateTo]             = useState('');
+  const [projectFilter, setProjectFilter] = useState('all');
+  const [typeFilter, setTypeFilter]     = useState('all');
+
+  // Compute a paid bill's total value and any advance already deducted against it,
+  // so we log only the balance actually paid at settlement (avoids double-counting
+  // an advance that was paid — and logged — on its own earlier date).
+  function billTotals(b) {
+    const linkedAdv = advances.filter(a =>
+      a.linkedBill === b.docId ||
+      a.adjustedAgainst === b.docId ||
+      (b.fromSchedule && b.linkedPO && a.linkedPO === b.linkedPO && a.fromSchedule) ||
+      (b.fromSchedule && b.linkedWO && a.linkedWO === b.linkedWO && a.fromSchedule)
+    );
+    const advanceDeducted = Number(b.advanceDeducted||0) ||
+      linkedAdv.reduce((s,a) => s + (Number(a.adjustedAmount||0) || Number(a.amount||0)), 0);
+
+    let totalBillAmt;
+    if (b.fromSchedule && b.gstAmount !== undefined) {
+      totalBillAmt = Number(b.amount||0) + Number(b.gstAmount||0);
+    } else if (b.fromSchedule) {
+      totalBillAmt = Number(b.amount||0);
+    } else {
+      const base = Number(b.amount||0);
+      const gstRate = b.gstPct ? parseFloat(b.gstPct) : 0;
+      const gst = gstRate > 0 ? Math.round(base * gstRate / 100) : 0;
+      totalBillAmt = base + gst;
+    }
+    return { totalBillAmt, advanceDeducted };
+  }
+
+  const rows = [
+    ...capital.map(c => ({
+      date: c.dateReceived||'', desc: `${c.type||'Capital'} — ${c.source||''}`, cat: c.type||'Capital',
+      project: c.project||'', dir:'in', amt: Number(c.amount||0)
+    })),
+    ...receipts.map(r => ({
+      date: r.dateReceived||'', desc: `${r.client||'Client'} Receipt${r.milestoneName?' — '+r.milestoneName:''}`, cat:'Client Receipt',
+      project: r.project||'', dir:'in', amt: Number(r.amountReceived||0)
+    })),
+    ...advances.map(a => ({
+      date: a.datePaid||'', desc: `Advance — ${a.vendor||''}`, cat:'Advance',
+      project: a.project||'', dir:'out', amt: Number(a.amount||0)
+    })),
+    ...bills.filter(b=>b.paid).map(b => {
+      const { totalBillAmt, advanceDeducted } = billTotals(b);
+      return {
+        date: b.paidDate||b.due||'', desc: b.payee||'', cat: b.category||'Bill',
+        project: b.project||'', dir:'out', amt: Math.max(0, totalBillAmt - advanceDeducted)
+      };
+    }),
+    ...expenses.map(e => ({
+      date: e.date||'', desc: e.description||'', cat: e.category||'General Expense',
+      project: e.project||'', dir:'out', amt: Number(e.amount||0)
+    })),
+    ...capital.flatMap(c => (c.repayments||[]).map(r => ({
+      date: r.date||'', desc: `Loan Repayment — ${c.source||''}`, cat:'Loan Repayment',
+      project: c.project||'', dir:'out', amt: Number(r.amount||0)
+    }))),
+  ].filter(r => r.date && r.amt > 0);
+
+  const filtered = rows.filter(r =>
+    (projectFilter==='all'||r.project===projectFilter) &&
+    (typeFilter==='all'||r.dir===typeFilter) &&
+    (!dateFrom||r.date>=dateFrom) &&
+    (!dateTo||r.date<=dateTo)
+  ).sort((a,b)=>b.date.localeCompare(a.date));
+
+  const totalIn  = filtered.filter(r=>r.dir==='in').reduce((s,r)=>s+r.amt,0);
+  const totalOut = filtered.filter(r=>r.dir==='out').reduce((s,r)=>s+r.amt,0);
+  const net = totalIn - totalOut;
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Statement</div>
+          <div className="section-sub">All payments & incomes, datewise — excludes Petty Cash</div>
+        </div>
+      </div>
+
+      <div className="stats-grid">
+        <div className="stat-card"><div className="stat-label">Total In</div><div className="stat-value green">{inr(totalIn)}</div></div>
+        <div className="stat-card"><div className="stat-label">Total Out</div><div className="stat-value red">{inr(totalOut)}</div></div>
+        <div className="stat-card"><div className="stat-label">Net</div><div className="stat-value" style={{color: net>=0?'var(--green)':'var(--red)'}}>{inr(net)}</div></div>
+      </div>
+
+      <div className="card">
+        <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
+          <div className="flex gap-2" style={{flexWrap:'wrap'}}>
+            <input className="form-input" type="date" style={{width:150}} value={dateFrom} onChange={e=>setDateFrom(e.target.value)} />
+            <input className="form-input" type="date" style={{width:150}} value={dateTo} onChange={e=>setDateTo(e.target.value)} />
+            <select className="form-input form-select" style={{width:130}} value={projectFilter} onChange={e=>setProjectFilter(e.target.value)}>
+              <option value="all">All Projects</option>
+              {PROJECTS.map(p=><option key={p}>{p}</option>)}
+            </select>
+            <select className="form-input form-select" style={{width:150}} value={typeFilter} onChange={e=>setTypeFilter(e.target.value)}>
+              <option value="all">All Types</option>
+              <option value="in">Income Only</option>
+              <option value="out">Payments Only</option>
+            </select>
+          </div>
+        </div>
+        {filtered.length===0 ? (
+          <div className="module-coming">
+            <div className="big-icon">📜</div>
+            <h3>No transactions found</h3>
+            <p className="text-muted">Try adjusting the filters above.</p>
+          </div>
+        ) : (
+        <div style={{overflowX:'auto'}}>
+          <table style={{minWidth:800}}>
+            <thead>
+              <tr><th>Date</th><th>Description</th><th>Category</th><th>Project</th><th>Type</th><th>Amount</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map((r,i)=>(
+                <tr key={i}>
+                  <td>{fmt(r.date)}</td>
+                  <td className="fw-600">{r.desc}</td>
+                  <td><span className="badge grey">{r.cat}</span></td>
+                  <td>{r.project?<span className={`badge ${PROJECT_COLOR[r.project]||'grey'}`}>{r.project}</span>:<span className="text-muted">—</span>}</td>
+                  <td><span className={`badge ${r.dir==='in'?'green':'red'}`}>{r.dir==='in'?'In':'Out'}</span></td>
+                  <td className="amount fw-600" style={{color: r.dir==='in'?'var(--green)':'var(--red)'}}>{r.dir==='in'?'+':'−'}{inr(r.amt)}</td>
+                </tr>
+              ))}
+              <tr style={{background:'var(--grey-50)',fontWeight:700,borderTop:'2px solid var(--border)'}}>
+                <td colSpan={5} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Total ({filtered.length} entries) — In {inr(totalIn)} · Out {inr(totalOut)}</td>
+                <td className="amount" style={{fontWeight:700,color: net>=0?'var(--green)':'var(--red)',fontSize:13}}>{inr(net)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Nav Config ──────────────────────────────────────
 const NAV = [
   { section: 'Operations' },
@@ -6465,6 +6613,7 @@ const NAV = [
   { id:'capital',        label:'Capital & Loans',  icon:'🏦' },
   { id:'billpayments',   label:'Bill Payments',    icon:'📑' },
   { id:'cashflow',       label:'Cash Flow',        icon:'📈' },
+  { id:'statement',      label:'Statement',        icon:'📜' },
   { id:'pettycash',      label:'Petty Cash',       icon:'💰' },
   { id:'expenses',       label:'General Expenses',     icon:'🏦' },
   { section: 'Team' },
@@ -6484,6 +6633,7 @@ function Module({ id, setActive, currentUser }) {
     case 'receipts':       return <Receipts />;
     case 'capital':        return <CapitalLoans />;
     case 'cashflow':       return <CashFlow />;
+    case 'statement':      return <Statement />;
     case 'billpayments':   return <BillPayments />;
     case 'settings':       return <SettingsWithUser currentUser={currentUser} />;
     case 'pettycash':      return <PettyCash currentUser={currentUser} />;
