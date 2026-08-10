@@ -2551,6 +2551,7 @@ function CashFlow() {
   const { items: petty }    = usePettyCash();
   const { items: pos }      = usePurchaseOrders();
   const { items: wos }      = useWorkOrders();
+  const { items: raBills }  = useRABills();
   const { settings }        = useCashSettings();
   const [editingBalance, setEditingBalance] = useState(false);
   const [balanceInput, setBalanceInput]     = useState('');
@@ -2603,25 +2604,67 @@ function CashFlow() {
     return `${y}-${String(mm+1).padStart(2,'0')}-20`;
   }
 
+  // Monthly ITC ledger: input GST only becomes a real cash-effective inflow to the
+  // extent there's actual output GST liability (from RA Bills submitted) to net it
+  // against that month. Unutilized credit carries forward to the next month and tries
+  // again — nothing here is forecast, it only uses RA Bills that have actually been entered.
+  function buildITCLedger() {
+    const inputByMonth = {};
+    [...pos, ...wos].forEach(doc => {
+      (doc.paymentSchedule||[]).forEach(s => {
+        if (s.paid && s.includesGst && Number(s.gstAmount||0)>0) {
+          const d = s.datePaid||s.date||'';
+          if (!d) return;
+          const month = d.slice(0,7);
+          inputByMonth[month] = (inputByMonth[month]||0) + Number(s.gstAmount);
+        }
+      });
+    });
+    petty.filter(p=>p.gstPct&&Number(p.gstPct)>0).forEach(p=>{
+      const gstAmt = Number(p.gstAmount||0)||Math.round(Number(p.amount||0)*parseFloat(p.gstPct)/100);
+      if (!p.date || gstAmt<=0) return;
+      const month = p.date.slice(0,7);
+      inputByMonth[month] = (inputByMonth[month]||0) + gstAmt;
+    });
+
+    const outputByMonth = {};
+    raBills.forEach(rb => {
+      const gstAmt = Number(rb.gstAmount||0);
+      if (gstAmt>0 && rb.dateSubmitted) {
+        const month = rb.dateSubmitted.slice(0,7);
+        outputByMonth[month] = (outputByMonth[month]||0) + gstAmt;
+      }
+    });
+
+    const allMonths = [...new Set([...Object.keys(inputByMonth), ...Object.keys(outputByMonth)])].sort();
+    let carry = 0;
+    const utilizedRows = [];
+    allMonths.forEach(month => {
+      const available = carry + (inputByMonth[month]||0);
+      const liability  = outputByMonth[month]||0;
+      const utilized   = Math.min(available, liability);
+      carry = available - utilized;
+      if (utilized > 0) {
+        const [y,m] = month.split('-').map(Number);
+        const nm = m===12?1:m+1, ny = m===12?y+1:y;
+        const itcDate = `${ny}-${String(nm).padStart(2,'0')}-20`;
+        utilizedRows.push({date: itcDate, label:`ITC Recovery (utilized — ${month})`, cat:'GST ITC Recovery', type:'in', amt: utilized, project:'', isPast: itcDate<todayStr});
+      }
+    });
+    return { utilizedRows, pendingCredit: carry };
+  }
+  const { utilizedRows: itcRows, pendingCredit } = buildITCLedger();
+
   function scheduleRows(items, type) {
     return items.flatMap(doc => {
       const refNo = doc.po||doc.wo||'';
       const label = doc.vendorName||'';
       return (doc.paymentSchedule||[]).flatMap(s => {
         if (!s.amount) return [];
-        if (s.paid) {
-          if (s.includesGst && Number(s.gstAmount||0)>0) {
-            const itcDate = getITCDate(s.datePaid||s.date||'');
-            if (itcDate && itcDate >= todayStr)
-              return [{date:itcDate, label:`ITC Recovery — ${label}`, cat:'GST ITC Recovery', type:'in', amt:Number(s.gstAmount), project:doc.project||'', isPast:false}];
-          }
-          return [];
-        }
+        if (s.paid) return [];
         const rows = [{date:s.date||'', label:`${refNo} — ${label} (${s.stageType||'Payment'})`, cat:type, type:'out', amt:Number(s.amount), project:doc.project||'', isPast:(s.date||'')<todayStr}];
         if (s.includesGst && Number(s.gstAmount||0)>0) {
           rows.push({date:s.date||'', label:`GST — ${label}`, cat:'GST Paid', type:'out', amt:Number(s.gstAmount), project:doc.project||'', isPast:(s.date||'')<todayStr});
-          const itcDate = getITCDate(s.date||'');
-          if (itcDate) rows.push({date:itcDate, label:`ITC Recovery — ${label}`, cat:'GST ITC Recovery', type:'in', amt:Number(s.gstAmount), project:doc.project||'', isPast:itcDate<todayStr});
         }
         return rows;
       });
@@ -2632,14 +2675,9 @@ function CashFlow() {
     ...bills.filter(b=>!b.fromSchedule&&!b.paid).map(b=>({date:b.due||b.invoiceDate||'', label:b.payee, cat:'Bill', type:'out', amt:Number(b.amount||0)+(b.gstPct?Math.round(Number(b.amount||0)*parseFloat(b.gstPct)/100):0), project:b.project||'', isPast:(b.due||b.invoiceDate||'')<todayStr})),
     ...scheduleRows(pos,'Purchase Order'),
     ...scheduleRows(wos,'Work Order'),
+    ...itcRows,
     ...expenses.filter(e=>!e.paid).map(e=>({date:e.date||'', label:e.description||'', cat:'General Expense', type:'out', amt:Number(e.amount||0), project:e.project||'', isPast:(e.date||'')<todayStr})),
     ...petty.map(p=>({date:p.date||'', label:p.description||'Petty Cash', cat:'Petty Cash', type:'out', amt:(Number(p.totalAmount||0)||Number(p.amount||0)), project:p.project||'', isPast:(p.date||'')<todayStr})),
-    // ITC recovery for petty cash entries with GST
-    ...petty.filter(p=>p.gstPct&&Number(p.gstPct)>0).map(p=>{
-      const gstAmt = Number(p.gstAmount||0)||Math.round(Number(p.amount||0)*parseFloat(p.gstPct)/100);
-      const itcDate = getITCDate(p.date||'');
-      return {date:itcDate, label:`ITC Recovery — ${p.description||'Petty Cash'}`, cat:'GST ITC Recovery', type:'in', amt:gstAmt, project:p.project||'', isPast:itcDate<todayStr};
-    }).filter(r=>r.date&&r.amt>0),
     ...receipts.filter(r=>!r.received).map(r=>({date:r.dateReceived||'', label:`${r.client||'Client'} Receipt`, cat:'Client Receipt', type:'in', amt:Number(r.amountReceived||0), project:r.project||'', isPast:(r.dateReceived||'')<todayStr})),
     ...capital.map(c=>({date:c.dateReceived||'', label:`${c.type||'Capital'} — ${c.source||''}`, cat:'Capital', type:'in', amt:Number(c.amount||0), project:c.project||'', isPast:(c.dateReceived||'')<todayStr})),
   ].filter(r=>r.date&&r.amt>0).sort((a,b)=>a.date.localeCompare(b.date));
@@ -2701,7 +2739,7 @@ function CashFlow() {
           <div className="stat-sub" style={{fontSize:10}}>Capital+Receipts − Unadj.Advances − Paid Bills − Expenses</div>
         </div>
       </div>
-      <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)',marginBottom:14}}>
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginBottom:14}}>
         <div className="stat-card">
           <div className="stat-label">Lowest Future Balance</div>
           <div className={`stat-value ${lowestFuture < 0 ? 'red' : lowestFuture < alertLevel && alertLevel > 0 ? 'amber' : 'blue'}`}>{inr(lowestFuture)}</div>
@@ -2711,6 +2749,11 @@ function CashFlow() {
           <div className="stat-label">Closing Balance</div>
           <div className={`stat-value ${closingBalance >= 0 ? 'green' : 'red'}`}>{inr(closingBalance)}</div>
           <div className="stat-sub" style={{fontSize:10}}>After all future transactions</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Unutilized ITC Credit</div>
+          <div className="stat-value amber">{inr(pendingCredit)}</div>
+          <div className="stat-sub" style={{fontSize:10}}>Not yet netted against RA Bill GST</div>
         </div>
         <div className="stat-card" style={{background: alertLevel > 0 ? '#FFF7ED' : ''}}>
           <div className="stat-label">Alert Level 🔔</div>
@@ -4070,7 +4113,7 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
   const [form, setForm] = useState({
     raBillNo: nextRABillNumber(existingCount),
     scheduleId: '', client:'', projectRef:'', milestoneIndex: '',
-    amountClaimed: '', dateSubmitted: new Date().toISOString().slice(0,10),
+    amountClaimed: '', gstPct: '', dateSubmitted: new Date().toISOString().slice(0,10),
     notes: ''
   });
   const [saving, setSaving] = useState(false);
@@ -4099,9 +4142,12 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
     if(!form.scheduleId||!form.amountClaimed||!form.dateSubmitted) return;
     setSaving(true);
     try {
+      const gstPct = Number(form.gstPct)||0;
+      const gstAmount = gstPct > 0 ? Math.round(Number(form.amountClaimed) * gstPct / 100) : 0;
       await addRABill({
         ...form,
         amountClaimed: Number(form.amountClaimed),
+        gstPct: form.gstPct, gstAmount,
         amountReceived: 0,
         balancePending: Number(form.amountClaimed),
         status: 'Submitted',
@@ -4165,10 +4211,21 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
             </div>
           )}
 
-          <div className="form-group">
-            <label className="form-label">Amount Claimed (₹)</label>
-            <input className="form-input font-mono" value={form.amountClaimed} onChange={e=>set('amountClaimed',e.target.value)} placeholder="0" />
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Amount Claimed (₹)</label>
+              <input className="form-input font-mono" value={form.amountClaimed} onChange={e=>set('amountClaimed',e.target.value)} placeholder="0" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">GST % (output liability)</label>
+              <input className="form-input font-mono" value={form.gstPct} onChange={e=>set('gstPct',e.target.value)} placeholder="e.g. 18" />
+            </div>
           </div>
+          {form.amountClaimed && Number(form.gstPct)>0 && (
+            <div style={{background:'var(--primary-50)',borderRadius:6,padding:'8px 12px',fontSize:12,marginBottom:14}}>
+              GST {inr(Math.round(Number(form.amountClaimed)*Number(form.gstPct)/100))} · Total incl. GST {inr(Number(form.amountClaimed)+Math.round(Number(form.amountClaimed)*Number(form.gstPct)/100))}
+            </div>
+          )}
           <div className="form-group">
             <label className="form-label">Notes</label>
             <input className="form-input" value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Optional — scope, period, etc." />
@@ -4189,6 +4246,49 @@ function SubmitRABillModal({ onClose, schedules, existingCount }) {
 // ════════════════════════════════════════════════════
 // MODAL 3 — Record Receipt against RA Bill
 // ════════════════════════════════════════════════════
+function EditRABillGSTModal({ raBill, onClose }) {
+  const [gstPct, setGstPct] = useState(String(raBill.gstPct||''));
+  const [saving, setSaving] = useState(false);
+  const gstAmount = Number(gstPct)>0 ? Math.round(Number(raBill.amountClaimed||0)*Number(gstPct)/100) : 0;
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await updateRABill(raBill.docId, { gstPct, gstAmount });
+      onClose();
+    } catch(e) { console.error(e); alert('Could not save GST%.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:400,boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px'}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>GST — {raBill.raBillNo}</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:10}}>Amount Claimed: {inr(raBill.amountClaimed||0)}</div>
+          <div className="form-group">
+            <label className="form-label">GST % (output liability)</label>
+            <input className="form-input font-mono" value={gstPct} onChange={e=>setGstPct(e.target.value)} placeholder="e.g. 18" autoFocus />
+          </div>
+          {Number(gstPct)>0 && (
+            <div style={{background:'var(--primary-50)',borderRadius:6,padding:'8px 12px',fontSize:12}}>
+              GST {inr(gstAmount)} · Total incl. GST {inr(Number(raBill.amountClaimed||0)+gstAmount)}
+            </div>
+          )}
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="btn btn-primary" style={{opacity:saving?0.6:1}}>
+            {saving?'Saving…':'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function RecordReceiptModal({ raBill, onClose, allReceipts }) {
   const alreadyReceived = allReceipts.filter(r=>r.raBillId===raBill.docId).reduce((s,r)=>s+Number(r.amountReceived||0),0);
   const pendingBalance = Math.max(0, Number(raBill.amountClaimed||0) - alreadyReceived);
@@ -4317,6 +4417,7 @@ function Receipts() {
   const [showNewSchedule,  setShowNewSchedule]  = useState(false);
   const [showNewRABill,    setShowNewRABill]     = useState(false);
   const [recordingFor,     setRecordingFor]      = useState(null);
+  const [editingGSTFor,    setEditingGSTFor]      = useState(null);
   const [expandedSchedule, setExpandedSchedule] = useState(null);
 
   // ── Computed helpers ──
@@ -4460,7 +4561,7 @@ function Receipts() {
                         <table style={{width:'100%',background:'var(--surface)',borderRadius:6,overflow:'hidden',marginBottom:10}}>
                           <thead>
                             <tr style={{background:'var(--grey-50)'}}>
-                              {['RA Bill #','Milestone','Date','Claimed','Received','Pending','Status',''].map(h=>(
+                              {['RA Bill #','Milestone','Date','Claimed','GST','Received','Pending','Status',''].map(h=>(
                                 <th key={h} style={{fontSize:10,padding:'5px 8px',textAlign:'left',color:'var(--text-muted)'}}>{h}</th>
                               ))}
                             </tr>
@@ -4472,6 +4573,14 @@ function Receipts() {
                                 <td style={{padding:'6px 8px',fontSize:12}}>{b.milestoneName||'—'}</td>
                                 <td style={{padding:'6px 8px',fontSize:12}}>{b.dateSubmitted}</td>
                                 <td style={{padding:'6px 8px'}} className="amount">{inr(b.amountClaimed||0)}</td>
+                                <td style={{padding:'6px 8px'}}>
+                                  {Number(b.gstAmount||0)>0 ? (
+                                    <span className="amount" style={{color:'var(--primary)'}}>{inr(b.gstAmount)}</span>
+                                  ) : (
+                                    <span className="text-muted" style={{fontSize:11}}>—</span>
+                                  )}
+                                  <button className="btn btn-sm btn-ghost" style={{marginLeft:6,fontSize:10,padding:'2px 6px'}} onClick={()=>setEditingGSTFor(b)}>Edit</button>
+                                </td>
                                 <td style={{padding:'6px 8px'}} className="amount" style={{color:'var(--green)',fontWeight:600}}>{inr(b.amountReceived||0)}</td>
                                 <td style={{padding:'6px 8px'}} className="amount" style={{color:Number(b.balancePending||0)>0?'var(--red)':'var(--green)'}}>{inr(b.balancePending||0)}</td>
                                 <td style={{padding:'6px 8px'}}><span className={`badge ${RA_STATUS_COLOR[b.status]||'grey'}`}>{b.status}</span></td>
@@ -4590,6 +4699,7 @@ function Receipts() {
       {showNewSchedule && <NewBillingScheduleModal onClose={()=>setShowNewSchedule(false)} />}
       {showNewRABill   && <SubmitRABillModal onClose={()=>setShowNewRABill(false)} schedules={schedules} existingCount={raBills.length} />}
       {recordingFor    && <RecordReceiptModal raBill={recordingFor} onClose={()=>setRecordingFor(null)} allReceipts={receipts} />}
+      {editingGSTFor   && <EditRABillGSTModal raBill={editingGSTFor} onClose={()=>setEditingGSTFor(null)} />}
     </div>
   );
 }
