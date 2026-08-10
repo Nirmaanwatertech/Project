@@ -2677,8 +2677,8 @@ function CashFlow() {
         </div>
         <div className="stat-card" style={{background:'#FEF2F2'}}>
           <div className="stat-label">Total Outflows</div>
-          <div className="stat-value red">{inr(totalAdvances + totalBillsPaid + totalExpenses + totalPetty)}</div>
-          <div className="stat-sub" style={{fontSize:10}}>Advances (unadj.) {inr(totalAdvances)} · Bills (paid) {inr(totalBillsPaid)} · Exp {inr(totalExpenses + totalPetty)}</div>
+          <div className="stat-value red">{inr(totalAdvances + totalBillsPaid + totalExpenses + totalPetty + totalRepayments)}</div>
+          <div className="stat-sub" style={{fontSize:10}}>Advances (unadj.) {inr(totalAdvances)} · Bills (paid) {inr(totalBillsPaid)} · Exp {inr(totalExpenses + totalPetty)} · Repay {inr(totalRepayments)}</div>
         </div>
         <div className="stat-card" style={{background: currentBalance < 0 ? '#FEF2F2' : currentBalance < alertLevel && alertLevel > 0 ? '#FEF3C7' : '#F0FFF4', border: currentBalance < alertLevel && alertLevel > 0 ? '1px solid var(--amber)' : ''}}>
           <div className="stat-label">Current Cash Balance</div>
@@ -2738,7 +2738,7 @@ function CashFlow() {
           </div>
         </div>
         <div className="card">
-          <div className="card-header"><span className="card-title" style={{color:'var(--red)'}}>↓ Total Outflows — {inr(totalAdvances+totalBillsPaid+totalExpenses+totalPetty)}</span></div>
+          <div className="card-header"><span className="card-title" style={{color:'var(--red)'}}>↓ Total Outflows — {inr(totalAdvances+totalBillsPaid+totalExpenses+totalPetty+totalRepayments)}</span></div>
           <div className="card-body" style={{padding:'10px 16px'}}>
             {[
               {label:'Advance Payments (unadjusted)', amt:totalAdvances, icon:'💰'},
@@ -2754,7 +2754,7 @@ function CashFlow() {
             ))}
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0 0'}}>
               <span style={{fontSize:13,fontWeight:700}}>Total</span>
-              <span className="amount" style={{fontWeight:700,color:'var(--red)',fontSize:15}}>{inr(totalAdvances+totalBillsPaid+totalExpenses+totalPetty)}</span>
+              <span className="amount" style={{fontWeight:700,color:'var(--red)',fontSize:15}}>{inr(totalAdvances+totalBillsPaid+totalExpenses+totalPetty+totalRepayments)}</span>
             </div>
           </div>
         </div>
@@ -6458,6 +6458,7 @@ function Statement() {
   const { items: bills }    = useBills();
   const { items: advances } = useAdvances();
   const { items: expenses } = useExpenses();
+  const { items: petty }    = usePettyCash();
 
   const [dateFrom, setDateFrom]         = useState('');
   const [dateTo, setDateTo]             = useState('');
@@ -6530,7 +6531,11 @@ function Statement() {
 
   const totalIn  = filtered.filter(r=>r.dir==='in').reduce((s,r)=>s+r.amt,0);
   const totalOut = filtered.filter(r=>r.dir==='out').reduce((s,r)=>s+r.amt,0);
-  const net = totalIn - totalOut;
+  // Petty Cash total kept separate (all-time, same calc Cash Flow uses) since the
+  // transaction list above excludes it — net below subtracts it so this figure
+  // reconciles with Cash Flow's Current Cash Balance.
+  const totalPettyCash = petty.reduce((s,p)=>s+(Number(p.totalAmount||0)||Number(p.amount||0)),0);
+  const net = totalIn - totalOut - totalPettyCash;
 
   return (
     <div>
@@ -6541,10 +6546,11 @@ function Statement() {
         </div>
       </div>
 
-      <div className="stats-grid">
+      <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
         <div className="stat-card"><div className="stat-label">Total In</div><div className="stat-value green">{inr(totalIn)}</div></div>
         <div className="stat-card"><div className="stat-label">Total Out</div><div className="stat-value red">{inr(totalOut)}</div></div>
-        <div className="stat-card"><div className="stat-label">Net</div><div className="stat-value" style={{color: net>=0?'var(--green)':'var(--red)'}}>{inr(net)}</div></div>
+        <div className="stat-card"><div className="stat-label">Petty Cash</div><div className="stat-value red">{inr(totalPettyCash)}</div><div className="stat-sub" style={{fontSize:10}}>Not in list above</div></div>
+        <div className="stat-card"><div className="stat-label">Net (incl. Petty Cash)</div><div className="stat-value" style={{color: net>=0?'var(--green)':'var(--red)'}}>{inr(net)}</div><div className="stat-sub" style={{fontSize:10}}>Matches Cash Flow's Current Balance</div></div>
       </div>
 
       <div className="card">
@@ -6588,7 +6594,7 @@ function Statement() {
               ))}
               <tr style={{background:'var(--grey-50)',fontWeight:700,borderTop:'2px solid var(--border)'}}>
                 <td colSpan={5} style={{padding:'8px 12px',fontSize:12,color:'var(--text-secondary)'}}>Total ({filtered.length} entries) — In {inr(totalIn)} · Out {inr(totalOut)}</td>
-                <td className="amount" style={{fontWeight:700,color: net>=0?'var(--green)':'var(--red)',fontSize:13}}>{inr(net)}</td>
+                <td className="amount" style={{fontWeight:700,color: (totalIn-totalOut)>=0?'var(--green)':'var(--red)',fontSize:13}}>{inr(totalIn-totalOut)}</td>
               </tr>
             </tbody>
           </table>
