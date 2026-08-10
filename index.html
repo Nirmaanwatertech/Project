@@ -6530,9 +6530,10 @@ function Statement() {
 
   const totalIn  = filtered.filter(r=>r.dir==='in').reduce((s,r)=>s+r.amt,0);
   const totalOut = filtered.filter(r=>r.dir==='out').reduce((s,r)=>s+r.amt,0);
-  // Petty Cash shown as its own informational total only — not folded into Total Out or Net.
+  // Petty Cash shown as its own total (all-time) and factored into Net, but kept
+  // out of the Total Out figure/transaction list above.
   const totalPettyCash = petty.reduce((s,p)=>s+(Number(p.totalAmount||0)||Number(p.amount||0)),0);
-  const net = totalIn - totalOut;
+  const net = totalIn - totalOut - totalPettyCash;
 
   return (
     <div>
@@ -6546,8 +6547,8 @@ function Statement() {
       <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
         <div className="stat-card"><div className="stat-label">Total In</div><div className="stat-value green">{inr(totalIn)}</div></div>
         <div className="stat-card"><div className="stat-label">Total Out</div><div className="stat-value red">{inr(totalOut)}</div></div>
-        <div className="stat-card"><div className="stat-label">Petty Cash</div><div className="stat-value red">{inr(totalPettyCash)}</div><div className="stat-sub" style={{fontSize:10}}>Informational only — not in Total Out or Net</div></div>
-        <div className="stat-card"><div className="stat-label">Net</div><div className="stat-value" style={{color: net>=0?'var(--green)':'var(--red)'}}>{inr(net)}</div></div>
+        <div className="stat-card"><div className="stat-label">Petty Cash</div><div className="stat-value red">{inr(totalPettyCash)}</div><div className="stat-sub" style={{fontSize:10}}>Not in Total Out — included in Net</div></div>
+        <div className="stat-card"><div className="stat-label">Net (incl. Petty Cash)</div><div className="stat-value" style={{color: net>=0?'var(--green)':'var(--red)'}}>{inr(net)}</div></div>
       </div>
 
       <div className="card">
