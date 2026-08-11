@@ -4559,7 +4559,15 @@ function NewBillingProjectModal({ onClose, existing }) {
     client: existing.client||'', contractNo: existing.contractNo||'',
     contractValue: String(existing.contractValue||''), project: existing.project||'',
     split: existing.split||{pontoon:50,wtp:50},
-  } : { client:'', contractNo:'', contractValue:'', project:'', split:{pontoon:50,wtp:50} });
+    subMarginPct: String(existing.subcontract?.marginPct||''),
+    subRecoveryPct: String(existing.subcontract?.recoveryPct||''),
+    subInvestmentAmount: String(existing.subcontract?.investmentAmount||''),
+    subDepositAmount: String(existing.subcontract?.depositAmount||''),
+    subRefundPct: String(existing.subcontract?.refundPct||''),
+  } : {
+    client:'', contractNo:'', contractValue:'', project:'', split:{pontoon:50,wtp:50},
+    subMarginPct:'', subRecoveryPct:'', subInvestmentAmount:'', subDepositAmount:'', subRefundPct:'',
+  });
   const [tree, setTree] = useState(isEdit ? (existing.tree||[]) : []);
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
@@ -4570,6 +4578,11 @@ function NewBillingProjectModal({ onClose, existing }) {
     if (!form.client) set('client','Oil India Limited');
     if (!form.contractNo) set('contractNo','6118456');
     if (!form.project) set('project','Pontoon');
+    set('subMarginPct','11');
+    set('subRecoveryPct','20');
+    set('subInvestmentAmount','42349000');
+    set('subDepositAmount','21174500');
+    set('subRefundPct','10');
   }
   function loadWtpTemplate() {
     setTree(wtpSeedTree());
@@ -4592,7 +4605,15 @@ function NewBillingProjectModal({ onClose, existing }) {
     if(!form.client.trim()||!tree.length) return;
     setSaving(true);
     try {
-      const data = { ...form, contractValue: Number(form.contractValue)||0, tree: tree.filter(n=>n.name.trim()) };
+      const { subMarginPct, subRecoveryPct, subInvestmentAmount, subDepositAmount, subRefundPct, ...rest } = form;
+      const subcontract = subMarginPct ? {
+        marginPct: Number(subMarginPct)||0,
+        recoveryPct: Number(subRecoveryPct)||0,
+        investmentAmount: Number(subInvestmentAmount)||0,
+        depositAmount: Number(subDepositAmount)||0,
+        refundPct: Number(subRefundPct)||0,
+      } : null;
+      const data = { ...rest, contractValue: Number(form.contractValue)||0, tree: tree.filter(n=>n.name.trim()), subcontract };
       if (isEdit) await updateBillingSchedule(existing.docId, data);
       else await addBillingSchedule(data);
       onClose();
@@ -4650,6 +4671,36 @@ function NewBillingProjectModal({ onClose, existing }) {
               ))}
             </div>
             <button type="button" onClick={addRootSchedule} className="btn btn-sm btn-outline" style={{marginTop:8}}>+ Add Schedule</button>
+          </div>
+
+          <div style={{borderTop:'1px solid var(--border)',paddingTop:14,marginTop:14}}>
+            <label className="form-label" style={{marginBottom:8,display:'block'}}>
+              Subcontract Terms <span style={{fontWeight:400,color:'var(--text-muted)'}}>(optional — leave blank if payments are received directly, no subcontractor split)</span>
+            </label>
+            <div className="form-grid">
+              <div className="form-group">
+                <label className="form-label">Margin % (always applies)</label>
+                <input className="form-input font-mono" value={form.subMarginPct} onChange={e=>set('subMarginPct',e.target.value)} placeholder="e.g. 11" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Recovery % (extra, until investment recovered)</label>
+                <input className="form-input font-mono" value={form.subRecoveryPct} onChange={e=>set('subRecoveryPct',e.target.value)} placeholder="e.g. 20" />
+              </div>
+            </div>
+            <div className="form-grid">
+              <div className="form-group">
+                <label className="form-label">Investment Amount to Recover (₹)</label>
+                <input className="form-input font-mono" value={form.subInvestmentAmount} onChange={e=>set('subInvestmentAmount',e.target.value)} placeholder="0" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Security Deposit Paid (₹)</label>
+                <input className="form-input font-mono" value={form.subDepositAmount} onChange={e=>set('subDepositAmount',e.target.value)} placeholder="0" />
+              </div>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Security Deposit Refund % (per bill, until fully refunded)</label>
+              <input className="form-input font-mono" style={{maxWidth:200}} value={form.subRefundPct} onChange={e=>set('subRefundPct',e.target.value)} placeholder="e.g. 10" />
+            </div>
           </div>
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
@@ -4979,51 +5030,89 @@ function EditRABillGSTModal({ raBill, onClose }) {
   );
 }
 
-function RecordReceiptModal({ raBill, onClose, allReceipts }) {
-  const alreadyReceived = allReceipts.filter(r=>r.raBillId===raBill.docId).reduce((s,r)=>s+Number(r.amountReceived||0),0);
-  const pendingBalance = Math.max(0, Number(raBill.amountClaimed||0) - alreadyReceived);
+function RecordReceiptModal({ raBill, onClose, allReceipts, billingProjects }) {
+  const project = (billingProjects||[]).find(p=>p.docId===raBill.billingProjectId);
+  const sub = project?.subcontract || null;
+
+  // Track progress against the bill's base (excl. GST) value separately from actual
+  // cash received — with a subcontract split, these are very different numbers.
+  const alreadySettled = allReceipts.filter(r=>r.raBillId===raBill.docId)
+    .reduce((s,r)=>s+Number(r.billAmountSettled!==undefined ? r.billAmountSettled : r.amountReceived||0),0);
+  const pendingBalance = Math.max(0, Number(raBill.amountClaimed||0) - alreadySettled);
+
+  // Cumulative VPRPL recovery/refund already applied across every receipt on this
+  // billing project (any RA bill), so the calculator knows which phase it's in.
+  const projectReceipts = sub ? (allReceipts||[]).filter(r=>r.billingProjectId===raBill.billingProjectId) : [];
+  const recoveredSoFar = projectReceipts.reduce((s,r)=>s+Number(r.vprplRecoveryAmt||0),0);
+  const refundedSoFar  = projectReceipts.reduce((s,r)=>s+Number(r.vprplRefundAmt||0),0);
+  const remainingInvestment = sub ? Math.max(0, sub.investmentAmount - recoveredSoFar) : 0;
+  const remainingDeposit    = sub ? Math.max(0, sub.depositAmount - refundedSoFar) : 0;
 
   const [form, setForm] = useState({
-    amountReceived: String(pendingBalance),
+    baseAmount: String(pendingBalance), amountReceived: String(pendingBalance),
+    tdsIT: '', tdsGST: '', labourCess: '', otherDeduction: '',
     dateReceived: new Date().toISOString().slice(0,10),
     paymentMode: 'NEFT', refNumber: '', notes: ''
   });
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
 
+  // ── VPRPL settlement calculator (Annexure-2) — only active when subcontract terms exist ──
+  const gstPct = Number(raBill.gstPct) || 18;
+  const base = Number(form.baseAmount)||0;
+  const gst = Math.round(base * gstPct/100);
+  const tdsIT = Number(form.tdsIT)||0;
+  const tdsGST = Number(form.tdsGST)||0;
+  const labourCess = Number(form.labourCess)||0;
+  const otherDed = Number(form.otherDeduction)||0;
+  const totalDeductions = tdsIT+tdsGST+labourCess+otherDed;
+  const paymentRecvExclGst = base - totalDeductions;
+  const marginAmt = sub ? Math.round(base * sub.marginPct/100) : 0;
+  const recoveryAmt = sub ? Math.min(Math.round(base * sub.recoveryPct/100), remainingInvestment) : 0;
+  const inRecoveryPhase = sub && remainingInvestment > 0;
+  const vprplCut = marginAmt + recoveryAmt;
+  const balancePaymentExclGst = paymentRecvExclGst - vprplCut;
+  const subContractedExclGst = balancePaymentExclGst + tdsGST;
+  const gstOnSub = Math.round(subContractedExclGst * gstPct/100);
+  const subContractedInclGst = subContractedExclGst + gstOnSub;
+  const performanceSecurity = sub ? Math.round(base * 0.03) : 0;
+  const refundAmt = sub ? Math.min(Math.round(base * sub.refundPct/100), remainingDeposit) : 0;
+  const grossPayableInclGst = subContractedInclGst - performanceSecurity + refundAmt;
+  const itTdsOnSub = Math.round(subContractedExclGst * 0.02);
+  const netAmountToBank = grossPayableInclGst - itTdsOnSub;
+
   const newBalance = Math.max(0, pendingBalance - Number(form.amountReceived||0));
   const isShort = Number(form.amountReceived||0) < pendingBalance;
   const isOver = Number(form.amountReceived||0) > pendingBalance;
+  const baseIsShort = base < pendingBalance;
+  const baseIsOver = base > pendingBalance;
 
   async function handleSave(){
-    if(!form.amountReceived||!form.dateReceived) return;
+    if(!form.dateReceived) return;
+    if (sub && !form.baseAmount) return;
+    if (!sub && !form.amountReceived) return;
     setSaving(true);
     try {
-      const amt = Number(form.amountReceived);
+      const settled = sub ? base : Number(form.amountReceived);
+      const finalAmount = sub ? netAmountToBank : Number(form.amountReceived);
       await addReceipt({
-        raBillId:        raBill.docId,
-        raBillNo:        raBill.raBillNo,
-        billingProjectId:raBill.billingProjectId,
-        leafId:          raBill.leafId,
-        leafPath:        raBill.leafPath,
-        client:          raBill.client,
-        project:         raBill.project || '',
-        amountClaimed:   raBill.amountClaimed,
-        amountReceived:  amt,
-        dateReceived:    form.dateReceived,
-        paymentMode:     form.paymentMode,
-        refNumber:       form.refNumber,
-        notes:           form.notes,
+        raBillId: raBill.docId, raBillNo: raBill.raBillNo,
+        billingProjectId: raBill.billingProjectId, leafId: raBill.leafId, leafPath: raBill.leafPath,
+        client: raBill.client, project: raBill.project||'',
+        amountClaimed: raBill.amountClaimed,
+        billAmountSettled: settled,
+        amountReceived: finalAmount,
+        dateReceived: form.dateReceived, paymentMode: form.paymentMode, refNumber: form.refNumber, notes: form.notes,
+        ...(sub ? {
+          vprplGst: gst, vprplTdsIT: tdsIT, vprplTdsGST: tdsGST, vprplLabourCess: labourCess, vprplOtherDeduction: otherDed,
+          vprplMarginAmt: marginAmt, vprplRecoveryAmt: recoveryAmt, vprplPerformanceSecurity: performanceSecurity,
+          vprplRefundAmt: refundAmt, vprplItTds: itTdsOnSub, vprplNetAmount: netAmountToBank,
+        } : {})
       });
-      // Update RA Bill received total and status
-      const totalReceived = alreadyReceived + amt;
-      const newPending = Math.max(0, Number(raBill.amountClaimed||0) - totalReceived);
+      const totalSettled = alreadySettled + settled;
+      const newPending = Math.max(0, Number(raBill.amountClaimed||0) - totalSettled);
       const status = newPending <= 0 ? 'Fully Received' : 'Partially Received';
-      await updateRABill(raBill.docId, {
-        amountReceived: totalReceived,
-        balancePending: newPending,
-        status
-      });
+      await updateRABill(raBill.docId, { amountReceived: totalSettled, balancePending: newPending, status });
       onClose();
     } catch(e){ console.error(e); alert('Could not record receipt.'); }
     finally{ setSaving(false); }
@@ -5031,8 +5120,8 @@ function RecordReceiptModal({ raBill, onClose, allReceipts }) {
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:480,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
-        <div style={{background:'var(--green)',padding:'14px 18px'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:560,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--green)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
           <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>✓ Record Receipt — {raBill.raBillNo}</span>
         </div>
         <div style={{padding:'18px 20px'}}>
@@ -5040,28 +5129,93 @@ function RecordReceiptModal({ raBill, onClose, allReceipts }) {
           <div style={{background:'var(--green-50)',border:'1px solid #C8E6C9',borderRadius:6,padding:'10px 14px',fontSize:12,marginBottom:16}}>
             <div style={{fontWeight:700,fontSize:12.5,marginBottom:6,color:'var(--green)'}}>Cross-Reference</div>
             <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Client</span><strong>{raBill.client}</strong></div>
-            <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Project</span><span>{raBill.project||'—'}</span></div>
             <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Claimed Against</span><span style={{textAlign:'right',maxWidth:220}}>{raBill.leafPath||'—'}</span></div>
-            <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>RA Bill No.</span><span className="mono">{raBill.raBillNo}</span></div>
             <div style={{borderTop:'1px solid #C8E6C9',marginTop:8,paddingTop:8}}>
-              <div className="flex justify-between"><span style={{color:'var(--text-muted)'}}>Total Claimed</span><span className="amount fw-600">{inr(raBill.amountClaimed||0)}</span></div>
-              <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Already Received</span><span className="amount" style={{color:'var(--green)'}}>{inr(alreadyReceived)}</span></div>
+              <div className="flex justify-between"><span style={{color:'var(--text-muted)'}}>Total Claimed (excl. GST)</span><span className="amount fw-600">{inr(raBill.amountClaimed||0)}</span></div>
+              <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Already Settled</span><span className="amount" style={{color:'var(--green)'}}>{inr(alreadySettled)}</span></div>
               <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Balance Pending</span><span className="amount fw-600" style={{color:'var(--red)'}}>{inr(pendingBalance)}</span></div>
             </div>
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Amount Received Now (₹)</label>
-            <input className="form-input font-mono" value={form.amountReceived}
-              onChange={e=>set('amountReceived',e.target.value)} autoFocus />
-            {form.amountReceived && (
-              <div style={{fontSize:11.5,marginTop:4,color:isOver?'var(--amber)':isShort?'var(--primary)':'var(--green)',fontWeight:500}}>
-                {isOver  && `⚠ Exceeds balance by ${inr(Number(form.amountReceived)-pendingBalance)}`}
-                {isShort && `Partial payment — balance remaining: ${inr(newBalance)}`}
-                {!isOver && !isShort && '✓ Full balance cleared'}
+          {sub && (
+            <div style={{background:'var(--primary-50)',border:'1px solid var(--primary)',borderRadius:6,padding:'10px 14px',fontSize:11.5,marginBottom:16}}>
+              <div className="flex justify-between"><span>VPRPL Investment Remaining</span><span className="amount fw-600">{inr(remainingInvestment)}</span></div>
+              <div className="flex justify-between mt-1"><span>Security Deposit Remaining</span><span className="amount fw-600">{inr(remainingDeposit)}</span></div>
+              <div style={{marginTop:4,color:'var(--primary)',fontWeight:600}}>
+                {inRecoveryPhase ? `Currently in recovery phase — ${sub.marginPct+sub.recoveryPct}% total (${sub.marginPct}% margin + ${sub.recoveryPct}% recovery)` : `Investment fully recovered — ${sub.marginPct}% margin only`}
               </div>
-            )}
-          </div>
+            </div>
+          )}
+
+          {!sub ? (
+            <div className="form-group">
+              <label className="form-label">Amount Received Now (₹)</label>
+              <input className="form-input font-mono" value={form.amountReceived}
+                onChange={e=>set('amountReceived',e.target.value)} autoFocus />
+              {form.amountReceived && (
+                <div style={{fontSize:11.5,marginTop:4,color:isOver?'var(--amber)':isShort?'var(--primary)':'var(--green)',fontWeight:500}}>
+                  {isOver  && `⚠ Exceeds balance by ${inr(Number(form.amountReceived)-pendingBalance)}`}
+                  {isShort && `Partial payment — balance remaining: ${inr(newBalance)}`}
+                  {!isOver && !isShort && '✓ Full balance cleared'}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="form-group">
+                <label className="form-label">Bill Amount Settled Now (₹, excl. GST)</label>
+                <input className="form-input font-mono" value={form.baseAmount} onChange={e=>set('baseAmount',e.target.value)} autoFocus />
+                {form.baseAmount && (
+                  <div style={{fontSize:11.5,marginTop:4,color:baseIsOver?'var(--amber)':baseIsShort?'var(--primary)':'var(--green)',fontWeight:500}}>
+                    {baseIsOver  && `⚠ Exceeds balance by ${inr(base-pendingBalance)}`}
+                    {baseIsShort && `Partial — balance remaining: ${inr(pendingBalance-base)}`}
+                    {!baseIsOver && !baseIsShort && '✓ Full balance cleared'}
+                  </div>
+                )}
+              </div>
+              <div className="form-grid">
+                <div className="form-group">
+                  <label className="form-label">TDS - IT (₹)</label>
+                  <input className="form-input font-mono" value={form.tdsIT} onChange={e=>set('tdsIT',e.target.value)} placeholder="0" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">TDS - GST (₹)</label>
+                  <input className="form-input font-mono" value={form.tdsGST} onChange={e=>set('tdsGST',e.target.value)} placeholder="0" />
+                </div>
+              </div>
+              <div className="form-grid">
+                <div className="form-group">
+                  <label className="form-label">Labour Cess (₹)</label>
+                  <input className="form-input font-mono" value={form.labourCess} onChange={e=>set('labourCess',e.target.value)} placeholder="0" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Any Other Deduction (₹)</label>
+                  <input className="form-input font-mono" value={form.otherDeduction} onChange={e=>set('otherDeduction',e.target.value)} placeholder="0" />
+                </div>
+              </div>
+
+              {base>0 && (
+                <div style={{border:'1px solid var(--border)',borderRadius:6,padding:'10px 14px',fontSize:11.5,marginBottom:16}}>
+                  <div style={{fontWeight:700,marginBottom:6}}>Settlement Breakdown</div>
+                  <div className="flex justify-between mt-1"><span>GST @ {gstPct}%</span><span className="amount">{inr(gst)}</span></div>
+                  <div className="flex justify-between mt-1"><span>Total Deductions</span><span className="amount">{inr(totalDeductions)}</span></div>
+                  <div className="flex justify-between mt-1"><span>Payment Received (excl. GST)</span><span className="amount">{inr(paymentRecvExclGst)}</span></div>
+                  <div className="flex justify-between mt-1" style={{color:'var(--primary)'}}><span>VPRPL Margin ({sub.marginPct}%)</span><span className="amount">{inr(marginAmt)}</span></div>
+                  {recoveryAmt>0 && <div className="flex justify-between mt-1" style={{color:'var(--primary)'}}><span>VPRPL Investment Recovery</span><span className="amount">{inr(recoveryAmt)}</span></div>}
+                  <div className="flex justify-between mt-1"><span>Balance Payment (excl. GST)</span><span className="amount">{inr(balancePaymentExclGst)}</span></div>
+                  <div className="flex justify-between mt-1"><span>Sub-Contracted Value incl. GST</span><span className="amount">{inr(subContractedInclGst)}</span></div>
+                  <div className="flex justify-between mt-1" style={{color:'var(--amber)'}}><span>Less Performance Security (3%)</span><span className="amount">−{inr(performanceSecurity)}</span></div>
+                  {refundAmt>0 && <div className="flex justify-between mt-1" style={{color:'var(--green)'}}><span>Add Security Deposit Refund</span><span className="amount">+{inr(refundAmt)}</span></div>}
+                  <div className="flex justify-between mt-1" style={{color:'var(--amber)'}}><span>Less IT-TDS on Sub-Contractor (2%)</span><span className="amount">−{inr(itTdsOnSub)}</span></div>
+                  <div style={{borderTop:'1px solid var(--border)',marginTop:6,paddingTop:6}} className="flex justify-between">
+                    <span style={{fontWeight:700}}>Net Amount to Bank Account</span>
+                    <span className="amount fw-600" style={{color:'var(--green)',fontSize:14}}>{inr(netAmountToBank)}</span>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Date Received</label>
@@ -5085,8 +5239,8 @@ function RecordReceiptModal({ raBill, onClose, allReceipts }) {
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleSave} disabled={saving||!form.amountReceived||!form.dateReceived} className="btn btn-primary"
-            style={{background:'var(--green)',opacity:saving||!form.amountReceived||!form.dateReceived?0.6:1}}>
+          <button onClick={handleSave} disabled={saving||!form.dateReceived||(sub?!form.baseAmount:!form.amountReceived)} className="btn btn-primary"
+            style={{background:'var(--green)',opacity:saving||!form.dateReceived||(sub?!form.baseAmount:!form.amountReceived)?0.6:1}}>
             {saving?'Saving…':'Record Receipt'}
           </button>
         </div>
@@ -5327,7 +5481,7 @@ function Receipts() {
           presetProjectId={claimContext.projectId} presetLeafId={claimContext.leafId}
         />
       )}
-      {recordingFor     && <RecordReceiptModal raBill={recordingFor} onClose={()=>setRecordingFor(null)} allReceipts={receipts} />}
+      {recordingFor     && <RecordReceiptModal raBill={recordingFor} onClose={()=>setRecordingFor(null)} allReceipts={receipts} billingProjects={schedules} />}
       {editingGSTFor    && <EditRABillGSTModal raBill={editingGSTFor} onClose={()=>setEditingGSTFor(null)} />}
     </div>
   );
