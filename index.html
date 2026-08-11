@@ -4717,6 +4717,48 @@ function NewBillingProjectModal({ onClose, existing }) {
 
 // Opening balance ("Point 0") entry — one-time, per leaf, for work already claimed/
 // received before this system existed. Not logged as a dated transaction anywhere.
+// Recursive collapsible row for the Opening Balance table — same tree shape and
+// column layout as the billing schedule itself; only leaf rows are editable.
+function OpeningBalanceRow({ node, depth, values, set, expanded, toggleExpanded }) {
+  const leaf = isLeafNode(node);
+  const rollupCap = leaf ? Number(node.capAmount||0) : (node.children||[]).reduce((s,c)=>s+nodeCapSum(c),0);
+  const isOpen = leaf ? true : expanded[node.id]!==false;
+  return (
+    <>
+      <tr style={{borderTop:'1px solid var(--grey-50)',background:depth===0?'var(--grey-100)':leaf?'':'var(--grey-50)'}}>
+        <td style={{padding:'6px 8px',paddingLeft:8+depth*18,fontSize:depth===0?12.5:12,fontWeight:depth===0?700:leaf?400:600}}>
+          {!leaf && (
+            <span onClick={()=>toggleExpanded(node.id)} style={{cursor:'pointer',marginRight:6,color:'var(--text-muted)',display:'inline-block',width:12}}>
+              {isOpen?'▾':'▸'}
+            </span>
+          )}
+          {node.name}
+        </td>
+        <td style={{padding:'6px 8px',fontSize:11.5,color:'var(--text-muted)'}}>{node.wtPct?`${node.wtPct}%`:''}</td>
+        <td style={{padding:'6px 8px'}} className="amount">{inr(rollupCap)}</td>
+        <td style={{padding:'6px 4px'}}>
+          {leaf && (
+            <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px',width:110}}
+              value={values[node.id]?.claimed||''} onChange={e=>set(node.id,'claimed',e.target.value)} placeholder="0" />
+          )}
+        </td>
+        <td style={{padding:'6px 4px'}}>
+          {leaf && (
+            <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px',width:110}}
+              value={values[node.id]?.received||''} onChange={e=>set(node.id,'received',e.target.value)} placeholder="0" />
+          )}
+        </td>
+      </tr>
+      {!leaf && isOpen && (node.children||[]).map(c=>(
+        <OpeningBalanceRow key={c.id} node={c} depth={depth+1} values={values} set={set} expanded={expanded} toggleExpanded={toggleExpanded} />
+      ))}
+    </>
+  );
+}
+function nodeCapSum(n) {
+  return isLeafNode(n) ? Number(n.capAmount||0) : (n.children||[]).reduce((s,c)=>s+nodeCapSum(c),0);
+}
+
 function OpeningBalanceModal({ project, onClose }) {
   const leaves = flattenLeaves(project.tree);
   const [values, setValues] = useState(() => {
@@ -4724,10 +4766,15 @@ function OpeningBalanceModal({ project, onClose }) {
     leaves.forEach(l => { v[l.id] = { claimed: String(l.openingClaimed||''), received: String(l.openingReceived||'') }; });
     return v;
   });
+  const [expanded, setExpanded] = useState({});
   const [saving, setSaving] = useState(false);
   function set(leafId, field, val) {
     setValues(s => ({ ...s, [leafId]: { ...s[leafId], [field]: val } }));
   }
+  function toggleExpanded(id) { setExpanded(e=>({...e,[id]: e[id]===false ? true : false})); }
+
+  const totalClaimed = leaves.reduce((s,l)=>s+(Number(values[l.id]?.claimed)||0),0);
+  const totalReceived = leaves.reduce((s,l)=>s+(Number(values[l.id]?.received)||0),0);
 
   async function handleSave() {
     setSaving(true);
@@ -4749,26 +4796,35 @@ function OpeningBalanceModal({ project, onClose }) {
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{background:'var(--surface)',borderRadius:10,width:640,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:820,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 8px 40px rgba(0,0,0,.22)'}} onClick={e=>e.stopPropagation()}>
         <div style={{background:'var(--primary)',padding:'14px 18px',position:'sticky',top:0,zIndex:1}}>
           <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Opening Balances ("Point 0") — {project.client}</span>
         </div>
         <div style={{padding:'14px 18px'}}>
           <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:12}}>
-            Enter what's already been claimed/received against each line item before this system started tracking it. This is a one-time snapshot — it reduces the remaining balance but isn't logged as a dated transaction.
+            Enter what's already been claimed/received against each line item before this system started tracking it — same layout as the billing schedule, click ▾/▸ to expand or collapse a section. This is a one-time snapshot, not a dated transaction.
           </div>
-          {leaves.map(l => (
-            <div key={l.id} style={{borderBottom:'1px solid var(--grey-50)',padding:'8px 0'}}>
-              <div style={{fontSize:11.5,fontWeight:600,marginBottom:2}}>{l.path.join(' → ')}</div>
-              <div style={{fontSize:10.5,color:'var(--text-muted)',marginBottom:6}}>Cap: {inr(l.capAmount||0)}</div>
-              <div className="flex gap-2">
-                <input className="form-input font-mono" style={{fontSize:12,padding:'5px 7px'}} value={values[l.id]?.claimed||''}
-                  onChange={e=>set(l.id,'claimed',e.target.value)} placeholder="Already claimed ₹" />
-                <input className="form-input font-mono" style={{fontSize:12,padding:'5px 7px'}} value={values[l.id]?.received||''}
-                  onChange={e=>set(l.id,'received',e.target.value)} placeholder="Already received ₹" />
-              </div>
-            </div>
-          ))}
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%',minWidth:680}}>
+              <thead>
+                <tr style={{background:'var(--grey-100)'}}>
+                  {['Description of Work','Wt%','Cap (excl. GST)','Opening Claimed (₹)','Opening Received (₹)'].map(h=>(
+                    <th key={h} style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {project.tree.map(n=>(
+                  <OpeningBalanceRow key={n.id} node={n} depth={0} values={values} set={set} expanded={expanded} toggleExpanded={toggleExpanded} />
+                ))}
+                <tr style={{background:'var(--grey-50)',fontWeight:700,borderTop:'2px solid var(--border)'}}>
+                  <td colSpan={3} style={{padding:'8px 8px',fontSize:12}}>Total</td>
+                  <td style={{padding:'8px 4px'}} className="amount">{inr(totalClaimed)}</td>
+                  <td style={{padding:'8px 4px'}} className="amount">{inr(totalReceived)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
         <div style={{padding:'0 18px 18px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
