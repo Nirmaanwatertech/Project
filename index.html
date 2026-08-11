@@ -4113,6 +4113,163 @@ function pontoonSeedTree() {
   ];
 }
 
+// WTP billing breakup, parsed and verified from the OIL India approved
+// "Schedule & Billing Breakup" (Contract No. 6118439, 8 MGD WTP, Duliajan).
+// Every subtotal ties out against its parent (rounding-level only) and the
+// grand total (₹64,02,00,500) matches exactly. Schedule 3's item/sub-item
+// breakdown was not yet approved by PMC/OIL at time of upload, so it's kept
+// as a single leaf for now, same as Pontoon's Schedule 2.
+// WTP billing breakup, parsed and verified from the OIL India approved
+// "Schedule & Billing Breakup" (Contract No. 6118439, 8 MGD WTP, Duliajan).
+// Every subtotal ties out against its parent (rounding-level only) and the
+// grand total (₹64,02,00,500) matches exactly. Schedule 3's item/sub-item
+// breakdown was not yet approved by PMC/OIL at time of upload, so it's kept
+// as a single leaf for now, same as Pontoon's Schedule 2.
+function wtpSeedTree() {
+  const leaf = (name, wtPct, capAmount) => ({ id: genRowId(), name, wtPct, capAmount, children: [], openingClaimed: 0, openingReceived: 0 });
+  const branch = (name, wtPct, capAmount, children) => ({ id: genRowId(), name, wtPct, capAmount, children });
+  return [
+    branch('Schedule 1: Clearance/Development of site by demolishing an old 1.5 MGD WTP located at site of 8MGD WTP', 1.00, 6402005.0, [
+      leaf('A. Decommissioning, Removal, Lifting and Transportation of Mechanical Equipment & Piping', 25.00, 1600501.25),
+      leaf('B. Decommissioning, Removal, Lifting and Transportation of Electrical Equipment & Cabling', 25.00, 1600501.25),
+      leaf('C. Demolition Removal, Lifting and Transportation of civil Structures', 25.00, 1600501.25),
+      leaf('D. Site Clearance/Site Development for construction of 8 MGD WTP', 25.00, 1600501.25),
+    ]),
+    branch('Schedule 2: Design and Detailed Engineering of 8 MGD capacity WTP', 6.00, 38412030.0, [
+      leaf('A. Residual Process Design', 10.00, 3841203.0),
+      leaf('B. Details Design & Engineering', 40.00, 15364812.0),
+      leaf('C. Vendors final documents for supply item duly certified', 40.00, 15364812.0),
+      leaf('D. As Built Documentation', 10.00, 3841203.0),
+    ]),
+    leaf('Schedule 3: Procurement Supply, Installation and Testing for Mechanical, Electrical & Instrumentation Portion (breakdown pending PMC/OIL approval)', 30.00, 192060150.0),
+    branch('Schedule 4: Construction/Installation for Civil Portion of 8 MGD capacity WTP', 23.00, 147246115.0, [
+      branch('A. Area Grading & soil filling from NGL to FGL (119.5 to 121)', 9.80, 14430119.27, [
+        leaf('1. On 50% completion', 50.00, 7215059.64),
+        leaf('2. On 100% completion', 50.00, 7215059.64),
+      ]),
+      branch('B. Construction of Inlet Chamber, Parshall Flume, Flash Mixer, clarified water connecting channel', 10.00, 14724611.5, [
+        leaf('1. Supply Items for Civil', 10.00, 1472461.15),
+        leaf('2. Pile up to cutoff level', 20.00, 2944922.3),
+        leaf('3. Pile cap i/c plinth beam', 15.00, 2208691.73),
+        leaf('4. On completion column & beam upto slab bottom height/ top height', 15.00, 2208691.73),
+        leaf('5. On completion of stair & channel wall', 15.00, 2208691.73),
+        leaf('6. Overall completion', 25.00, 3681152.88),
+      ]),
+      branch('C. Construction of Central shaft at clariflocculator-1, Clarifocculator inlet pipe, Flocculator Zone, Clarifier Zone & Launder', 16.00, 23559378.4, [
+        leaf('1. Supply Items for Civil', 10, 2355937.84),
+        leaf('2. Pile up to cutoff level', 20, 4711875.68),
+        leaf('3. Pile cap i/c plinth beam', 15, 3533906.76),
+        leaf('4. On completion of bottom raft', 15, 3533906.76),
+        leaf('5. On completion of flocculator walls & Center saft', 7.5, 1766953.38),
+        leaf('6. On completion of clarifier half walls', 7.5, 1766953.38),
+        leaf('7. On completion of Wall upto full height', 7.5, 1766953.38),
+        leaf('8. On completion of Channel wall, walkway & Staircase', 17.5, 4122891.22),
+      ]),
+      branch('D. Construction of Central shaft at clariflocculator-2, Clarifocculator inlet pipe, Flocculator Zone, Clarifier Zone & Launder', 16.00, 23559378.4, [
+        leaf('1. Supply Items for Civil', 10, 2355937.84),
+        leaf('2. Pile up to cutoff level', 20, 4711875.68),
+        leaf('3. Pile cap i/c plinth beam', 15, 3533906.76),
+        leaf('4. On completion of bottom raft', 15, 3533906.76),
+        leaf('5. On completion of flocculator walls & Center saft', 7.5, 1766953.38),
+        leaf('6. On completion of clarifier half walls', 7.5, 1766953.38),
+        leaf('7. On completion of Wall upto full height', 7.5, 1766953.38),
+        leaf('8. On completion of Channel wall, walkway & Staircase', 17.5, 4122891.22),
+      ]),
+      branch('E. Construction of Plant Room (Reception, office, Conference Room, HT PANEL & LT PANEL ROOM, STORE, UPS ROOM, BATTERY ROOM, PLC, SCADA, LAB, PANTRY TOILET) Security Room', 10.00, 14724611.5, [
+        leaf('1. Supply Items for Civil', 10, 1472461.15),
+        leaf('2. Pile up to cutoff level', 20, 2944922.3),
+        leaf('3. Pile cap i/c plinth beam', 5, 736230.58),
+        leaf('4. Column Plinth Beam to roof level- 1st floor', 5, 736230.58),
+        leaf('5. 1st floor Roof Slab', 5, 736230.58),
+        leaf('6. Column completion work 1st floor slab to 2nd floor bottom of slab', 5, 736230.58),
+        leaf('7. 2nd floor Roof Slab', 5, 736230.58),
+        leaf('8. On completion of brick work & Plaster -1st floor', 5, 736230.58),
+        leaf('9. On completion of brick work & Plaster -2nd floor', 5, 736230.58),
+        leaf('10. On completion of flooring', 20, 2944922.3),
+        leaf('11. On completion of door windows, steps fixtures, lightening arrestor and any other finishing works', 15, 2208691.73),
+      ]),
+      branch('F. Construction of Submerged UF Building', 5.00, 7362305.75, [
+        leaf('1. Supply Items for Civil', 25, 1840576.44),
+        leaf('2. Pile up to cutoff level', 20, 1472461.15),
+        leaf('3. Pile cap i/c plinth beam', 10, 736230.58),
+        leaf('4. Column Plinth Beam to roof', 5, 368115.29),
+        leaf('5. Complition of UF Tank', 5, 368115.29),
+        leaf('6. On completion of top slab', 10, 736230.58),
+        leaf('7. On completion of Brick & Plastering work', 12.5, 920288.22),
+        leaf('8. On completion of door windows, steps fixtures, lightening arrestor and any other finishing works', 12.5, 920288.22),
+      ]),
+      branch('G. Construction Treated Water Tank with Pump House', 24.00, 35339067.6, [
+        leaf('1. Supply Items for Civil', 10, 3533906.76),
+        leaf('2. CWR Pile Foundation up to Bottam raft- Compartment A', 13, 4594078.79),
+        leaf('3. CWR Bottam Raft -Compartment A', 2.5, 883476.69),
+        leaf('4. CWR Compartment A - Half Height RCC wall completion', 2.5, 883476.69),
+        leaf('5. CWR Compartment A - Full Height RCC wall completion', 2.5, 883476.69),
+        leaf('6. CWR Compartment A - Roof Completion', 5, 1766953.38),
+        leaf('7. CWR Pile Foundation up to Bottam raft- Compartment B', 13, 4594078.79),
+        leaf('8. CWR Bottam Raft -Compartment B', 2.5, 883476.69),
+        leaf('9. CWR Compartment B - Half Height RCC wall completion', 2.5, 883476.69),
+        leaf('10. CWR Compartment B - Full Height RCC wall completion', 2.5, 883476.69),
+        leaf('11. CWR Compartment B - Roof Completion', 5, 1766953.38),
+        leaf('12. Pump House - Pile Foundation up to Bottam raft', 10, 3533906.76),
+        leaf('13. Pump House - Completion of Bottam raft', 2.5, 883476.69),
+        leaf('14. Pump House - Completion of RCC Wall', 2.5, 883476.69),
+        leaf('16. Pump House - Completion of Column & roof', 4.5, 1590258.04),
+        leaf('17. Pump House - Completion of Brick Work & Plastering work', 2.5, 883476.69),
+        leaf('18. Stair Case, Pump foundation etc', 1, 353390.68),
+        leaf('19. On completion of finishing items', 16, 5654250.82),
+      ]),
+      branch('H. Construction of Chemical House', 3.50, 5153614.03, [
+        leaf('1. Supply Items for Civil', 10, 515361.4),
+        leaf('2. Pile up to cutoff level', 20, 1030722.81),
+        leaf('3. Pile cap i/c plinth beam', 20, 1030722.81),
+        leaf('4. Column Plinth Beam to roof', 20, 1030722.81),
+        leaf('5. Completion of Roof', 10, 515361.4),
+        leaf('6. Completion of Brick Work & Plastering', 10, 515361.4),
+        leaf('7. On completion of finishing items', 10, 515361.4),
+      ]),
+      branch('I. Construction of Neutrilization Tank', 2.00, 2944922.3, [
+        leaf('1. Supply Items for Civil', 10, 294492.23),
+        leaf('2. Pile up to cutoff level', 20, 588984.46),
+        leaf('3. Pile cap i/c plinth beam/ Bottom Raft', 15, 441738.35),
+        leaf('4. Completion of RCC Wall up half height', 20, 588984.46),
+        leaf('5. Completion of RCC Wall up Full height', 20, 588984.46),
+        leaf('6. On completion of finishing items', 15, 441738.35),
+      ]),
+      branch('J. Construction of Drop Chamber', 1.20, 1766953.38, [
+        leaf('1. Supply Items for Civil', 10, 176695.34),
+        leaf('2. Foundation up to Plinth Beam', 20, 353390.68),
+        leaf('3. Bottam Raft', 10, 176695.34),
+        leaf('4. Completion of RCC Wall', 20, 353390.68),
+        leaf('5. Completion of Channel', 20, 353390.68),
+        leaf('6. On completion of finishing items', 20, 353390.68),
+      ]),
+      branch('K. Construction of Transformer Yard, DG Foundation & other foundation', 0.50, 736230.58, [
+        leaf('1. Supply Items for Civil', 10, 73623.06),
+        leaf('2. On Completion of foundation for Transformer & DG Set', 60, 441738.35),
+        leaf('3. On completion of Fencing, Plinth Protection & Painting as per scope of work', 30, 220869.17),
+      ]),
+      branch('L. Construction of Road & Drain System', 2.00, 2944922.3, [
+        leaf('1. On completion of 50% Road Works', 25, 736230.58),
+        leaf('2. On completion of 100% Road Works', 25, 736230.58),
+        leaf('3. On completion of 50% Drain Works', 25, 736230.58),
+        leaf('4. On completion of 100% Drain Works', 25, 736230.58),
+      ]),
+    ]),
+    branch('Schedule 5: Pre-Commissioning, Mechanical Completion, Comissioning Portion of 8 MGD capacity WTP', 30.00, 192060150.0, [
+      leaf('A. Completion of Pre-Commissioning activity', 20.00, 38412030.0),
+      leaf('B. Mechanical Completion', 30.00, 57618045.0),
+      leaf('C. Completion of Commissioning', 50.00, 96030075.0),
+    ]),
+    branch('Schedule 6: Six (06) months of reliability run/site acceptance test portion of 8 MGD capacity WTP', 10.00, 64020050.0, [
+      leaf('A. On completion of First Month', 10.00, 6402005.0),
+      leaf('B. On completion of Second Month', 10.00, 6402005.0),
+      leaf('C. On completion of Third Month', 10.00, 6402005.0),
+      leaf('D. On completion of Fourth Month', 10.00, 6402005.0),
+      leaf('E. On completion of Fifth Month', 10.00, 6402005.0),
+      leaf('F. On completion of Sixth Month', 50.00, 32010025.0),
+    ]),
+  ];
+}
 // ════════════════════════════════════════════════════
 // MODAL 1 — New Billing Schedule
 // ════════════════════════════════════════════════════
