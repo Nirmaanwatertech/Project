@@ -4738,14 +4738,8 @@ function OpeningBalanceRow({ node, depth, values, set, expanded, toggleExpanded 
         <td style={{padding:'6px 8px'}} className="amount">{inr(rollupCap)}</td>
         <td style={{padding:'6px 4px'}}>
           {leaf && (
-            <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px',width:110}}
-              value={values[node.id]?.claimed||''} onChange={e=>set(node.id,'claimed',e.target.value)} placeholder="0" />
-          )}
-        </td>
-        <td style={{padding:'6px 4px'}}>
-          {leaf && (
-            <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px',width:110}}
-              value={values[node.id]?.received||''} onChange={e=>set(node.id,'received',e.target.value)} placeholder="0" />
+            <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px',width:130}}
+              value={values[node.id]?.amount||''} onChange={e=>set(node.id,e.target.value)} placeholder="0" />
           )}
         </td>
       </tr>
@@ -4763,18 +4757,17 @@ function OpeningBalanceModal({ project, onClose }) {
   const leaves = flattenLeaves(project.tree);
   const [values, setValues] = useState(() => {
     const v = {};
-    leaves.forEach(l => { v[l.id] = { claimed: String(l.openingClaimed||''), received: String(l.openingReceived||'') }; });
+    leaves.forEach(l => { v[l.id] = { amount: String(l.openingClaimed||l.openingReceived||'') }; });
     return v;
   });
   const [expanded, setExpanded] = useState({});
   const [saving, setSaving] = useState(false);
-  function set(leafId, field, val) {
-    setValues(s => ({ ...s, [leafId]: { ...s[leafId], [field]: val } }));
+  function set(leafId, val) {
+    setValues(s => ({ ...s, [leafId]: { amount: val } }));
   }
   function toggleExpanded(id) { setExpanded(e=>({...e,[id]: e[id]===false ? true : false})); }
 
-  const totalClaimed = leaves.reduce((s,l)=>s+(Number(values[l.id]?.claimed)||0),0);
-  const totalReceived = leaves.reduce((s,l)=>s+(Number(values[l.id]?.received)||0),0);
+  const totalAmount = leaves.reduce((s,l)=>s+(Number(values[l.id]?.amount)||0),0);
 
   async function handleSave() {
     setSaving(true);
@@ -4782,8 +4775,8 @@ function OpeningBalanceModal({ project, onClose }) {
       function applyOpening(nodes) {
         return nodes.map(n => {
           if (isLeafNode(n)) {
-            const v = values[n.id] || {};
-            return { ...n, openingClaimed: Number(v.claimed)||0, openingReceived: Number(v.received)||0 };
+            const amt = Number(values[n.id]?.amount)||0;
+            return { ...n, openingClaimed: amt, openingReceived: amt };
           }
           return { ...n, children: applyOpening(n.children) };
         });
@@ -4805,10 +4798,10 @@ function OpeningBalanceModal({ project, onClose }) {
             Enter what's already been claimed/received against each line item before this system started tracking it — same layout as the billing schedule, click ▾/▸ to expand or collapse a section. This is a one-time snapshot, not a dated transaction.
           </div>
           <div style={{overflowX:'auto'}}>
-            <table style={{width:'100%',minWidth:680}}>
+            <table style={{width:'100%',minWidth:600}}>
               <thead>
                 <tr style={{background:'var(--grey-100)'}}>
-                  {['Description of Work','Wt%','Cap (excl. GST)','Opening Claimed (₹)','Opening Received (₹)'].map(h=>(
+                  {['Description of Work','Wt%','Cap (excl. GST)','Opening Amount (₹)'].map(h=>(
                     <th key={h} style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)'}}>{h}</th>
                   ))}
                 </tr>
@@ -4819,8 +4812,7 @@ function OpeningBalanceModal({ project, onClose }) {
                 ))}
                 <tr style={{background:'var(--grey-50)',fontWeight:700,borderTop:'2px solid var(--border)'}}>
                   <td colSpan={3} style={{padding:'8px 8px',fontSize:12}}>Total</td>
-                  <td style={{padding:'8px 4px'}} className="amount">{inr(totalClaimed)}</td>
-                  <td style={{padding:'8px 4px'}} className="amount">{inr(totalReceived)}</td>
+                  <td style={{padding:'8px 4px'}} className="amount">{inr(totalAmount)}</td>
                 </tr>
               </tbody>
             </table>
