@@ -4334,6 +4334,13 @@ function NewBillingProjectModal({ onClose, existing }) {
     if (!form.contractNo) set('contractNo','6118456');
     if (!form.project) set('project','Pontoon');
   }
+  function loadWtpTemplate() {
+    setTree(wtpSeedTree());
+    set('contractValue','640200500');
+    if (!form.client) set('client','Oil India Limited');
+    if (!form.contractNo) set('contractNo','6118439');
+    if (!form.project) set('project','WTP');
+  }
   function addRootSchedule() {
     setTree(t=>[...t, {id:genRowId(), name:'', wtPct:'', capAmount:'', children:[]}]);
   }
@@ -4382,9 +4389,14 @@ function NewBillingProjectModal({ onClose, existing }) {
           </div>
 
           {!isEdit && (
-            <button type="button" className="btn btn-sm btn-outline" onClick={loadPontoonTemplate} style={{marginBottom:14}}>
-              📋 Load Pontoon Template (from approved billing breakup)
-            </button>
+            <div className="flex gap-2" style={{marginBottom:14}}>
+              <button type="button" className="btn btn-sm btn-outline" onClick={loadPontoonTemplate}>
+                📋 Load Pontoon Template (from approved billing breakup)
+              </button>
+              <button type="button" className="btn btn-sm btn-outline" onClick={loadWtpTemplate}>
+                📋 Load WTP Template (from approved billing breakup)
+              </button>
+            </div>
           )}
 
           <div style={{borderTop:'1px solid var(--border)',paddingTop:14,marginTop:4}}>
