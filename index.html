@@ -4028,89 +4028,326 @@ function indexRABillsByLeaf(raBills, projectDocId) {
   return idx;
 }
 
-// Pontoon billing breakup, parsed and verified from the OIL India approved
-// "Schedule & Billing Breakup" (Contract No. 6118456, dated 21-01-2025).
-// Every subtotal below has been checked against its parent and the grand total
-// (₹42,27,80,000) ties out exactly. Schedule 2's item/sub-item breakdown was not
-// yet approved by PMC/OIL at time of upload, so it's kept as a single leaf for now.
+// Pontoon billing breakup, parsed and verified from the latest OIL India approved
+// "Schedule & Billing Breakup" (Contract No. 6118456), superseding the earlier version.
+// Every subtotal ties out against its parent and the grand total (₹42,27,80,000)
+// matches exactly. Two corrections applied per user confirmation: Schedule 1-C's
+// vendor list includes a 37th line (Main Gate of 36x36 M, matching the two main gates
+// listed in Schedule 2), and Schedule 3-F's sub-item percentages read as 40/25/10/25.
 function pontoonSeedTree() {
   const leaf = (name, wtPct, capAmount) => ({ id: genRowId(), name, wtPct, capAmount, children: [], openingClaimed: 0, openingReceived: 0 });
   const branch = (name, wtPct, capAmount, children) => ({ id: genRowId(), name, wtPct, capAmount, children });
   return [
-    branch('Schedule 1: Completion of Fieldwork, Design Report, Working Drawings for Pontoon Type Raw Water In-Take including Allied Buildings', 5.00, 21139000, [
-      leaf('A. Residual Process Design', 12.00, 2536680),
-      leaf('B. Details Design & Engineering', 47.00, 9935330),
-      leaf('C. Vendors final documents for supply item duly certified', 31.00, 6553090),
-      leaf('D. As-Built Documentation', 10.00, 2113900),
+    branch('Schedule 1: Completion of Fieldwork, Design Report, Working Drawings for Pontoon Type Raw Water In-Take including Allied Buildings', 5.00, 21139000.0, [
+      leaf('A. Residual Process Design', 12.00, 2536680.0),
+      leaf('B. Details Design & Engineering', 47.00, 9935330.0),
+      branch('C. Vendors final documents for supply item duly certified', 31.00, 6553090.0, [
+        leaf('Drawing Details of 03 Nos. of Road Crossings', 2.70, 177110.54),
+        leaf('Vendor data sheet- Horizontal Centrifugal Raw water Pumps (EMD)-Qty:04', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Foot Valve with piping arrangement for EMD Pump-sets-Qty:04 Nos.', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - EMD Pump Piping (Suction, Delivery, Bypass Line, Delivery Manifold, Rising Main)', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - EMD Pump Fitting (Suction valves (04 Nos.), Delivery valves (04 Nos.), Valve for bypass line (02 Nos.), & Non Return Valves (04 Nos.) along with the Matching companion flanges, nuts & bolts, gaskets)', 2.70, 177110.54),
+        leaf('Vendor data sheet - Basket Strainers for EMD Pump-Qty:04', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Pontoon & Anchor Arrangement along with shed & standard supply items, spares etc. complete-Qty:02', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Gangway-Qty:02', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - US EOT Crane-Qty:02', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - HOT Crane-Qty:02', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Piping Manifold on the Embankment-Qty:02', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - 32-inch MS Pipe', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Cross Country Pipeline Fitting (32-inch Flow Control Valve (02 Nos.), Air Valves (08 Nos.), Scour Valves (as per requirement), Butterfly Valves (01 No), along with matching companion flanges, nuts & bolts, gaskets)', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Diesel Engine Driven (DED) Raw Water Pumpset-Qty:02 Nos.', 2.70, 177110.54),
+        leaf('Vendor Data Sheet -EMD Backwash Pumps-Qty:02 Nos.', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Self-Cleaning Type Basket Strainers to be installed at Suction side of the DED Pump-sets-Qty:02 Nos.', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Foot Valve with piping arrangement for DED Pump-sets-Qty:02 Nos.', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Suction Valve (02 Nos.), Delivery Valve (02 Nos.), Valve for Bypass Line (02 Nos.), Non-return Valve (02 Nos.), for 2 nos. DED Pump-sets', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - DED Pump Piping (Suction, Delivery, Bypass Line, Delivery Manifold)', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Swivel Joints-Qty: 04 Nos.', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Main Gate of 100x80 M', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - 35M LONG PIPE RACK BRIDGE', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - 32-inch Bends of various angles', 2.70, 177110.54),
+        leaf('Vendor data sheet- Raw water Pump Motor (EMD)-Qty:04', 2.70, 177110.54),
+        leaf('Vendor Data Sheet -EMD Backwash Pumps Motor-Qty:02 Nos.', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Transformer-Qty:02 Nos.', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - DG Set', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - HT Cable - 240sqmm', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - HT Cable - 120sqmm', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Electrical panel', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - LT Cable', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Lighting Pole', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Fan, AC, Cable, Lights etc', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - RMU Unit', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - SCADA System Complete with all equipments, accessories etc.', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Pressure Gauge, Transmitter, Flow Transmitter, Level Transmitter, & Control Valve', 2.70, 177110.54),
+        leaf('Vendor Data Sheet - Main Gate of 36x36 M', 2.70, 177110.54),
+      ]),
+      leaf('D. As-Built Documentation', 10.00, 2113900.0),
+    ]),    branch('Schedule 2: Supply, Installation and Testing of the Equipments', 40.00, 169112000.00, [
+      branch('1. Mechanical and Plant Piping Portion', 62.50, 41598733.61, [
+        branch('1.1 Horizontal Centrifugal Raw water Pumps (EMD)-Qty:04', 30.0, 12479620.08, [
+          leaf('1.1.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 4991848.03),
+          leaf('1.1.2 Receipt of items at site with relevant /document test certificate', 30.0, 3743886.02),
+          leaf('1.1.3 Installation & Testing', 30.0, 3743886.02),
+        ]),
+        branch('1.2 Foot Valve with piping arrangement for EMD Pump-sets-Qty:04 Nos.', 0.25, 103996.83, [
+          leaf('1.2.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 41598.73),
+          leaf('1.2.2 Receipt of items at site with relevant /document test certificate', 30.0, 31199.05),
+          leaf('1.2.3 Installation & Testing', 30.0, 31199.05),
+        ]),
+        branch('1.3 EMD Pump Piping (Suction, Delivery, Bypass Line, Delivery Manifold, Rising Main)', 2.0, 831974.67, [
+          leaf('1.3.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 332789.87),
+          leaf('1.3.2 Receipt of items at site with relevant /document test certificate', 30.0, 249592.4),
+          leaf('1.3.3 Installation & Testing', 30.0, 249592.4),
+        ]),
+        branch('1.4 EMD Pump Fitting (Suction valves (04 Nos.), Delivery valves (04 Nos.), Valve for bypass line (02 Nos.), & Non Return Valves (04 Nos.) along with the Matching companion flanges, nuts & bolts, gaskets)', 2.0, 831974.67, [
+          leaf('1.4.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 332789.87),
+          leaf('1.4.2 Receipt of items at site with relevant /document test certificate', 30.0, 249592.4),
+          leaf('1.4.3 Installation & Testing', 30.0, 249592.4),
+        ]),
+        branch('1.5 Basket Strainers for EMD Pump-Qty:04', 1.5, 623981.0, [
+          leaf('1.5.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 249592.4),
+          leaf('1.5.2 Receipt of items at site with relevant /document test certificate', 30.0, 187194.3),
+          leaf('1.5.3 Installation & Testing', 30.0, 187194.3),
+        ]),
+        branch('1.6 Pontoon & Anchor Arrangement along with shed & standard supply items, spares etc. complete-Qty:02', 28.0, 11647645.41, [
+          leaf('1.6.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 4659058.16),
+          leaf('1.6.2 Receipt of items at site with relevant /document test certificate', 30.0, 3494293.62),
+          leaf('1.6.3 Installation & Testing', 30.0, 3494293.62),
+        ]),
+        branch('1.7 Gangway-Qty:02', 5.0, 2079936.68, [
+          leaf('1.7.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 831974.67),
+          leaf('1.7.2 Receipt of items at site with relevant /document test certificate', 30.0, 623981.0),
+          leaf('1.7.3 Installation & Testing', 30.0, 623981.0),
+        ]),
+        branch('1.8 US EOT Crane-Qty:02', 1.0, 415987.34, [
+          leaf('1.8.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 166394.93),
+          leaf('1.8.2 Receipt of items at site with relevant /document test certificate', 30.0, 124796.2),
+          leaf('1.8.3 Installation & Testing', 30.0, 124796.2),
+        ]),
+        branch('1.9 HOT Crane-Qty:02', 0.75, 311990.5, [
+          leaf('1.9.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 124796.2),
+          leaf('1.9.2 Receipt of items at site with relevant /document test certificate', 30.0, 93597.15),
+          leaf('1.9.3 Installation & Testing', 30.0, 93597.15),
+        ]),
+        branch('1.10 Piping Manifold on the Embankment-Qty:02', 1.0, 415987.34, [
+          leaf('1.10.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 166394.93),
+          leaf('1.10.2 Receipt of items at site with relevant /document test certificate', 30.0, 124796.2),
+          leaf('1.10.3 Installation & Testing', 30.0, 124796.2),
+        ]),
+        branch('1.11 Diesel Engine Driven (DED) Raw Water Pumpset-Qty:02 Nos.', 20.0, 8319746.72, [
+          leaf('1.11.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 3327898.69),
+          leaf('1.11.2 Receipt of items at site with relevant /document test certificate', 30.0, 2495924.02),
+          leaf('1.11.3 Installation & Testing', 30.0, 2495924.02),
+        ]),
+        branch('1.12 EMD Backwash Pumps-Qty:02 Nos.', 3.0, 1247962.01, [
+          leaf('1.12.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 499184.8),
+          leaf('1.12.2 Receipt of items at site with relevant /document test certificate', 30.0, 374388.6),
+          leaf('1.12.3 Installation & Testing', 30.0, 374388.6),
+        ]),
+        branch('1.13 Self-Cleaning Type Basket Strainers to be installed at Suction side of the DED Pump-sets-Qty:02 Nos.', 1.0, 415987.34, [
+          leaf('1.13.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 166394.93),
+          leaf('1.13.2 Receipt of items at site with relevant /document test certificate', 30.0, 124796.2),
+          leaf('1.13.3 Installation & Testing', 30.0, 124796.2),
+        ]),
+        branch('1.14 Foot Valve with piping arrangement for DED Pump-sets-Qty:02 Nos.', 0.5, 207993.67, [
+          leaf('1.14.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 83197.47),
+          leaf('1.14.2 Receipt of items at site with relevant /document test certificate', 30.0, 62398.1),
+          leaf('1.14.3 Installation & Testing', 30.0, 62398.1),
+        ]),
+        branch('1.15 Suction Valve (02 Nos.), Delivery Valve (02 Nos.), Valve for Bypass Line (02 Nos.), Non-return Valve (02 Nos.), for 2 nos. DED Pump-sets', 0.5, 207993.67, [
+          leaf('1.15.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 83197.47),
+          leaf('1.15.2 Receipt of items at site with relevant /document test certificate', 30.0, 62398.1),
+          leaf('1.15.3 Installation & Testing', 30.0, 62398.1),
+        ]),
+        branch('1.16 DED Pump Piping (Suction, Delivery, Bypass Line, Delivery Manifold)', 1.0, 415987.34, [
+          leaf('1.16.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 166394.93),
+          leaf('1.16.2 Receipt of items at site with relevant /document test certificate', 30.0, 124796.2),
+          leaf('1.16.3 Installation & Testing', 30.0, 124796.2),
+        ]),
+        branch('1.17 Swivel Joints-Qty: 04 Nos.', 1.5, 623981.0, [
+          leaf('1.17.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 249592.4),
+          leaf('1.17.2 Receipt of items at site with relevant /document test certificate', 30.0, 187194.3),
+          leaf('1.17.3 Installation & Testing', 30.0, 187194.3),
+        ]),
+        branch('1.18 Main Gate of 100x80 M', 0.5, 207993.67, [
+          leaf('1.18.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 83197.47),
+          leaf('1.18.2 Receipt of items at site with relevant /document test certificate', 30.0, 62398.1),
+          leaf('1.18.3 Installation & Testing', 30.0, 62398.1),
+        ]),
+        branch('1.19 Main Gate of 36x36 M', 0.5, 207993.67, [
+          leaf('1.19.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 83197.47),
+          leaf('1.19.2 Receipt of items at site with relevant /document test certificate', 30.0, 62398.1),
+          leaf('1.19.3 Installation & Testing', 30.0, 62398.1),
+        ]),
+      ]),      branch('2. Procurement, Supply, Installation & Testing of Raw Water Pipeline & Fittings', 60.64, 102554026.23, [
+        branch('2.1 32-inch MS Pipe', '', 86754026.23, [
+          leaf('2.1.1 Verification of Materials by OIL/PMC or 3rd party and certification', 40.00, 34701610.49),
+          leaf('2.1.2 Receipt of items at site with relevant /document test certificate', 60.00, 52052415.74),
+        ]),
+        branch('2.2 Cross Country Pipeline Fitting (32-inch Flow Control Valve (02 Nos.), Air Valves (08 Nos.), Scour Valves (as per requirement), Butterfly Valves (01 No), along with matching companion flanges, nuts & bolts, gaskets, Coating Material & Heat Shrinkable Sleeves)', '', 3000000.0, [
+          leaf('2.2.1 Verification of Materials by OIL/PMC or 3rd party and certification', 40.0, 1200000.0),
+          leaf('2.2.2 Receipt of items at site with relevant /document test certificate', 59.0, 1770000.0),
+          leaf('2.2.3 Installation & Testing', 1.0, 30000.0),
+        ]),
+        branch('2.3 35M LONG PIPE RACK BRIDGE', '', 6000000.0, [
+          leaf('2.3.1 Verification of Materials by OIL/PMC or 3rd party and certification', 40.0, 2400000.0),
+          leaf('2.3.2 Receipt of items at site with relevant /document test certificate', 59.0, 3540000.0),
+          leaf('2.3.3 Installation & Testing', 1.0, 60000.0),
+        ]),
+        branch('2.4 32-inch Bends of various angles', '', 800000.0, [
+          leaf('2.4.1 Verification of Materials by OIL/PMC or 3rd party and certification', 40.0, 320000.0),
+          leaf('2.4.2 Receipt of items at site with relevant /document test certificate', 59.0, 472000.0),
+          leaf('2.4.3 Installation & Testing', 1.0, 8000.0),
+        ]),
+        leaf('2.5 Welder Qualification, Approval of WPS, EQT, WQT, PQR etc, Storage, Transportation, Jointing (including various bends), Excavation, Trenching, Radiography, Holiday Testing, Lowering of 32-inch MS Pipeline', '', 4000000.0),
+        leaf('2.6 Hydrotesting', '', 2000000.0),
+      ]),      branch('3. Electrical Portion', 32.50, 21631341.48, [
+        branch('3.1 Raw water Pump Motor (EMD)-Qty:04', 8.0, 1730507.32, [
+          leaf('3.1.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 692202.93),
+          leaf('3.1.2 Receipt of items at site with relevant /document test certificate', 30.0, 519152.2),
+          leaf('3.1.3 Installation & Testing', 30.0, 519152.2),
+        ]),
+        branch('3.2 EMD Backwash Pumps Motor-Qty:02 Nos.', 1.0, 216313.41, [
+          leaf('3.2.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 86525.37),
+          leaf('3.2.2 Receipt of items at site with relevant /document test certificate', 30.0, 64894.02),
+          leaf('3.2.3 Installation & Testing', 30.0, 64894.02),
+        ]),
+        branch('3.3 Transformer-2 No', 18.0, 3893641.47, [
+          leaf('3.3.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 1557456.59),
+          leaf('3.3.2 Receipt of items at site with relevant /document test certificate', 30.0, 1168092.44),
+          leaf('3.3.3 Installation & Testing', 30.0, 1168092.44),
+        ]),
+        branch('3.4 DG set', 20.0, 4326268.3, [
+          leaf('3.4.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 1730507.32),
+          leaf('3.4.2 Receipt of items at site with relevant /document test certificate', 30.0, 1297880.49),
+          leaf('3.4.3 Installation & Testing', 30.0, 1297880.49),
+        ]),
+        branch('3.5 HT Cable 240 sqmm', 20.0, 4326268.3, [
+          leaf('3.5.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 1730507.32),
+          leaf('3.5.2 Receipt of items at site with relevant /document test certificate', 30.0, 1297880.49),
+          leaf('3.5.3 Installation & Testing', 30.0, 1297880.49),
+        ]),
+        branch('3.6 HT Cable 120 sqmm', 15.0, 3244701.22, [
+          leaf('3.6.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 1297880.49),
+          leaf('3.6.2 Receipt of items at site with relevant /document test certificate', 30.0, 973410.37),
+          leaf('3.6.3 Installation & Testing', 30.0, 973410.37),
+        ]),
+        branch('3.7 Panel', 5.0, 1081567.07, [
+          leaf('3.7.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 432626.83),
+          leaf('3.7.2 Receipt of items at site with relevant /document test certificate', 30.0, 324470.12),
+          leaf('3.7.3 Installation & Testing', 30.0, 324470.12),
+        ]),
+        branch('3.8 LT Cable', 5.0, 1081567.07, [
+          leaf('3.8.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 432626.83),
+          leaf('3.8.2 Receipt of items at site with relevant /document test certificate', 30.0, 324470.12),
+          leaf('3.8.3 Installation & Testing', 30.0, 324470.12),
+        ]),
+        branch('3.9 Lighting pole', 0.75, 162235.06, [
+          leaf('3.9.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 64894.02),
+          leaf('3.9.2 Receipt of items at site with relevant /document test certificate', 30.0, 48670.52),
+          leaf('3.9.3 Installation & Testing', 30.0, 48670.52),
+        ]),
+        branch('3.10 Fan, AC, Cable, lighting etc.', 1.25, 270391.77, [
+          leaf('3.10.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 108156.71),
+          leaf('3.10.2 Receipt of items at site with relevant /document test certificate', 30.0, 81117.53),
+          leaf('3.10.3 Installation & Testing', 30.0, 81117.53),
+        ]),
+        branch('3.11 RMU Unit', 6.0, 1297880.49, [
+          leaf('3.11.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 519152.2),
+          leaf('3.11.2 Receipt of items at site with relevant /document test certificate', 30.0, 389364.15),
+          leaf('3.11.3 Installation & Testing', 30.0, 389364.15),
+        ]),
+      ]),
+      branch('4. Instrumentation Portion', 5.00, 3327898.69, [
+        branch('4.1 SCADA System Complete with all equipments, accessories etc.', 70.0, 2329529.08, [
+          leaf('4.1.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 931811.63),
+          leaf('4.1.2 Receipt of items at site with relevant /document test certificate', 30.0, 698858.72),
+          leaf('4.1.3 Installation & Testing', 30.0, 698858.72),
+        ]),
+        branch('4.2 Pressure Gauge, transmitter, flow transmitter, level transmiter & Control valve', 30.0, 998369.61, [
+          leaf('4.2.1 Placement of Purchase Orders / Verification of Materials by OIL/PMC or 3rd party and certification / Ready for Delivery of items', 40.0, 399347.84),
+          leaf('4.2.2 Receipt of items at site with relevant /document test certificate', 30.0, 299510.88),
+          leaf('4.2.3 Installation & Testing', 30.0, 299510.89),
+        ]),
+      ]),    ]),
+    branch('Schedule 3: Construction of Civil Works and Allied Buildings', 25.00, 105695000.0, [
+      branch('A. Construction of Panel Room', 10.0, 10569500.0, [
+        leaf('a. Supply of Civil Items & Finishing Items', 25.0, 2642375.0),
+        leaf('b. Foundation Up to Plinth Beam', 30.0, 3170850.0),
+        leaf('c. Plinth Beam to roof i/c column & Beam', 20.0, 2113900.0),
+        leaf('d. Roof', 5.0, 528475.0),
+        leaf('e. Brick work & Plaster & Painting', 5.0, 528475.0),
+        leaf('f. Soil Filling work', 10.0, 1056950.0),
+        leaf('g. Door & Window work', 5.0, 528475.0),
+      ]),
+      branch('B. Construction of Transformer Yard and DG Shed', 2.0, 2113900.0, [
+        leaf('a. Supply of Civil Items & Finishing Items', 35.0, 739865.0),
+        leaf('b. Foundation work upto Plinth level', 25.0, 528475.0),
+        leaf('c. DG Shed', 15.0, 317085.0),
+        leaf('d. Soil filling', 25.0, 528475.0),
+      ]),
+      branch('C. Construction of boundary wall (100X80 M & 36X36 M)', 20.0, 21139000.0, [
+        leaf('a. Supply of Civil Items & Finishing Items', 20.0, 4227800.0),
+        leaf('b. Foundation Up to Plinth Beam', 30.0, 6341700.0),
+        leaf('c. Plinth Beam to finishing level', 20.0, 4227800.0),
+        leaf('d. Brick work', 10.0, 2113900.0),
+        leaf('e. Plastering work', 10.0, 2113900.0),
+        leaf('f. Soil Filling work', 5.0, 1056950.0),
+        leaf('g. MS Gate & etc', 5.0, 1056950.0),
+      ]),
+      branch('D. Construction of Operator & Security room', 10.0, 10569500.0, [
+        leaf('a. Supply of Civil Items & Finishing Items', 25.0, 2642375.0),
+        leaf('b. Pile up to Cut-off Level', 30.0, 3170850.0),
+        leaf('c. Pile cap to Finishing Level', 25.0, 2642375.0),
+        leaf('d. Brick work', 5.0, 528475.0),
+        leaf('e. Plaster work', 5.0, 528475.0),
+        leaf('f. Soil Filling work', 5.0, 528475.0),
+        leaf('g. Door & Window', 5.0, 528475.0),
+      ]),
+      branch('E. Construction of Drainage and inside road work', 15.0, 15854250.0, [
+        leaf('a. Supply of Civil Items & Finishing Items', 20.0, 3170850.0),
+        leaf('b. Drainage work', 10.0, 1585425.0),
+        leaf('c. Inside road soil filling', 20.0, 3170850.0),
+        leaf('d. Stone Pitching', 25.0, 3963562.5),
+        leaf('e. Sab Base Course', 10.0, 1585425.0),
+        leaf('f. Base Course & Top Level', 15.0, 2378137.5),
+      ]),
+      branch('F. Construction of External Road', 30.0, 31708500.0, [
+        leaf('a. Supply Items of soil', 40.0, 12683400.0),
+        leaf('b. Supply Items of Stone Pitching', 25.0, 7927125.0),
+        leaf('c. Sab Base Course', 10.0, 3170850.0),
+        leaf('d. Base Course & Top Level', 25.0, 7927125.0),
+      ]),
+      branch('G. Construction of Gangway Foundation, DED Pump, Backwash Pump Foundation with shed', 1.0, 1056950.0, [
+        leaf('a. Supply of Civil Items & Finishing Items', 60.0, 634170.0),
+        leaf('Construction of Foundations and Shed', 40.0, 422780.0),
+      ]),
+      branch('H. Construction of Retaining Wall', 10.0, 10569500.0, [
+        leaf('a. Supply of Civil Items', 20.0, 2113900.0),
+        leaf('b. Foundation work', 30.0, 3170850.0),
+        leaf('c. RCC Wall 50% Completion', 25.0, 2642375.0),
+        leaf('d. RCC Wall 100% Completion', 25.0, 2642375.0),
+      ]),
+      branch('I. Construction of Road Crossing, Chamber, Thrust Block & Bridge foundation', 2.0, 2113900.0, [
+        leaf('Construction of Road Crossing', 25.0, 528475.0),
+        leaf('Construction of Valve Chambers', 25.0, 528475.0),
+        leaf('Construction of Thrust Block', 25.0, 528475.0),
+        leaf('Construction of Bridge Foundation Works Complete in all respects', 25.0, 528475.0),
+      ]),
     ]),
-    leaf('Schedule 2: Supply, Installation and Testing of the Equipments (breakdown pending PMC/OIL approval)', 40.00, 169112000),
-    branch('Schedule 3: Construction of Civil Works and Allied Buildings', 25.00, 105695000, [
-      branch('A. Construction of Panel Room', 10.00, 10569500, [
-        leaf('a. Supply of Civil Items & Finishing Items', 10.00, 1056950),
-        leaf('b. Foundation Up to Plinth Beam', 30.00, 3170850),
-        leaf('c. Plinth Beam to roof i/c column & Beam', 20.00, 2113900),
-        leaf('d. Roof', 5.00, 528475),
-        leaf('e. Brick work & Plaster & Painting', 10.00, 1056950),
-        leaf('f. Soil Filling work', 15.00, 1585425),
-        leaf('g. Door & Window work', 10.00, 1056950),
+    branch('Schedule 4: Pre-Commissioning, Mechanical Completion, Comissioning & Reliability Run/Site Acceptance Test Portion', 30.00, 126834000.0, [
+      branch('A. Completion of Pre-Commissioning activity', 10.00, 12683400.0, [
+        leaf('1. Completion of Mechanical Pre-Commissioning activity', 50.00, 6341700.0),
+        leaf('2. Completion of Electrical Pre-Commissioning activity', 30.00, 3805020.0),
+        leaf('3. Completion of Instrumentation Pre-Commissioning activity', 20.00, 2536680.0),
       ]),
-      branch('B. Construction of Transformer Yard and DG Shed', 2.00, 2113900, [
-        leaf('a. Supply of Civil Items & Finishing Items', 20.00, 422780),
-        leaf('b. Foundation work upto Plinth level', 25.00, 528475),
-        leaf('c. DG Shed', 20.00, 422780),
-        leaf('d. Soil filling', 35.00, 739865),
+      leaf('B. Mechanical Completion (Till Satisfaction to the PMC/OIL)', 30.00, 38050200.0),
+      leaf('C. Completion of Commissioning (Till Satisfaction to the PMC/OIL)', 50.00, 63417000.0),
+      branch('D. Completion of Reliability Run/Site Acceptance Test for 03 months', 10.00, 12683400.0, [
+        leaf('1. Completion of Reliability Run/Site Acceptance Test for 1st Month', 20.00, 2536680.0),
+        leaf('2. Completion of Reliability Run/Site Acceptance Test for 2nd Month', 30.00, 3805020.0),
+        leaf('3. Completion of Reliability Run/Site Acceptance Test for 3rd Month', 50.00, 6341700.0),
       ]),
-      branch('C. Construction of boundary wall (100X80 M & 36X36 M)', 20.00, 21139000, [
-        leaf('a. Supply of Civil Items & Finishing Items', 10.00, 2113900),
-        leaf('b. Foundation Up to Plint Beam', 20.00, 4227800),
-        leaf('c. Plinth Beam to finishing level', 20.00, 4227800),
-        leaf('d. Brick work', 20.00, 4227800),
-        leaf('e. Plastering work', 10.00, 2113900),
-        leaf('f. Soil Filling work', 10.00, 2113900),
-        leaf('g. MS Gate & etc', 10.00, 2113900),
-      ]),
-      branch('D. Construction of Security room', 10.00, 10569500, [
-        leaf('a. Supply of Civil Items & Finishing Items', 10.00, 1056950),
-        leaf('b. Footing Up to Plint Beam', 30.00, 3170850),
-        leaf('c. Plinth Beam to roof', 25.00, 2642375),
-        leaf('d. Brick work', 10.00, 1056950),
-        leaf('e. Plaster work', 10.00, 1056950),
-        leaf('f. Soil Filling work', 10.00, 1056950),
-        leaf('g. Door & Window', 5.00, 528475),
-      ]),
-      branch('E. Construction of Drainage and inside road work', 15.00, 15854250, [
-        leaf('a. Supply of Civil Items & Finishing Items', 10.00, 1585425),
-        leaf('b. Drainage work', 10.00, 1585425),
-        leaf('c. Inside road soil filling', 20.00, 3170850),
-        leaf('d. Stone Pitching', 25.00, 3963562.50),
-        leaf('e. Sab Base Course', 15.00, 2378137.50),
-        leaf('f. Base Course & Top Level', 20.00, 3170850),
-      ]),
-      branch('F. Construction of External Road', 30.00, 31708500, [
-        leaf('a. Supply Items of soil', 20.00, 6341700),
-        leaf('b. Supply Items of Stone Pitching', 25.00, 7927125),
-        leaf('c. Sab Base Course', 20.00, 6341700),
-        leaf('d. Base Course & Top Level', 35.00, 11097975),
-      ]),
-      branch('G. Construction of Gangway Foundation, DED Pump, Backwash Pump Foundation with shed', 1.00, 1056950, [
-        leaf('a. Supply of Civil Items & Finishing Items', 60.00, 634170),
-        leaf('Construction of Foundations and Shed', 40.00, 422780),
-      ]),
-      branch('H. Construction of Retaining Wall', 10.00, 10569500, [
-        leaf('a. Supply of Civil Items', 20.00, 2113900),
-        leaf('b. Foundation work', 30.00, 3170850),
-        leaf('c. RCC Wall 50% Completion', 25.00, 2642375),
-        leaf('d. RCC Wall 100% Completion', 25.00, 2642375),
-      ]),
-      leaf('I. Construction of Road Crossing, Chamber, Thrust Block & Bridge foundation', 2.00, 2113900),
-    ]),
-    branch('Schedule 4: Pre-Commissioning, Mechanical Completion, Comissioning & Reliability Run/Site Acceptance Test Portion', 30.00, 126834000, [
-      leaf('A. Completion of Pre-Commissioning activity', 10.00, 12683400),
-      leaf('B. Mechanical Completion', 30.00, 38050200),
-      leaf('C. Completion of Commissioning', 50.00, 63417000),
-      leaf('D. Completion of Reliability Run/Site Acceptance Test for 03 months', 10.00, 12683400),
-    ]),
-  ];
+    ]),  ];
 }
 
 // WTP billing breakup, parsed and verified from the OIL India approved
