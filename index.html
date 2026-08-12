@@ -4646,6 +4646,7 @@ function NewBillingProjectModal({ onClose, existing }) {
     if (!form.client) set('client','Oil India Limited');
     if (!form.contractNo) set('contractNo','6118439');
     if (!form.project) set('project','WTP');
+    set('raBillStartNumber','6');
   }
   function addRootSchedule() {
     setTree(t=>[...t, {id:genRowId(), name:'', wtPct:'', capAmount:'', children:[]}]);
@@ -5118,7 +5119,11 @@ function ClaimPickerModal({ project, raBills, existingClaims, onApply, onClose }
 }
 
 function nextRABillNumberForProject(project, raBills) {
-  const defaultStart = project.raBillStartNumber===undefined && project.project==='Pontoon' ? 4 : 1;
+  let defaultStart = 1;
+  if (project.raBillStartNumber===undefined) {
+    if (project.project==='Pontoon') defaultStart = 4;
+    else if (project.project==='WTP') defaultStart = 6;
+  }
   const startNum = Number(project.raBillStartNumber)||defaultStart;
   const countForProject = raBills.filter(b=>b.billingProjectId===project.docId).length;
   return `RA Bill ${startNum + countForProject}`;
