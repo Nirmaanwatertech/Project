@@ -4565,9 +4565,11 @@ function NewBillingProjectModal({ onClose, existing }) {
     subInvestmentAmount: String(existing.subcontract?.investmentAmount||''),
     subDepositAmount: String(existing.subcontract?.depositAmount||''),
     subRefundPct: String(existing.subcontract?.refundPct||''),
+    raBillStartNumber: String(existing.raBillStartNumber||1),
   } : {
     client:'', contractNo:'', contractValue:'', project:'', split:{pontoon:50,wtp:50},
     subMarginPct:'', subRecoveryPct:'', subInvestmentAmount:'', subDepositAmount:'', subRefundPct:'',
+    raBillStartNumber:'1',
   });
   const [tree, setTree] = useState(isEdit ? (existing.tree||[]) : []);
   const [saving, setSaving] = useState(false);
@@ -4584,6 +4586,7 @@ function NewBillingProjectModal({ onClose, existing }) {
     set('subInvestmentAmount','42349000');
     set('subDepositAmount','21174500');
     set('subRefundPct','10');
+    set('raBillStartNumber','4');
   }
   function loadWtpTemplate() {
     setTree(wtpSeedTree());
@@ -4614,7 +4617,7 @@ function NewBillingProjectModal({ onClose, existing }) {
         depositAmount: Number(subDepositAmount)||0,
         refundPct: Number(subRefundPct)||0,
       } : null;
-      const data = { ...rest, contractValue: Number(form.contractValue)||0, tree: tree.filter(n=>n.name.trim()), subcontract };
+      const data = { ...rest, contractValue: Number(form.contractValue)||0, raBillStartNumber: Number(form.raBillStartNumber)||1, tree: tree.filter(n=>n.name.trim()), subcontract };
       if (isEdit) await updateBillingSchedule(existing.docId, data);
       else await addBillingSchedule(data);
       onClose();
@@ -4645,6 +4648,11 @@ function NewBillingProjectModal({ onClose, existing }) {
               <input className="form-input font-mono" value={form.contractValue} onChange={e=>set('contractValue',e.target.value)} placeholder="0" />
             </div>
             <ProjectSelect value={form.project} onChange={v=>set('project',v)} split={form.split} onSplitChange={v=>set('split',v)} required />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Next RA Bill Number Starts At</label>
+            <input className="form-input font-mono" style={{maxWidth:150}} value={form.raBillStartNumber} onChange={e=>set('raBillStartNumber',e.target.value)} placeholder="1" />
+            <div style={{fontSize:11,color:'var(--text-muted)',marginTop:3}}>Set this above 1 if some RA bills were already submitted before this system started tracking them.</div>
           </div>
 
           {!isEdit && (
@@ -4895,9 +4903,16 @@ function BillingTreeProgressView({ project, raBills, onClaim }) {
 // ════════════════════════════════════════════════════
 // MODAL 2 — Submit RA Bill
 // ════════════════════════════════════════════════════
+function nextRABillNumberForProject(project, raBills) {
+  const startNum = Number(project.raBillStartNumber)||1;
+  const countForProject = raBills.filter(b=>b.billingProjectId===project.docId).length;
+  return `RA Bill ${startNum + countForProject}`;
+}
+
 function SubmitRABillModal({ onClose, schedules, raBills, existingCount, presetProjectId, presetLeafId }) {
+  const presetProject = presetProjectId ? schedules.find(s=>s.docId===presetProjectId) : null;
   const [form, setForm] = useState({
-    raBillNo: nextRABillNumber(existingCount),
+    raBillNo: presetProject ? nextRABillNumberForProject(presetProject, raBills) : '',
     billingProjectId: presetProjectId||'', leafId: presetLeafId||'',
     amountClaimed: '', gstPct: '', dateSubmitted: new Date().toISOString().slice(0,10),
     notes: ''
@@ -4916,6 +4931,8 @@ function SubmitRABillModal({ onClose, schedules, raBills, existingCount, presetP
     set('billingProjectId',docId);
     set('leafId','');
     set('amountClaimed','');
+    const proj = schedules.find(s=>s.docId===docId);
+    set('raBillNo', proj ? nextRABillNumberForProject(proj, raBills) : '');
   }
   function handleLeafSelect(leafId){
     set('leafId',leafId);
@@ -4955,17 +4972,6 @@ function SubmitRABillModal({ onClose, schedules, raBills, existingCount, presetP
           <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>📄 Submit Running Bill</span>
         </div>
         <div style={{padding:'18px 20px'}}>
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">RA Bill Number</label>
-              <input className="form-input font-mono" value={form.raBillNo} onChange={e=>set('raBillNo',e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Date Submitted</label>
-              <input className="form-input" type="date" value={form.dateSubmitted} onChange={e=>set('dateSubmitted',e.target.value)} />
-            </div>
-          </div>
-
           <div className="form-group">
             <label className="form-label">Billing Project</label>
             <select className="form-input form-select" value={form.billingProjectId} onChange={e=>handleProjectSelect(e.target.value)} disabled={!!presetProjectId}>
@@ -4974,6 +4980,18 @@ function SubmitRABillModal({ onClose, schedules, raBills, existingCount, presetP
                 <option key={sc.docId} value={sc.docId}>{sc.client} — {sc.project||'No project'}{sc.contractNo?` (${sc.contractNo})`:''}</option>
               ))}
             </select>
+          </div>
+
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">RA Bill Number</label>
+              <input className="form-input font-mono" value={form.raBillNo} onChange={e=>set('raBillNo',e.target.value)}
+                placeholder={selectedProject ? '' : 'Select a billing project first'} disabled={!selectedProject} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Date Submitted</label>
+              <input className="form-input" type="date" value={form.dateSubmitted} onChange={e=>set('dateSubmitted',e.target.value)} />
+            </div>
           </div>
 
           {selectedProject && (
