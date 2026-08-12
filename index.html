@@ -3980,7 +3980,8 @@ async function clearAllReceipts() {
 }
 
 function nextRABillNumber(existing) {
-  return `RA/${FY}/${String(existing+1).padStart(3,'0')}`;
+  const fy = `${new Date().getFullYear()}-${String(new Date().getFullYear()+1).slice(2)}`;
+  return `RA/${fy}/${String(existing+1).padStart(3,'0')}`;
 }
 
 // ════════════════════════════════════════════════════
