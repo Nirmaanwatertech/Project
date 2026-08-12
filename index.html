@@ -2923,11 +2923,11 @@ async function addBill(data) {
 }
 async function markBillPaid(docId) {
   const { db, doc, updateDoc } = window.fb;
-  await updateDoc(userDoc(BILLS_COLLECTION, docId), { paid: true, paidAt: Date.now() });
+  await updateDoc(userDoc(BILLS_COLLECTION, docId), { paid: true, paidAt: Date.now(), paidDate: new Date().toISOString().slice(0,10) });
 }
 async function unmarkBillPaid(docId) {
   const { updateDoc } = window.fb;
-  await updateDoc(userDoc(BILLS_COLLECTION, docId), { paid: false, paidAt: null });
+  await updateDoc(userDoc(BILLS_COLLECTION, docId), { paid: false, paidAt: null, paidDate: '' });
 }
 async function deleteBill(docId) {
   const { db, doc, deleteDoc } = window.fb;
@@ -3836,10 +3836,15 @@ function BillPayments() {
           onClose={()=>setViewBillSchedule(null)}
           onUpdate={async (updatedSchedule, billPaid) => {
             const { updateDoc } = window.fb;
+            // Use the latest paid stage's actual payment date (the date the bill became
+            // fully paid), falling back to today if no stage dates are available.
+            const paidStageDates = updatedSchedule.filter(s=>s.paid && s.datePaid).map(s=>s.datePaid).sort();
+            const latestPaidDate = paidStageDates.length ? paidStageDates[paidStageDates.length-1] : new Date().toISOString().slice(0,10);
             await updateDoc(userDoc(BILLS_COLLECTION, viewBillSchedule.docId), {
               paymentSchedule: updatedSchedule,
               paid: billPaid,
               paidAt: billPaid ? Date.now() : null,
+              paidDate: billPaid ? latestPaidDate : '',
             });
             setViewBillSchedule(null);
           }}
@@ -8333,7 +8338,7 @@ function DataFixPanel() {
                   amount:fullBase, gstAmount:gstAmt, totalAmount:fullBase+gstAmt,
                   notes:`Against Delivery — ${refNo}`, linkedPO:pType==='po'?refNo:'',
                   linkedWO:pType==='wo'?refNo:'', project:doc.project||'', split:doc.split||{},
-                  gstPct:doc.gstPct||'', paid:true, paidAt:Date.now(), fromSchedule:true, createdAt:Date.now(),
+                  gstPct:doc.gstPct||'', paid:true, paidAt:Date.now(), paidDate:s.datePaid||s.date||'', fromSchedule:true, createdAt:Date.now(),
                 };
                 const ref = await addDoc(userCol(col), data);
                 newSched[i] = {...s, linkedEntryId:ref.id};
@@ -8349,7 +8354,7 @@ function DataFixPanel() {
               if (Number(entry.amount||0)!==fullBase) updates.amount=fullBase;
               if (Number(entry.gstAmount||0)!==gstAmt) updates.gstAmount=gstAmt;
               if (Number(entry.totalAmount||0)!==fullBase+gstAmt) updates.totalAmount=fullBase+gstAmt;
-              if (!entry.paid) { updates.paid=true; updates.paidAt=Date.now(); }
+              if (!entry.paid) { updates.paid=true; updates.paidAt=Date.now(); updates.paidDate=s.datePaid||s.date||''; }
               if (s.invoiceNo && entry.invoiceNo!==s.invoiceNo) updates.invoiceNo=s.invoiceNo;
               if (s.datePaid && entry.due!==s.datePaid) { updates.due=s.datePaid; updates.invoiceDate=s.datePaid; }
             } else {
@@ -8433,7 +8438,7 @@ function DataFixPanel() {
         const billUpdates = {};
         if (Number(bill.advanceDeducted||0)!==adjAmt) billUpdates.advanceDeducted=adjAmt;
         if (!bill.linkedAdvance) billUpdates.linkedAdvance=a.docId;
-        if (bill.paid!==isPaid) { billUpdates.paid=isPaid; billUpdates.paidAt=isPaid?Date.now():null; }
+        if (bill.paid!==isPaid) { billUpdates.paid=isPaid; billUpdates.paidAt=isPaid?Date.now():null; billUpdates.paidDate=isPaid?(a.datePaid||new Date().toISOString().slice(0,10)):''; }
         if (Object.keys(billUpdates).length>0) {
           try { await updateDoc(userDoc(BILLS_COLLECTION,billId),billUpdates); addLog(`  ✓ Bill ${bill.payee||billId.slice(0,8)}: advDed=${adjAmt}, net=${netPayable}, paid=${isPaid}`,'ok'); fixed++; }
           catch(e){addLog(`  ✗ ${e.message}`,'err');}
@@ -8449,7 +8454,8 @@ function DataFixPanel() {
         const found=allDocs.find(d=>(d.paymentSchedule||[]).some(s=>s.linkedEntryId===b.docId&&s.paid));
         if (found) {
           try {
-            await updateDoc(userDoc(BILLS_COLLECTION,b.docId),{paid:true,paidAt:Date.now()});
+            const matchedStage = found.paymentSchedule.find(s=>s.linkedEntryId===b.docId&&s.paid);
+            await updateDoc(userDoc(BILLS_COLLECTION,b.docId),{paid:true,paidAt:Date.now(),paidDate:matchedStage?.datePaid||new Date().toISOString().slice(0,10)});
             addLog(`  ✓ ${b.payee||b.docId.slice(0,8)}: marked paid`,'ok'); fixed++;
           } catch(e){addLog(`  ✗ ${e.message}`,'err');}
         }
