@@ -4021,10 +4021,15 @@ function computeNodeTotals(node, raBillsByLeaf) {
 }
 
 // Index RA Bills by the leaf they're claimed against, for fast roll-up lookups.
+// A bill's `claims` array can span multiple leaves; older bills (pre-multi-claim)
+// only have a single leafId/amountClaimed, handled as a one-item fallback.
 function indexRABillsByLeaf(raBills, projectDocId) {
   const idx = {};
   raBills.filter(b=>b.billingProjectId===projectDocId).forEach(b => {
-    (idx[b.leafId] = idx[b.leafId]||[]).push(b);
+    const claims = b.claims || (b.leafId ? [{leafId:b.leafId, amount:b.amountClaimed}] : []);
+    claims.forEach(c => {
+      (idx[c.leafId] = idx[c.leafId]||[]).push({amountClaimed: c.amount});
+    });
   });
   return idx;
 }
@@ -4903,6 +4908,111 @@ function BillingTreeProgressView({ project, raBills, onClaim }) {
 // ════════════════════════════════════════════════════
 // MODAL 2 — Submit RA Bill
 // ════════════════════════════════════════════════════
+// Recursive row for the multi-claim picker — same tree shape as the billing
+// schedule, showing roll-up context (cap, already claimed, pending) at every
+// level, with an editable "Claim Now" amount on leaf rows only.
+function ClaimPickerRow({ node, depth, raBillsByLeaf, values, set, expanded, toggleExpanded }) {
+  const leaf = isLeafNode(node);
+  const totals = computeNodeTotals(node, raBillsByLeaf);
+  const pending = Math.max(0, totals.capAmount - totals.claimed);
+  const isOpen = leaf ? true : expanded[node.id]!==false;
+  const claimNow = leaf ? Number(values[node.id]||0) : 0;
+  return (
+    <>
+      <tr style={{borderTop:'1px solid var(--grey-50)',background:depth===0?'var(--grey-100)':leaf?(claimNow>0?'var(--primary-50)':''):'var(--grey-50)'}}>
+        <td style={{padding:'6px 8px',paddingLeft:8+depth*18,fontSize:depth===0?12.5:12,fontWeight:depth===0?700:leaf?400:600}}>
+          {!leaf && (
+            <span onClick={()=>toggleExpanded(node.id)} style={{cursor:'pointer',marginRight:6,color:'var(--text-muted)',display:'inline-block',width:12}}>
+              {isOpen?'▾':'▸'}
+            </span>
+          )}
+          {node.name}
+        </td>
+        <td style={{padding:'6px 8px'}} className="amount" style={{fontSize:11.5}}>{inr(totals.capAmount)}</td>
+        <td style={{padding:'6px 8px'}} className="amount" style={{fontSize:11.5,color:'var(--primary)'}}>{inr(totals.claimed)}</td>
+        <td style={{padding:'6px 8px'}} className="amount" style={{fontSize:11.5,color:pending>0?'var(--amber)':'var(--green)'}}>{inr(pending)}</td>
+        <td style={{padding:'6px 4px'}}>
+          {leaf && (
+            <input className="form-input font-mono" style={{fontSize:11.5,padding:'4px 6px',width:120}}
+              value={values[node.id]||''} onChange={e=>set(node.id,e.target.value)} placeholder="0" disabled={pending<=0} />
+          )}
+        </td>
+      </tr>
+      {!leaf && isOpen && (node.children||[]).map(c=>(
+        <ClaimPickerRow key={c.id} node={c} depth={depth+1} raBillsByLeaf={raBillsByLeaf} values={values} set={set} expanded={expanded} toggleExpanded={toggleExpanded} />
+      ))}
+    </>
+  );
+}
+
+function ClaimPickerModal({ project, raBills, existingClaims, onApply, onClose }) {
+  const raBillsByLeaf = indexRABillsByLeaf(raBills, project.docId);
+  const allLeaves = flattenLeaves(project.tree);
+  const [values, setValues] = useState(() => {
+    const v = {};
+    (existingClaims||[]).forEach(c => { v[c.leafId] = String(c.amount); });
+    return v;
+  });
+  const [expanded, setExpanded] = useState({});
+  function set(leafId, val) { setValues(s=>({...s,[leafId]:val})); }
+  function toggleExpanded(id) { setExpanded(e=>({...e,[id]: e[id]===false ? true : false})); }
+
+  const runningTotal = Object.values(values).reduce((s,v)=>s+(Number(v)||0),0);
+  const claimCount = Object.values(values).filter(v=>Number(v)>0).length;
+
+  function handleApply() {
+    const claims = Object.entries(values)
+      .filter(([id,amt])=>Number(amt)>0)
+      .map(([id,amt]) => {
+        const leaf = allLeaves.find(l=>l.id===id);
+        return { leafId:id, leafPath: leaf?leaf.path.join(' → '):'', amount: Number(amt) };
+      });
+    onApply(claims);
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1001,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:820,maxHeight:'90vh',boxShadow:'0 8px 40px rgba(0,0,0,.22)',display:'flex',flexDirection:'column'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px',flexShrink:0}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>Claim Against — {project.client}</span>
+        </div>
+        <div style={{padding:'14px 18px',overflowY:'auto',flex:1,minHeight:0}}>
+          <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:12}}>
+            Enter the amount being claimed now against any number of line items — click ▾/▸ to expand or collapse a section.
+          </div>
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%',minWidth:680}}>
+              <thead>
+                <tr style={{background:'var(--grey-100)'}}>
+                  {['Description of Work','Cap (excl. GST)','Claimed So Far','Pending','Claim Now (₹)'].map(h=>(
+                    <th key={h} style={{fontSize:10,padding:'6px 8px',textAlign:'left',color:'var(--text-muted)'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {project.tree.map(n=>(
+                  <ClaimPickerRow key={n.id} node={n} depth={0} raBillsByLeaf={raBillsByLeaf} values={values} set={set} expanded={expanded} toggleExpanded={toggleExpanded} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div style={{padding:'14px 18px',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0,borderTop:'1px solid var(--border)'}}>
+          <div style={{fontSize:12.5}}>
+            <strong>{claimCount}</strong> item{claimCount!==1?'s':''} selected · Total: <strong className="amount">{inr(runningTotal)}</strong>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+            <button onClick={handleApply} disabled={claimCount===0} className="btn btn-primary" style={{opacity:claimCount===0?0.6:1}}>
+              Apply Claims
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function nextRABillNumberForProject(project, raBills) {
   const defaultStart = project.raBillStartNumber===undefined && project.project==='Pontoon' ? 4 : 1;
   const startNum = Number(project.raBillStartNumber)||defaultStart;
@@ -4912,54 +5022,48 @@ function nextRABillNumberForProject(project, raBills) {
 
 function SubmitRABillModal({ onClose, schedules, raBills, existingCount, presetProjectId, presetLeafId }) {
   const presetProject = presetProjectId ? schedules.find(s=>s.docId===presetProjectId) : null;
+  const presetLeafData = (() => {
+    if (!presetProject || !presetLeafId) return null;
+    const leaf = flattenLeaves(presetProject.tree).find(l=>l.id===presetLeafId);
+    if (!leaf) return null;
+    const t = computeNodeTotals(leaf, indexRABillsByLeaf(raBills, presetProject.docId));
+    return { leafId: presetLeafId, leafPath: leaf.path.join(' → '), amount: Math.max(0, t.capAmount - t.claimed) };
+  })();
+
   const [form, setForm] = useState({
     raBillNo: presetProject ? nextRABillNumberForProject(presetProject, raBills) : '',
-    billingProjectId: presetProjectId||'', leafId: presetLeafId||'',
-    amountClaimed: '', gstPct: '', dateSubmitted: new Date().toISOString().slice(0,10),
+    billingProjectId: presetProjectId||'',
+    claims: presetLeafData ? [presetLeafData] : [],
+    gstPct: '18', dateSubmitted: new Date().toISOString().slice(0,10),
     notes: ''
   });
+  const [showPicker, setShowPicker] = useState(false);
   const [saving, setSaving] = useState(false);
   function set(f,v){setForm(s=>({...s,[f]:v}));}
 
   const selectedProject = schedules.find(s=>s.docId===form.billingProjectId);
-  const leaves = selectedProject ? flattenLeaves(selectedProject.tree) : [];
-  const raBillsByLeaf = selectedProject ? indexRABillsByLeaf(raBills, selectedProject.docId) : {};
-  const selectedLeaf = leaves.find(l=>l.id===form.leafId) || null;
-  const leafTotals = selectedLeaf ? computeNodeTotals(selectedLeaf, raBillsByLeaf) : null;
-  const leafPending = leafTotals ? Math.max(0, leafTotals.capAmount - leafTotals.claimed) : 0;
+  const amountClaimed = form.claims.reduce((s,c)=>s+Number(c.amount||0),0);
 
   function handleProjectSelect(docId){
     set('billingProjectId',docId);
-    set('leafId','');
-    set('amountClaimed','');
+    set('claims',[]);
     const proj = schedules.find(s=>s.docId===docId);
     set('raBillNo', proj ? nextRABillNumberForProject(proj, raBills) : '');
   }
-  function handleLeafSelect(leafId){
-    set('leafId',leafId);
-    const leaf = leaves.find(l=>l.id===leafId);
-    if (leaf) {
-      const t = computeNodeTotals(leaf, raBillsByLeaf);
-      set('amountClaimed', String(Math.max(0, t.capAmount - t.claimed)));
-    }
-  }
 
   async function handleSave(){
-    if(!form.billingProjectId||!form.leafId||!form.amountClaimed||!form.dateSubmitted) return;
+    if(!form.billingProjectId||!form.claims.length||!form.dateSubmitted) return;
     setSaving(true);
     try {
       const gstPct = Number(form.gstPct)||0;
-      const gstAmount = gstPct > 0 ? Math.round(Number(form.amountClaimed) * gstPct / 100) : 0;
+      const gstAmount = gstPct > 0 ? Math.round(amountClaimed * gstPct / 100) : 0;
       await addRABill({
-        ...form,
-        amountClaimed: Number(form.amountClaimed),
-        gstPct: form.gstPct, gstAmount,
-        amountReceived: 0,
-        balancePending: Number(form.amountClaimed),
-        status: 'Submitted',
-        client: selectedProject?.client||'',
-        leafPath: selectedLeaf?.path.join(' → ')||'',
-        project: selectedProject?.project||'',
+        raBillNo: form.raBillNo, billingProjectId: form.billingProjectId,
+        dateSubmitted: form.dateSubmitted, notes: form.notes,
+        claims: form.claims,
+        amountClaimed, gstPct: form.gstPct, gstAmount,
+        amountReceived: 0, balancePending: amountClaimed, status: 'Submitted',
+        client: selectedProject?.client||'', project: selectedProject?.project||'',
       });
       onClose();
     } catch(e){ console.error(e); alert('Could not submit RA Bill.'); }
@@ -4998,41 +5102,39 @@ function SubmitRABillModal({ onClose, schedules, raBills, existingCount, presetP
           {selectedProject && (
             <div className="form-group">
               <label className="form-label">Claim Against</label>
-              <select className="form-input form-select" value={form.leafId} onChange={e=>handleLeafSelect(e.target.value)} disabled={!!presetLeafId}>
-                <option value="">Select line item…</option>
-                {leaves.map(l=>{
-                  const t = computeNodeTotals(l, raBillsByLeaf);
-                  const pending = Math.max(0, t.capAmount - t.claimed);
-                  return <option key={l.id} value={l.id} disabled={pending<=0}>{l.path.join(' → ')} — Pending {inr(pending)}{pending<=0?' (fully claimed)':''}</option>;
-                })}
-              </select>
-            </div>
-          )}
-
-          {selectedLeaf && leafTotals && (
-            <div style={{background:'var(--primary-50)',borderRadius:6,padding:'8px 12px',fontSize:12,marginBottom:14}}>
-              <div className="flex justify-between"><span>Cap Amount</span><span className="amount fw-600">{inr(leafTotals.capAmount)}</span></div>
-              <div className="flex justify-between mt-1"><span>Already Claimed</span><span className="amount">{inr(leafTotals.claimed)}</span></div>
-              <div className="flex justify-between mt-1 fw-600" style={{color:'var(--amber)'}}><span>Pending</span><span className="amount">{inr(leafPending)}</span></div>
+              <button type="button" className="btn btn-outline" style={{width:'100%',justifyContent:'space-between',display:'flex'}} onClick={()=>setShowPicker(true)}>
+                <span>{form.claims.length ? `${form.claims.length} item${form.claims.length!==1?'s':''} selected` : 'Select line items…'}</span>
+                <span>▸</span>
+              </button>
+              {form.claims.length>0 && (
+                <div style={{background:'var(--primary-50)',borderRadius:6,padding:'8px 12px',fontSize:11.5,marginTop:8}}>
+                  {form.claims.map(c=>(
+                    <div key={c.leafId} className="flex justify-between mt-1">
+                      <span style={{maxWidth:340}}>{c.leafPath}</span>
+                      <span className="amount fw-600">{inr(c.amount)}</span>
+                    </div>
+                  ))}
+                  <div style={{borderTop:'1px solid var(--primary)',marginTop:6,paddingTop:6}} className="flex justify-between fw-600">
+                    <span>Total Claimed</span><span className="amount">{inr(amountClaimed)}</span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           <div className="form-grid">
             <div className="form-group">
-              <label className="form-label">Amount Claimed (₹)</label>
-              <input className="form-input font-mono" value={form.amountClaimed} onChange={e=>set('amountClaimed',e.target.value)} placeholder="0" />
-              {selectedLeaf && Number(form.amountClaimed)>leafPending && (
-                <div style={{fontSize:11,color:'var(--red)',marginTop:3}}>⚠ Exceeds pending balance by {inr(Number(form.amountClaimed)-leafPending)}</div>
-              )}
+              <label className="form-label">Total Amount Claimed (₹)</label>
+              <input className="form-input font-mono" value={inr(amountClaimed)} disabled />
             </div>
             <div className="form-group">
-              <label className="form-label">GST % (output liability)</label>
-              <input className="form-input font-mono" value={form.gstPct} onChange={e=>set('gstPct',e.target.value)} placeholder="e.g. 18" />
+              <label className="form-label">GST %</label>
+              <input className="form-input font-mono" value={form.gstPct} onChange={e=>set('gstPct',e.target.value)} placeholder="18" />
             </div>
           </div>
-          {form.amountClaimed && Number(form.gstPct)>0 && (
+          {amountClaimed>0 && Number(form.gstPct)>0 && (
             <div style={{background:'var(--primary-50)',borderRadius:6,padding:'8px 12px',fontSize:12,marginBottom:14}}>
-              GST {inr(Math.round(Number(form.amountClaimed)*Number(form.gstPct)/100))} · Total incl. GST {inr(Number(form.amountClaimed)+Math.round(Number(form.amountClaimed)*Number(form.gstPct)/100))}
+              GST {inr(Math.round(amountClaimed*Number(form.gstPct)/100))} · Total incl. GST {inr(amountClaimed+Math.round(amountClaimed*Number(form.gstPct)/100))}
             </div>
           )}
           <div className="form-group">
@@ -5042,12 +5144,19 @@ function SubmitRABillModal({ onClose, schedules, raBills, existingCount, presetP
         </div>
         <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
           <button onClick={onClose} className="btn btn-ghost">Cancel</button>
-          <button onClick={handleSave} disabled={saving||!form.billingProjectId||!form.leafId||!form.amountClaimed} className="btn btn-primary"
-            style={{opacity:saving||!form.billingProjectId||!form.leafId||!form.amountClaimed?0.6:1}}>
+          <button onClick={handleSave} disabled={saving||!form.billingProjectId||!form.claims.length} className="btn btn-primary"
+            style={{opacity:saving||!form.billingProjectId||!form.claims.length?0.6:1}}>
             {saving?'Saving…':'Submit RA Bill'}
           </button>
         </div>
       </div>
+      {showPicker && selectedProject && (
+        <ClaimPickerModal
+          project={selectedProject} raBills={raBills} existingClaims={form.claims}
+          onApply={(claims)=>{ set('claims',claims); setShowPicker(false); }}
+          onClose={()=>setShowPicker(false)}
+        />
+      )}
     </div>
   );
 }
@@ -5165,7 +5274,8 @@ function RecordReceiptModal({ raBill, onClose, allReceipts, billingProjects }) {
       const finalAmount = sub ? netAmountToBank : Number(form.amountReceived);
       await addReceipt({
         raBillId: raBill.docId, raBillNo: raBill.raBillNo,
-        billingProjectId: raBill.billingProjectId, leafId: raBill.leafId, leafPath: raBill.leafPath,
+        billingProjectId: raBill.billingProjectId,
+        leafPath: (raBill.claims||(raBill.leafPath?[{leafPath:raBill.leafPath}]:[])).map(c=>c.leafPath).join('; '),
         client: raBill.client, project: raBill.project||'',
         amountClaimed: raBill.amountClaimed,
         billAmountSettled: settled,
@@ -5197,7 +5307,7 @@ function RecordReceiptModal({ raBill, onClose, allReceipts, billingProjects }) {
           <div style={{background:'var(--green-50)',border:'1px solid #C8E6C9',borderRadius:6,padding:'10px 14px',fontSize:12,marginBottom:16}}>
             <div style={{fontWeight:700,fontSize:12.5,marginBottom:6,color:'var(--green)'}}>Cross-Reference</div>
             <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Client</span><strong>{raBill.client}</strong></div>
-            <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Claimed Against</span><span style={{textAlign:'right',maxWidth:220}}>{raBill.leafPath||'—'}</span></div>
+            <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Claimed Against</span><span style={{textAlign:'right',maxWidth:220}}>{(raBill.claims||(raBill.leafPath?[{leafPath:raBill.leafPath}]:[])).map(c=>c.leafPath).join('; ')||'—'}</span></div>
             <div style={{borderTop:'1px solid #C8E6C9',marginTop:8,paddingTop:8}}>
               <div className="flex justify-between"><span style={{color:'var(--text-muted)'}}>Total Claimed (excl. GST)</span><span className="amount fw-600">{inr(raBill.amountClaimed||0)}</span></div>
               <div className="flex justify-between mt-1"><span style={{color:'var(--text-muted)'}}>Already Settled</span><span className="amount" style={{color:'var(--green)'}}>{inr(alreadySettled)}</span></div>
@@ -5474,7 +5584,9 @@ function Receipts() {
                   <tr key={b.docId} style={{background:b.status==='Fully Received'?'var(--green-50)':b.status==='Partially Received'?'var(--amber-50)':''}}>
                     <td className="mono" style={{whiteSpace:'nowrap'}}>{b.raBillNo}</td>
                     <td className="fw-600">{b.client}</td>
-                    <td style={{fontSize:11.5,color:'var(--text-muted)',maxWidth:260}}>{b.leafPath||'—'}</td>
+                    <td style={{fontSize:11.5,color:'var(--text-muted)',maxWidth:260}} title={(b.claims||(b.leafPath?[{leafPath:b.leafPath}]:[])).map(c=>c.leafPath).join('\n')}>
+                      {b.claims ? (b.claims.length===1 ? b.claims[0].leafPath : `${b.claims.length} items`) : (b.leafPath||'—')}
+                    </td>
                     <td>{b.dateSubmitted}</td>
                     <td className="amount fw-600">{inr(b.amountClaimed||0)}</td>
                     <td>
