@@ -133,7 +133,7 @@
   
   /* Tables */
   table { width: 100%; border-collapse: collapse; }
-  thead th { font-size: 10.5px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .4px; padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; background: var(--grey-50); }
+  thead th { font-size: 10.5px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .4px; padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; background: var(--grey-50); position: sticky; top: 0; z-index: 2; }
   tbody td { padding: 9px 12px; border-bottom: 1px solid var(--grey-50); font-size: 12px; color: var(--text); }
   tbody tr:hover { background: #FAFBFC; }
   tbody tr:last-child td { border-bottom: none; }
@@ -2292,7 +2292,7 @@ function WorkOrders() {
         {loading ? <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
         : filtered.length===0 ? <div className="module-coming"><div className="big-icon">🔧</div><h3>No work orders yet</h3></div>
         : (
-          <div style={{overflowX:'auto'}}>
+          <div style={{overflowX:'auto',overflowY:'visible'}}>
           <table style={{minWidth:800}}>
             <thead><tr><th>WO Number</th><th>Issue Date</th><th>Vendor</th><th>Project</th><th>Scope</th><th>Value</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr></thead>
             <tbody>
@@ -2415,7 +2415,7 @@ function PurchaseOrders() {
         {loading ? <div className="module-coming"><div className="big-icon">⏳</div><p className="text-muted">Loading…</p></div>
         : filtered.length===0 ? <div className="module-coming"><div className="big-icon">📦</div><h3>No purchase orders yet</h3></div>
         : (
-          <div style={{overflowX:'auto'}}>
+          <div style={{overflowX:'auto',overflowY:'visible'}}>
           <table style={{minWidth:900}}>
             <thead><tr><th>PO Number</th><th>Issue Date</th><th>Vendor</th><th>Project</th><th>Description</th><th>Value</th><th>Schedule</th><th>Stage</th><th>Actions</th></tr></thead>
             <tbody>
@@ -2495,7 +2495,7 @@ function CashFlowChart({ rows, startBalance, alertLevel }) {
         <span className="card-title">Cash Flow Timeline</span>
         <span style={{fontSize:11,color:'var(--text-muted)'}}>Running balance · Green = positive · Red dot = negative</span>
       </div>
-      <div className="card-body" style={{overflowX:'auto',padding:'8px 0'}}>
+      <div className="card-body" style={{overflowX:'auto',overflowY:'visible',padding:'8px 0'}}>
         <svg viewBox={`0 0 ${W} ${H}`} style={{width:'100%',minWidth:600,height:H}}>
           {/* Grid lines */}
           {yTicks.map((v,i)=>(
@@ -3618,7 +3618,7 @@ function BillPayments() {
             ) : filtered.length===0 ? (
               <div className="module-coming"><div className="big-icon">📑</div><h3>No bills yet</h3><p className="text-muted">Add your first bill.</p></div>
             ) : (
-              <div style={{overflowX:'auto'}}>
+              <div style={{overflowX:'auto',overflowY:'visible'}}>
               <table style={{minWidth:900}}>
                 <thead>
                   <tr><th>Payee</th><th>Project</th><th>Category</th><th>Invoice #</th><th>Due Date</th><th>Base Value</th><th>GST Amt</th><th>Paid So Far</th><th>Net Payable</th><th>Linked To</th><th>Status</th><th style={{minWidth:180}}>Actions</th></tr>
@@ -4915,7 +4915,7 @@ function OpeningBalanceModal({ project, onClose }) {
           <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:12}}>
             Enter what's already been claimed/received against each line item before this system started tracking it — same layout as the billing schedule, click ▾/▸ to expand or collapse a section. This is a one-time snapshot, not a dated transaction.
           </div>
-          <div style={{overflowX:'auto'}}>
+          <div style={{overflowX:'auto',overflowY:'visible'}}>
             <table style={{width:'100%',minWidth:600}}>
               <thead>
                 <tr style={{background:'var(--grey-100)'}}>
@@ -4990,7 +4990,7 @@ function BillingTreeProgressView({ project, raBills, onClaim }) {
   function toggleExpanded(id) { setExpanded(e=>({...e,[id]: e[id]===false ? true : false})); }
   const raBillsByLeaf = indexRABillsByLeaf(raBills, project.docId);
   return (
-    <div style={{overflowX:'auto'}}>
+    <div style={{overflowX:'auto',overflowY:'visible'}}>
       <table style={{width:'100%',minWidth:760}}>
         <thead>
           <tr style={{background:'var(--grey-100)'}}>
@@ -5084,7 +5084,7 @@ function ClaimPickerModal({ project, raBills, existingClaims, onApply, onClose }
           <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:12}}>
             Enter the amount being claimed now against any number of line items — click ▾/▸ to expand or collapse a section.
           </div>
-          <div style={{overflowX:'auto'}}>
+          <div style={{overflowX:'auto',overflowY:'visible'}}>
             <table style={{width:'100%',minWidth:680}}>
               <thead>
                 <tr style={{background:'var(--grey-100)'}}>
@@ -5543,7 +5543,6 @@ function Receipts() {
   const [showNewProject,   setShowNewProject]    = useState(false);
   const [editingProject,   setEditingProject]     = useState(null);
   const [openingBalanceFor,setOpeningBalanceFor]  = useState(null);
-  const [refreshingFor,    setRefreshingFor]      = useState(null);
   const [showNewRABill,    setShowNewRABill]      = useState(false);
   const [claimContext,     setClaimContext]       = useState(null); // {projectId, leafId} from a tree "+Claim"
   const [recordingFor,     setRecordingFor]       = useState(null);
@@ -5654,11 +5653,6 @@ function Receipts() {
                     <div className="flex gap-2" style={{marginBottom:10}}>
                       <button className="btn btn-sm btn-outline" onClick={()=>setOpeningBalanceFor(sc)}>Set Opening Balances</button>
                       <button className="btn btn-sm btn-outline" onClick={()=>setEditingProject(sc)}>Edit Tree</button>
-                      {(sc.project==='Pontoon'||sc.project==='WTP') && (
-                        <button className="btn btn-sm btn-outline" style={{color:'var(--amber)',borderColor:'var(--amber)'}} onClick={()=>setRefreshingFor(sc)}>
-                          🔄 Refresh Tree from Template
-                        </button>
-                      )}
                       <button className="btn btn-sm btn-ghost" style={{color:'var(--red)'}}
                         onClick={()=>{if(confirm('Delete this billing project and all linked RA bills?'))deleteBillingSchedule(sc.docId);}}>
                         Delete Project
@@ -5763,9 +5757,6 @@ function Receipts() {
       {showNewProject   && <NewBillingProjectModal onClose={()=>setShowNewProject(false)} />}
       {editingProject   && <NewBillingProjectModal existing={editingProject} onClose={()=>setEditingProject(null)} />}
       {openingBalanceFor&& <OpeningBalanceModal project={openingBalanceFor} onClose={()=>setOpeningBalanceFor(null)} />}
-      {refreshingFor    && <RefreshTreeModal project={refreshingFor} raBills={raBills}
-        freshTree={refreshingFor.project==='Pontoon' ? pontoonSeedTree() : wtpSeedTree()}
-        onClose={()=>setRefreshingFor(null)} />}
       {showNewRABill    && <SubmitRABillModal onClose={()=>setShowNewRABill(false)} schedules={schedules} raBills={raBills} existingCount={raBills.length} />}
       {claimContext     && (
         <SubmitRABillModal
@@ -6882,7 +6873,7 @@ function CapitalLoans() {
               </select>
             </div>
           </div>
-          <div style={{overflowX:'auto'}}>
+          <div style={{overflowX:'auto',overflowY:'visible'}}>
           <table style={{minWidth:900}}>
             <thead>
               <tr><th>Type</th><th>Source</th><th>Project</th><th>Date</th><th>Amount</th><th>Mode</th><th>Ref #</th><th>Total Repaid</th><th>Outstanding</th><th>Status</th><th>Actions</th></tr>
@@ -7830,7 +7821,7 @@ function Statement() {
             <p className="text-muted">Try adjusting the filters above.</p>
           </div>
         ) : (
-        <div style={{overflowX:'auto'}}>
+        <div style={{overflowX:'auto',overflowY:'visible'}}>
           <table style={{minWidth:800}}>
             <thead>
               <tr><th>Date</th><th>Description</th><th>Category</th><th>Project</th><th>Type</th><th>Amount</th></tr>
@@ -8230,7 +8221,7 @@ function PermissionMatrix({ currentUser }) {
           {saving?'Saving…':saved?'✓ Saved':'Save Permissions'}
         </button>
       </div>
-      <div className="card-body" style={{overflowX:'auto'}}>
+      <div className="card-body" style={{overflowX:'auto',overflowY:'visible'}}>
         <table style={{width:'100%',minWidth:500}}>
           <thead>
             <tr>
