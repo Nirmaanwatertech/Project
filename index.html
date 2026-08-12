@@ -4904,7 +4904,8 @@ function BillingTreeProgressView({ project, raBills, onClaim }) {
 // MODAL 2 — Submit RA Bill
 // ════════════════════════════════════════════════════
 function nextRABillNumberForProject(project, raBills) {
-  const startNum = Number(project.raBillStartNumber)||1;
+  const defaultStart = project.raBillStartNumber===undefined && project.project==='Pontoon' ? 4 : 1;
+  const startNum = Number(project.raBillStartNumber)||defaultStart;
   const countForProject = raBills.filter(b=>b.billingProjectId===project.docId).length;
   return `RA Bill ${startNum + countForProject}`;
 }
