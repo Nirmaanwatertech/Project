@@ -4004,6 +4004,53 @@ function flattenLeaves(nodes, path) {
   return out;
 }
 
+// Merge a freshly-generated template tree with an already-saved tree: for each
+// fresh leaf, look for a matching old leaf (exact full path first, then a unique
+// name match as fallback) and, if found, keep the OLD leaf's id and opening
+// balances — so existing RA Bill claims (which reference leaf ids) and opening
+// balances survive a template update. Old leaves with real data that couldn't
+// be matched (because that section was restructured) are reported separately
+// so the user can manually reassign them rather than silently losing them.
+function mergeTreeWithTemplate(freshTree, oldTree, raBills, projectDocId) {
+  const oldLeaves = flattenLeaves(oldTree);
+  const oldByPath = {};
+  const oldByName = {};
+  oldLeaves.forEach(l => {
+    const pathKey = l.path.join(' → ');
+    oldByPath[pathKey] = l;
+    (oldByName[l.name] = oldByName[l.name]||[]).push(l);
+  });
+  const claimedLeafIds = new Set();
+  raBills.filter(b=>b.billingProjectId===projectDocId).forEach(b => {
+    (b.claims||(b.leafId?[{leafId:b.leafId}]:[])).forEach(c=>claimedLeafIds.add(c.leafId));
+  });
+  const matchedOldIds = new Set();
+
+  function mergeNode(node, path) {
+    const p = [...path, node.name];
+    if (isLeafNode(node)) {
+      const pathKey = p.join(' → ');
+      let match = oldByPath[pathKey];
+      if (!match) {
+        const candidates = oldByName[node.name];
+        if (candidates && candidates.length === 1) match = candidates[0];
+      }
+      if (match) {
+        matchedOldIds.add(match.id);
+        return { ...node, id: match.id, openingClaimed: match.openingClaimed||0, openingReceived: match.openingReceived||0 };
+      }
+      return node;
+    }
+    return { ...node, children: (node.children||[]).map(c=>mergeNode(c, p)) };
+  }
+
+  const mergedTree = freshTree.map(n=>mergeNode(n, []));
+  const unmatchedOld = oldLeaves.filter(l =>
+    !matchedOldIds.has(l.id) && (Number(l.openingClaimed)>0 || Number(l.openingReceived)>0 || claimedLeafIds.has(l.id))
+  );
+  return { mergedTree, unmatchedOld };
+}
+
 // Roll up claimed/received for a node from its own opening balance (if leaf) or its
 // children (if not) — RA Bills matched by leafId. Cap amount is always read directly
 // from the node itself, never recomputed, so it can't drift from the approved breakup.
@@ -4767,6 +4814,63 @@ function nodeCapSum(n) {
   return isLeafNode(n) ? Number(n.capAmount||0) : (n.children||[]).reduce((s,c)=>s+nodeCapSum(c),0);
 }
 
+// Preview + confirm screen for refreshing a project's tree from its template,
+// showing exactly what will be preserved vs. what needs manual reassignment.
+function RefreshTreeModal({ project, raBills, freshTree, onClose }) {
+  const [saving, setSaving] = useState(false);
+  const { mergedTree, unmatchedOld } = mergeTreeWithTemplate(freshTree, project.tree, raBills, project.docId);
+  const oldLeafCount = flattenLeaves(project.tree).length;
+  const newLeafCount = flattenLeaves(mergedTree).length;
+  const matchedCount = oldLeafCount - unmatchedOld.length;
+
+  async function handleConfirm() {
+    setSaving(true);
+    try {
+      await updateBillingSchedule(project.docId, { tree: mergedTree });
+      onClose();
+    } catch(e) { console.error(e); alert('Could not refresh tree.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1001,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:560,maxHeight:'88vh',boxShadow:'0 8px 40px rgba(0,0,0,.22)',display:'flex',flexDirection:'column'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--amber)',padding:'14px 18px',flexShrink:0}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>🔄 Refresh Tree from Template</span>
+        </div>
+        <div style={{padding:'16px 18px',overflowY:'auto',flex:1,minHeight:0}}>
+          <div style={{fontSize:12,color:'var(--text-muted)',marginBottom:14}}>
+            This updates the billing tree structure to match the latest template. Line items that still exist (same name and position) keep their opening balances and stay linked to any RA Bills already claimed against them.
+          </div>
+          <div style={{background:'var(--green-50)',border:'1px solid #C8E6C9',borderRadius:6,padding:'10px 14px',fontSize:12.5,marginBottom:12}}>
+            <div className="flex justify-between"><span>Line items matched & preserved</span><strong>{matchedCount}</strong></div>
+            <div className="flex justify-between mt-1"><span>New line items in updated template</span><strong>{newLeafCount - matchedCount}</strong></div>
+          </div>
+          {unmatchedOld.length > 0 && (
+            <div style={{background:'var(--red-50)',border:'1px solid #FFCDD2',borderRadius:6,padding:'10px 14px',fontSize:12}}>
+              <div style={{fontWeight:700,color:'var(--red)',marginBottom:8}}>
+                ⚠ {unmatchedOld.length} item{unmatchedOld.length!==1?'s':''} with data couldn't be auto-matched — that section was restructured. Please manually re-enter these via Opening Balances (or reassign any RA Bill claims) after refreshing:
+              </div>
+              {unmatchedOld.map(l=>(
+                <div key={l.id} style={{borderTop:'1px solid #FFCDD2',padding:'6px 0',fontSize:11.5}}>
+                  <div style={{fontWeight:600}}>{l.path.join(' → ')}</div>
+                  {Number(l.openingClaimed)>0 && <div>Opening balance: {inr(l.openingClaimed)}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div style={{padding:'14px 18px',display:'flex',gap:10,justifyContent:'flex-end',flexShrink:0,borderTop:'1px solid var(--border)'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleConfirm} disabled={saving} className="btn btn-primary" style={{opacity:saving?0.6:1}}>
+            {saving?'Saving…':'Confirm & Update Tree'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OpeningBalanceModal({ project, onClose }) {
   const leaves = flattenLeaves(project.tree);
   const [values, setValues] = useState(() => {
@@ -5439,6 +5543,7 @@ function Receipts() {
   const [showNewProject,   setShowNewProject]    = useState(false);
   const [editingProject,   setEditingProject]     = useState(null);
   const [openingBalanceFor,setOpeningBalanceFor]  = useState(null);
+  const [refreshingFor,    setRefreshingFor]      = useState(null);
   const [showNewRABill,    setShowNewRABill]      = useState(false);
   const [claimContext,     setClaimContext]       = useState(null); // {projectId, leafId} from a tree "+Claim"
   const [recordingFor,     setRecordingFor]       = useState(null);
@@ -5549,6 +5654,11 @@ function Receipts() {
                     <div className="flex gap-2" style={{marginBottom:10}}>
                       <button className="btn btn-sm btn-outline" onClick={()=>setOpeningBalanceFor(sc)}>Set Opening Balances</button>
                       <button className="btn btn-sm btn-outline" onClick={()=>setEditingProject(sc)}>Edit Tree</button>
+                      {(sc.project==='Pontoon'||sc.project==='WTP') && (
+                        <button className="btn btn-sm btn-outline" style={{color:'var(--amber)',borderColor:'var(--amber)'}} onClick={()=>setRefreshingFor(sc)}>
+                          🔄 Refresh Tree from Template
+                        </button>
+                      )}
                       <button className="btn btn-sm btn-ghost" style={{color:'var(--red)'}}
                         onClick={()=>{if(confirm('Delete this billing project and all linked RA bills?'))deleteBillingSchedule(sc.docId);}}>
                         Delete Project
@@ -5653,6 +5763,9 @@ function Receipts() {
       {showNewProject   && <NewBillingProjectModal onClose={()=>setShowNewProject(false)} />}
       {editingProject   && <NewBillingProjectModal existing={editingProject} onClose={()=>setEditingProject(null)} />}
       {openingBalanceFor&& <OpeningBalanceModal project={openingBalanceFor} onClose={()=>setOpeningBalanceFor(null)} />}
+      {refreshingFor    && <RefreshTreeModal project={refreshingFor} raBills={raBills}
+        freshTree={refreshingFor.project==='Pontoon' ? pontoonSeedTree() : wtpSeedTree()}
+        onClose={()=>setRefreshingFor(null)} />}
       {showNewRABill    && <SubmitRABillModal onClose={()=>setShowNewRABill(false)} schedules={schedules} raBills={raBills} existingCount={raBills.length} />}
       {claimContext     && (
         <SubmitRABillModal
