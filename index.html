@@ -2921,13 +2921,17 @@ async function addBill(data) {
   const { db, collection, addDoc } = window.fb;
   await addDoc(userCol(BILLS_COLLECTION), { ...data, createdAt: Date.now(), paid: false });
 }
-async function markBillPaid(docId) {
+async function markBillPaid(docId, paidDate) {
   const { db, doc, updateDoc } = window.fb;
-  await updateDoc(userDoc(BILLS_COLLECTION, docId), { paid: true, paidAt: Date.now(), paidDate: new Date().toISOString().slice(0,10) });
+  await updateDoc(userDoc(BILLS_COLLECTION, docId), { paid: true, paidAt: Date.now(), paidDate });
 }
 async function unmarkBillPaid(docId) {
   const { updateDoc } = window.fb;
   await updateDoc(userDoc(BILLS_COLLECTION, docId), { paid: false, paidAt: null, paidDate: '' });
+}
+async function setBillPaidDate(docId, paidDate) {
+  const { updateDoc } = window.fb;
+  await updateDoc(userDoc(BILLS_COLLECTION, docId), { paidDate });
 }
 async function deleteBill(docId) {
   const { db, doc, deleteDoc } = window.fb;
@@ -3133,7 +3137,12 @@ function NewAdvanceModal({ onClose, pos, wos, bills, existing }) {
       let savedDocId = existing?.docId;
       if (isEdit) {
         const { updateDoc } = window.fb;
-        await updateDoc(userDoc(ADVANCES_COLLECTION, existing.docId), { ...form, amount: amt });
+        // Recalculate balance from the new amount, preserving whatever's already
+        // been adjusted against this advance — otherwise balance stays stale.
+        const adjustedSoFar = Number(existing.adjustedAmount||0);
+        const newBalance = Math.max(0, amt - adjustedSoFar);
+        const newStatus = newBalance <= 0 ? 'Fully Adjusted' : (adjustedSoFar > 0 ? 'Partially Adjusted' : 'Unadjusted');
+        await updateDoc(userDoc(ADVANCES_COLLECTION, existing.docId), { ...form, amount: amt, balanceAmount: newBalance, status: newStatus });
       } else {
         const { addDoc } = window.fb;
         const ref = await addDoc(userCol(ADVANCES_COLLECTION), { ...form, amount: amt, balanceAmount: amt, status: 'Unadjusted', createdAt: Date.now() });
@@ -3387,6 +3396,8 @@ function BillPayments() {
   const [editBill, setEditBill] = useState(null);
   const [editAdvance, setEditAdvance] = useState(null);
   const [viewBillSchedule, setViewBillSchedule] = useState(null);
+  const [markPaidDates, setMarkPaidDates] = useState({});
+  const [fixDateFor, setFixDateFor] = useState(null);
 
   const todayStr = new Date().toISOString().slice(0,10);
 
@@ -3502,7 +3513,7 @@ function BillPayments() {
       // Hide fromSchedule bills that are actually advance payments (mis-routed)
       !(b.fromSchedule && (b.notes||'').startsWith('Advance')) &&
       (catFilter === 'all' || b.category === catFilter) &&
-      (statusFilter === 'all' || b.computedStatus === statusFilter) &&
+      (statusFilter === 'all' || (statusFilter==='Missing Date' ? ((b.paid && !b.paidDate) || (b.hasSchedule && (b.paymentSchedule||[]).some(s=>s.paid && !s.datePaid))) : b.computedStatus === statusFilter)) &&
       (projectFilter === 'all' || b.project === projectFilter) &&
       (vendorFilter === 'all' || b.payee === vendorFilter) &&
       (monthFilter === 'all' || (b.due||'').startsWith(monthFilter))
@@ -3516,6 +3527,7 @@ function BillPayments() {
   const next7 = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
   const dueWeekTotal = withStatus.filter(b=>!b.paid&&b.due>=todayStr&&b.due<=next7).reduce((s,b)=>s+b.netPayable,0);
   const paidTotal = withStatus.reduce((s,b)=>s+b.paidSoFar,0);
+  const missingPaidDateBills = withStatus.filter(b => (b.paid && !b.paidDate) || (b.hasSchedule && (b.paymentSchedule||[]).some(s=>s.paid && !s.datePaid)));
 
   // Advance stats
   const totalAdvances = advances.reduce((s,a)=>s+Number(a.amount||0),0);
@@ -3580,6 +3592,12 @@ function BillPayments() {
             <div className="stat-card"><div className="stat-label">Due This Week (Net)</div><div className="stat-value blue">{inr(dueWeekTotal)}</div></div>
             <div className="stat-card"><div className="stat-label">Total Paid (incl. GST)</div><div className="stat-value green">{inr(paidTotal)}</div><div className="stat-sub" style={{fontSize:10}}>{withStatus.filter(b=>b.paid).length} bills fully settled</div></div>
           </div>
+          {missingPaidDateBills.length>0 && (
+            <div style={{background:'var(--amber-50)',border:'1px solid var(--amber)',borderRadius:8,padding:'10px 14px',marginBottom:14,fontSize:12.5,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span>⚠ <strong>{missingPaidDateBills.length}</strong> bill{missingPaidDateBills.length!==1?'s are':' is'} marked Paid without a recorded payment date — Statement/Cash Flow will show the wrong date for {missingPaidDateBills.length!==1?'these':'it'} until fixed.</span>
+              <button className="btn btn-sm btn-outline" style={{borderColor:'var(--amber)',color:'var(--amber)'}} onClick={()=>setStatusFilter('Missing Date')}>Review</button>
+            </div>
+          )}
           <div className="card">
             <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
               <div className="flex gap-2" style={{flexWrap:'wrap'}}>
@@ -3587,9 +3605,10 @@ function BillPayments() {
                   <option value="all">All Categories</option>
                   {(window.appLists?.billCategories||DEFAULT_LISTS.billCategories).map(c=><option key={c}>{c}</option>)}
                 </select>
-                <select className="form-input form-select" style={{width:140}} onChange={e=>setStatusFilter(e.target.value)}>
+                <select className="form-input form-select" style={{width:150}} value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}>
                   <option value="all">All Status</option>
                   <option>Overdue</option><option>Due Today</option><option>Upcoming</option><option>Paid</option>
+                  <option value="Missing Date">⚠ Missing Payment Date</option>
                 </select>
                 <select className="form-input form-select" style={{width:130}} value={projectFilter} onChange={e=>setBillProjectFilter(e.target.value)}>
                   <option value="all">All Projects</option>
@@ -3678,6 +3697,40 @@ function BillPayments() {
                             <>
                               <button className="btn btn-sm btn-ghost" onClick={()=>setEditBill(b)}>Edit</button>
                               {b.paymentSchedule&&b.paymentSchedule.length>0&&<button className="btn btn-sm btn-outline" onClick={()=>setViewBillSchedule(b)}>Schedule</button>}
+                              {(!b.paymentSchedule||b.paymentSchedule.length===0) && (
+                                b.paid ? (
+                                  b.paidDate ? (
+                                    <button className="btn btn-sm btn-ghost" style={{color:'var(--amber)',border:'1px solid var(--amber)'}}
+                                      onClick={()=>{if(confirm('Unmark this bill as paid?'))unmarkBillPaid(b.docId);}}>↩ Unmark Paid</button>
+                                  ) : (
+                                    <div style={{display:'flex',gap:4,alignItems:'center'}}>
+                                      <span style={{fontSize:10,color:'var(--red)'}}>⚠ No date</span>
+                                      <input type="date" value={markPaidDates[b.docId]||''} onChange={e=>setMarkPaidDates(p=>({...p,[b.docId]:e.target.value}))}
+                                        style={{fontSize:11,padding:'3px 5px',border:'1px solid var(--red)',borderRadius:4,width:120}} />
+                                      <button className="btn btn-sm btn-primary" style={{opacity:markPaidDates[b.docId]?1:0.5}}
+                                        onClick={()=>{
+                                          if(!markPaidDates[b.docId]){alert('Please select a payment date.');return;}
+                                          setBillPaidDate(b.docId, markPaidDates[b.docId]);
+                                          setMarkPaidDates(p=>({...p,[b.docId]:''}));
+                                        }}>Save Date</button>
+                                    </div>
+                                  )
+                                ) : (
+                                  <div style={{display:'flex',gap:4,alignItems:'center'}}>
+                                    <input type="date" value={markPaidDates[b.docId]||''} onChange={e=>setMarkPaidDates(p=>({...p,[b.docId]:e.target.value}))}
+                                      style={{fontSize:11,padding:'3px 5px',border:'1px solid var(--border)',borderRadius:4,width:120}} />
+                                    <button className="btn btn-sm btn-primary" style={{background:'var(--green)',opacity:markPaidDates[b.docId]?1:0.5}}
+                                      onClick={()=>{
+                                        if(!markPaidDates[b.docId]){alert('Please select a payment date.');return;}
+                                        markBillPaid(b.docId, markPaidDates[b.docId]);
+                                        setMarkPaidDates(p=>({...p,[b.docId]:''}));
+                                      }}>Mark Paid</button>
+                                  </div>
+                                )
+                              )}
+                              {b.hasSchedule && (b.paymentSchedule||[]).some(s=>s.paid && !s.datePaid) && (
+                                <span style={{fontSize:10,color:'var(--red)',cursor:'pointer',textDecoration:'underline'}} onClick={()=>setViewBillSchedule(b)}>⚠ Fix stage date</span>
+                              )}
                               <button className="btn btn-sm btn-ghost" onClick={()=>{if(confirm('Delete?'))deleteBill(b.docId);}}>Delete</button>
                             </>
                           )}
@@ -7748,25 +7801,33 @@ function Statement() {
   }
 
   function exportPDF() {
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({orientation:'landscape'});
-    doc.setFontSize(14);
-    doc.text('Nirmaan Watertech Solutions — Statement', 14, 15);
-    doc.setFontSize(9);
-    doc.text(`Generated ${fmt(new Date().toISOString().slice(0,10))}  ·  Total In ${inr(totalIn)}  ·  Total Out ${inr(totalOut)}  ·  Petty Cash ${inr(totalPettyCash)}  ·  Net ${inr(net)}`, 14, 22);
-    doc.autoTable({
-      startY: 28,
-      head: [['Date','Description','Category','Project','Type','Amount']],
-      body: filtered.map(r => [fmt(r.date), r.desc, r.cat, r.project||'—', r.dir==='in'?'In':'Out', (r.dir==='in'?'+':'−')+inr(r.amt)]),
-      styles: { fontSize: 8 },
-      headStyles: { fillColor: [30,58,95] },
-      didParseCell: (data) => {
-        if (data.section==='body' && data.column.index===5) {
-          data.cell.styles.textColor = data.row.raw[4]==='In' ? [22,163,74] : [220,38,38];
+    try {
+      if (!window.jspdf) { alert('PDF library did not load — check your internet connection and try again.'); return; }
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({orientation:'landscape'});
+      // jsPDF's built-in fonts don't support the ₹ Unicode glyph, so use "Rs." for this export only.
+      const inrPdf = (n) => 'Rs. ' + Math.round(Number(n)).toLocaleString('en-IN');
+      doc.setFontSize(14);
+      doc.text('Nirmaan Watertech Solutions - Statement', 14, 15);
+      doc.setFontSize(9);
+      doc.text(`Generated ${fmt(new Date().toISOString().slice(0,10))}  |  Total In ${inrPdf(totalIn)}  |  Total Out ${inrPdf(totalOut)}  |  Petty Cash ${inrPdf(totalPettyCash)}  |  Net ${inrPdf(net)}`, 14, 22);
+      doc.autoTable({
+        startY: 28,
+        head: [['Date','Description','Category','Project','Type','Amount']],
+        body: filtered.map(r => [fmt(r.date), r.desc, r.cat, r.project||'-', r.dir==='in'?'In':'Out', (r.dir==='in'?'+':'-')+inrPdf(r.amt)]),
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [30,58,95] },
+        didParseCell: (data) => {
+          if (data.section==='body' && data.column.index===5) {
+            data.cell.styles.textColor = data.row.raw[4]==='In' ? [22,163,74] : [220,38,38];
+          }
         }
-      }
-    });
-    doc.save(`Statement_${new Date().toISOString().slice(0,10)}.pdf`);
+      });
+      doc.save(`Statement_${new Date().toISOString().slice(0,10)}.pdf`);
+    } catch(e) {
+      console.error(e);
+      alert('Could not export PDF: '+e.message);
+    }
   }
 
   return (
