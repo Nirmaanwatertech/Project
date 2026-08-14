@@ -3471,7 +3471,7 @@ function BillPayments() {
         : advanceDeducted;
 
     const netPayable = hasSchedule
-      ? Math.max(0, unpaidStagesAmt - advanceDeducted)
+      ? unpaidStagesAmt
       : Math.max(0, totalBillAmt - paidSoFar);
 
 
