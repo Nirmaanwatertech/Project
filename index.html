@@ -3527,7 +3527,6 @@ function BillPayments() {
   const next7 = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
   const dueWeekTotal = withStatus.filter(b=>!b.paid&&b.due>=todayStr&&b.due<=next7).reduce((s,b)=>s+b.netPayable,0);
   const paidTotal = withStatus.reduce((s,b)=>s+b.paidSoFar,0);
-  const missingPaidDateBills = withStatus.filter(b => (b.paid && !b.paidDate) || (b.hasSchedule && (b.paymentSchedule||[]).some(s=>s.paid && !s.datePaid)));
 
   // Advance stats
   const totalAdvances = advances.reduce((s,a)=>s+Number(a.amount||0),0);
@@ -3592,12 +3591,6 @@ function BillPayments() {
             <div className="stat-card"><div className="stat-label">Due This Week (Net)</div><div className="stat-value blue">{inr(dueWeekTotal)}</div></div>
             <div className="stat-card"><div className="stat-label">Total Paid (incl. GST)</div><div className="stat-value green">{inr(paidTotal)}</div><div className="stat-sub" style={{fontSize:10}}>{withStatus.filter(b=>b.paid).length} bills fully settled</div></div>
           </div>
-          {missingPaidDateBills.length>0 && (
-            <div style={{background:'var(--amber-50)',border:'1px solid var(--amber)',borderRadius:8,padding:'10px 14px',marginBottom:14,fontSize:12.5,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <span>⚠ <strong>{missingPaidDateBills.length}</strong> bill{missingPaidDateBills.length!==1?'s are':' is'} marked Paid without a recorded payment date — Statement/Cash Flow will show the wrong date for {missingPaidDateBills.length!==1?'these':'it'} until fixed.</span>
-              <button className="btn btn-sm btn-outline" style={{borderColor:'var(--amber)',color:'var(--amber)'}} onClick={()=>setStatusFilter('Missing Date')}>Review</button>
-            </div>
-          )}
           <div className="card">
             <div className="card-body" style={{paddingTop:10,paddingBottom:10}}>
               <div className="flex gap-2" style={{flexWrap:'wrap'}}>
