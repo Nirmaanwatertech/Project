@@ -3278,39 +3278,38 @@ function LinkAdvanceModal({ advance, onClose, pos, bills }) {
             const gstAmt   = b.gstAmount !== undefined ? Number(b.gstAmount||0)
                            : (b.gstPct ? Math.round(baseAmt * parseFloat(b.gstPct)/100) : 0);
             const billTotal  = baseAmt + gstAmt;
-            const netPayable = Math.max(0, billTotal - adj);
-            const isPaid     = netPayable <= 0;
 
             // Use advance's datePaid as the payment date for the bill; fall back to today
             // so schedule stages still get synced even if the advance has no datePaid set
             const advDate = advance.datePaid || b.due || new Date().toISOString().slice(0,10);
 
+            // Accumulate by delta so multiple different advances linked to the same
+            // bill add up correctly, and re-editing this same advance's link doesn't
+            // double-count its own previous contribution.
+            const prevAdjForThisAdvance = Number(advance.adjustedAmount||0);
+            const newAdvanceDeducted = Math.max(0, Number(b.advanceDeducted||0) - prevAdjForThisAdvance + adj);
+            const netPayable = Math.max(0, billTotal - newAdvanceDeducted);
+            const isPaid     = netPayable <= 0;
+
             const billUpdate = {
-              advanceDeducted: adj,
+              advanceDeducted: newAdvanceDeducted,
               linkedAdvance:   advance.docId,
               paid:            isPaid,
               paidAt:          isPaid ? Date.now() : null,
             };
 
-            // Always update payment schedule stages with advance date
-            if (b.paymentSchedule && b.paymentSchedule.length > 0 && advDate) {
-              const newSchedule = b.paymentSchedule.map(s => {
-                if (!s.paid) {
-                  return {...s, paid: isPaid, paidAt: isPaid ? Date.now() : null, datePaid: isPaid ? advDate : ''};
-                }
-                return s;
-              });
-              billUpdate.paymentSchedule = newSchedule;
-            } else if (!b.paymentSchedule || b.paymentSchedule.length === 0) {
-              // No schedule — create a single synthetic paid stage so modal shows correctly
-              if (isPaid && advDate) {
-                billUpdate.paymentSchedule = [{
-                  id: 'adv-' + advance.docId.slice(0,8),
-                  stageType: 'Against Delivery', amount: String(baseAmt),
-                  date: advDate, paid: true, paidAt: Date.now(), datePaid: advDate,
-                  linkedEntryId: advance.docId,
-                }];
-              }
+            // Give this advance its own schedule stage, keyed by advance id, so it
+            // never overwrites a stage created by a different advance linked to the
+            // same bill — each stays individually dated for Statement/Cash Flow.
+            if (advDate) {
+              const existingStages = b.paymentSchedule || [];
+              const withoutThisAdvance = existingStages.filter(s => s.linkedEntryId !== advance.docId);
+              billUpdate.paymentSchedule = [...withoutThisAdvance, {
+                id: 'adv-' + advance.docId.slice(0,8),
+                stageType: 'Against Delivery', amount: String(adj),
+                date: advDate, paid: true, paidAt: Date.now(), datePaid: advDate,
+                linkedEntryId: advance.docId,
+              }];
             }
             if (advDate) billUpdate.paidDate = advDate;
 
@@ -7741,14 +7740,16 @@ function Statement() {
       date: a.datePaid||'', desc: `Advance — ${a.vendor||''}`, cat:'Advance', grp:'Advance Payments (unadj.)',
       project: a.project||'', dir:'out', amt: Number(a.balanceAmount!==undefined ? a.balanceAmount : a.amount||0)
     })),
-    ...bills.filter(b=>b.paid).map(b => ({
+    ...bills.filter(b=>b.paid && !(b.paymentSchedule && b.paymentSchedule.length>0)).map(b => ({
       date: b.paidDate||b.due||(b.paidAt ? new Date(b.paidAt).toISOString().slice(0,10) : ''), desc: b.payee||'', cat: b.category||'Bill', grp:'Bills & Invoices (paid)',
       project: b.project||'', dir:'out', amt: billTotalAmt(b)
     })),
-    // Partially-paid schedule-based bills: log each paid stage on its own date
-    ...bills.filter(b=>!b.paid && b.paymentSchedule && b.paymentSchedule.length>0).flatMap(b =>
+    // Schedule-based bills — always log each paid stage on its own date, whether the
+    // bill is only partially settled or fully paid, so multiple payments against the
+    // same bill (e.g. advances + later direct payments) each keep their real date.
+    ...bills.filter(b=>b.paymentSchedule && b.paymentSchedule.length>0).flatMap(b =>
       b.paymentSchedule.filter(s=>s.paid).map(s => ({
-        date: s.datePaid||s.date||'', desc: `${b.payee||''} (part payment)`, cat: b.category||'Bill', grp:'Bills & Invoices (paid)',
+        date: s.datePaid||s.date||'', desc: `${b.payee||''}${b.paid?'':' (part payment)'}`, cat: b.category||'Bill', grp:'Bills & Invoices (paid)',
         project: b.project||'', dir:'out', amt: Number(s.amount||0) + Number(s.includesGst ? s.gstAmount||0 : 0)
       }))
     ),
