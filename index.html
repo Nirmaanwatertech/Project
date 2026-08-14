@@ -3304,9 +3304,10 @@ function LinkAdvanceModal({ advance, onClose, pos, bills }) {
             if (advDate) {
               const existingStages = b.paymentSchedule || [];
               const withoutThisAdvance = existingStages.filter(s => s.linkedEntryId !== advance.docId);
+              const stagePct = baseAmt>0 ? String(Math.round(adj/baseAmt*100)) : '';
               billUpdate.paymentSchedule = [...withoutThisAdvance, {
                 id: 'adv-' + advance.docId.slice(0,8),
-                stageType: 'Against Delivery', amount: String(adj),
+                stageType: 'Against Delivery', amount: String(adj), pct: stagePct,
                 date: advDate, paid: true, paidAt: Date.now(), datePaid: advDate,
                 linkedEntryId: advance.docId,
               }];
@@ -8550,6 +8551,28 @@ function DataFixPanel() {
         } else { skipped++; }
       }
 
+      // ── FIX 6: Payment schedule stages — correct stale % vs amount ──
+      addLog('');
+      addLog('🔧 Fix 6: Payment schedules — correct stage % to match amount');
+      for (const [col, docs] of [[BILLS_COLLECTION,bills],[PO_COLLECTION,pos],[WO_COLLECTION,wos]]) {
+        for (const d of docs) {
+          const sched = d.paymentSchedule||[];
+          if (!sched.length) continue;
+          const baseAmt = Number(d.amount||0);
+          if (!baseAmt) continue;
+          let changed = false;
+          const newSched = sched.map(s => {
+            const correctPct = String(Math.round(Number(s.amount||0)/baseAmt*100));
+            if (String(s.pct||'') !== correctPct) { changed = true; return {...s, pct: correctPct}; }
+            return s;
+          });
+          if (changed) {
+            try { await updateDoc(userDoc(col,d.docId),{paymentSchedule:newSched}); addLog(`  ✓ ${d.payee||d.vendorName||d.docId.slice(0,8)}: stage % corrected`,'ok'); fixed++; }
+            catch(e){addLog(`  ✗ ${e.message}`,'err');}
+          } else { skipped++; }
+        }
+      }
+
       addLog('');
       addLog(`✅ Complete! Fixed ${fixed} records, ${skipped} already correct.`,'ok');
       setDone(true);
@@ -8576,6 +8599,7 @@ function DataFixPanel() {
             <li>fromSchedule bills → marks as Paid if linked PO stage is paid</li>
             <li>Bills missing <code>gstAmount</code>/<code>totalAmount</code> → calculates and stores them</li>
             <li>Advances → corrects <code>balanceAmount</code> and <code>status</code></li>
+            <li>Payment schedule stages (Bills/PO/WO) → recalculates stale <code>%</code> to match the actual amount</li>
           </ol>
         </div>
         <button className="btn btn-primary" onClick={runFixAll} disabled={running}
