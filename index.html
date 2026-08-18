@@ -7745,15 +7745,30 @@ function Statement() {
       date: b.paidDate||b.due||(b.paidAt ? new Date(b.paidAt).toISOString().slice(0,10) : ''), desc: b.payee||'', cat: b.category||'Bill', grp:'Bills & Invoices (paid)',
       project: b.project||'', dir:'out', amt: billTotalAmt(b)
     })),
-    // Schedule-based bills — always log each paid stage on its own date, whether the
-    // bill is only partially settled or fully paid, so multiple payments against the
-    // same bill (e.g. advances + later direct payments) each keep their real date.
-    ...bills.filter(b=>b.paymentSchedule && b.paymentSchedule.length>0).flatMap(b =>
-      b.paymentSchedule.filter(s=>s.paid).map(s => ({
+    // Schedule-based bills — log each paid stage on its own date, whether the bill
+    // is only partially settled or fully paid, so multiple payments against the same
+    // bill (e.g. advances + later direct payments) each keep their real date. If the
+    // bill is fully paid, top up any shortfall between what stages capture and the
+    // bill's true total (e.g. GST, which advance-linked stages never carry) as one
+    // more entry dated on the bill's own paidDate — so the total always matches
+    // Cash Flow's full bill value once settled, without losing per-stage dates.
+    ...bills.filter(b=>b.paymentSchedule && b.paymentSchedule.length>0).flatMap(b => {
+      const rows = b.paymentSchedule.filter(s=>s.paid).map(s => ({
         date: s.datePaid||s.date||'', desc: `${b.payee||''}${b.paid?'':' (part payment)'}`, cat: b.category||'Bill', grp:'Bills & Invoices (paid)',
         project: b.project||'', dir:'out', amt: Number(s.amount||0) + Number(s.includesGst ? s.gstAmount||0 : 0)
-      }))
-    ),
+      }));
+      if (b.paid) {
+        const stagesSum = rows.reduce((s,r)=>s+r.amt,0);
+        const shortfall = Math.max(0, billTotalAmt(b) - stagesSum);
+        if (shortfall > 0) {
+          rows.push({
+            date: b.paidDate||b.due||'', desc: `${b.payee||''} (balance)`, cat: b.category||'Bill', grp:'Bills & Invoices (paid)',
+            project: b.project||'', dir:'out', amt: shortfall
+          });
+        }
+      }
+      return rows;
+    }),
     ...expenses.map(e => ({
       date: e.date||'', desc: e.description||'', cat: e.category||'General Expense', grp:'General Expenses',
       project: e.project||'', dir:'out', amt: Number(e.amount||0)
