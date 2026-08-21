@@ -2467,6 +2467,81 @@ function PurchaseOrders() {
 }
 
 // ─── Cash Flow Chart ──────────────────────────────────
+function GstReconciliationModal({ month, inputGstAmt, existing, onClose }) {
+  const [status, setStatus] = useState(existing?.status || '');
+  const [unutilizedAmount, setUnutilizedAmount] = useState(existing?.unutilizedAmount!==undefined ? String(existing.unutilizedAmount) : String(inputGstAmt));
+  const [saving, setSaving] = useState(false);
+
+  const [y,m] = month.split('-').map(Number);
+  const nm = m===12?1:m+1, ny = m===12?y+1:y;
+  const inflowDate = `${ny}-${String(nm).padStart(2,'0')}-20`;
+  const monthLabel = new Date(y, m-1, 1).toLocaleDateString('en-IN',{month:'long',year:'numeric'});
+
+  async function handleSave() {
+    if (!status) return;
+    if (status==='unutilized' && !unutilizedAmount) return;
+    setSaving(true);
+    try {
+      await saveGstReconciliation(month, {
+        status,
+        unutilizedAmount: status==='unutilized' ? Number(unutilizedAmount)||0 : 0,
+      });
+      onClose();
+    } catch(e) { console.error(e); alert('Could not save.'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div style={{background:'var(--surface)',borderRadius:10,width:480,boxShadow:'0 8px 40px rgba(0,0,0,.22)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:'var(--primary)',padding:'14px 18px'}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#fff'}}>GST Reconciliation — {monthLabel}</span>
+        </div>
+        <div style={{padding:'18px 20px'}}>
+          <div style={{background:'var(--primary-50)',borderRadius:6,padding:'10px 14px',fontSize:12.5,marginBottom:16}}>
+            <div className="flex justify-between"><span>Input GST paid this month</span><span className="amount fw-600">{inr(inputGstAmt)}</span></div>
+            <div style={{fontSize:11,color:'var(--text-muted)',marginTop:4}}>From PO/WO paid stages and Petty Cash — for reference, edit the amount below if it differs.</div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">What happened with this month's GST?</label>
+            <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:6}}>
+              <label style={{display:'flex',alignItems:'center',gap:8,padding:'10px 12px',border:'1px solid var(--border)',borderRadius:6,cursor:'pointer',background:status==='paid'?'var(--green-50)':''}}>
+                <input type="radio" name="gststatus" checked={status==='paid'} onChange={()=>setStatus('paid')} />
+                <div>
+                  <div style={{fontWeight:600,fontSize:13}}>✓ Paid / Fully Utilized</div>
+                  <div style={{fontSize:11,color:'var(--text-muted)'}}>No future cash inflow — fully offset against output liability.</div>
+                </div>
+              </label>
+              <label style={{display:'flex',alignItems:'center',gap:8,padding:'10px 12px',border:'1px solid var(--border)',borderRadius:6,cursor:'pointer',background:status==='unutilized'?'var(--amber-50)':''}}>
+                <input type="radio" name="gststatus" checked={status==='unutilized'} onChange={()=>setStatus('unutilized')} />
+                <div>
+                  <div style={{fontWeight:600,fontSize:13}}>Unutilized Credit</div>
+                  <div style={{fontSize:11,color:'var(--text-muted)'}}>Shows as a cash inflow on {fmt(inflowDate)}.</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          {status==='unutilized' && (
+            <div className="form-group">
+              <label className="form-label">Unutilized Credit Amount (₹)</label>
+              <input className="form-input font-mono" value={unutilizedAmount} onChange={e=>setUnutilizedAmount(e.target.value)} autoFocus />
+            </div>
+          )}
+        </div>
+        <div style={{padding:'0 20px 20px',display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleSave} disabled={saving||!status||(status==='unutilized'&&!unutilizedAmount)} className="btn btn-primary"
+            style={{opacity:saving||!status||(status==='unutilized'&&!unutilizedAmount)?0.6:1}}>
+            {saving?'Saving…':'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CashFlowChart({ rows, startBalance, alertLevel }) {
   if (!rows || rows.length < 2) return null;
   const W = Math.max(700, rows.length * 30);
@@ -2554,13 +2629,14 @@ function CashFlow() {
   const { items: petty }    = usePettyCash();
   const { items: pos }      = usePurchaseOrders();
   const { items: wos }      = useWorkOrders();
-  const { items: raBills }  = useRABills();
+  const { items: gstRecon } = useGstReconciliation();
   const { settings }        = useCashSettings();
   const [editingBalance, setEditingBalance] = useState(false);
   const [balanceInput, setBalanceInput]     = useState('');
   const [alertInput, setAlertInput]         = useState('');
   const [editingAlert, setEditingAlert]     = useState(false);
   const [projectFilter, setProjectFilter]   = useState('all');
+  const [reconcilingMonth, setReconcilingMonth] = useState(null);
 
   const todayStr = new Date().toISOString().slice(0,10);
   const openingBalance = Number(settings.startingBalance)||0;
@@ -2598,65 +2674,32 @@ function CashFlow() {
   const totalRepayments = capital.reduce((s,c) => s + Number(c.totalRepaid||0), 0);
   const currentBalance = totalCapital + totalReceipts - totalAdvances - totalBillsPaid - totalExpenses - totalPetty - totalRepayments;
 
-  function getITCDate(dateStr) {
-    if (!dateStr) return '';
-    const d = new Date(dateStr);
-    const m = d.getMonth() + 1; // next month (0-based: Aug=7, so +1 = Sep=8)
-    const y = m > 11 ? d.getFullYear()+1 : d.getFullYear();
-    const mm = m > 11 ? 0 : m;
-    return `${y}-${String(mm+1).padStart(2,'0')}-20`;
-  }
+  // Input GST paid each month (reference figure shown in the reconciliation modal,
+  // and used to detect months that still need reconciling).
+  const inputGstByMonth = computeInputGstByMonth(pos, wos, petty);
+  const gstReconByMonth = {};
+  gstRecon.forEach(r => { gstReconByMonth[r.month] = r; });
 
-  // Monthly ITC ledger: input GST only becomes a real cash-effective inflow to the
-  // extent there's actual output GST liability (from RA Bills submitted) to net it
-  // against that month. Unutilized credit carries forward to the next month and tries
-  // again — nothing here is forecast, it only uses RA Bills that have actually been entered.
-  function buildITCLedger() {
-    const inputByMonth = {};
-    [...pos, ...wos].forEach(doc => {
-      (doc.paymentSchedule||[]).forEach(s => {
-        if (s.paid && s.includesGst && Number(s.gstAmount||0)>0) {
-          const d = s.datePaid||s.date||'';
-          if (!d) return;
-          const month = d.slice(0,7);
-          inputByMonth[month] = (inputByMonth[month]||0) + Number(s.gstAmount);
-        }
-      });
-    });
-    petty.filter(p=>p.gstPct&&Number(p.gstPct)>0).forEach(p=>{
-      const gstAmt = Number(p.gstAmount||0)||Math.round(Number(p.amount||0)*parseFloat(p.gstPct)/100);
-      if (!p.date || gstAmt<=0) return;
-      const month = p.date.slice(0,7);
-      inputByMonth[month] = (inputByMonth[month]||0) + gstAmt;
-    });
+  // A month needs reconciling once its GST could actually be known (the 20th of the
+  // following month has arrived) and you haven't yet told us Paid vs Unutilized.
+  const unreconciledMonths = Object.keys(inputGstByMonth).filter(month => {
+    if ((inputGstByMonth[month]||0) <= 0) return false;
+    if (gstReconByMonth[month]) return false;
+    const [y,m] = month.split('-').map(Number);
+    const nm = m===12?1:m+1, ny = m===12?y+1:y;
+    const dueDate = `${ny}-${String(nm).padStart(2,'0')}-20`;
+    return todayStr >= dueDate;
+  }).sort();
 
-    const outputByMonth = {};
-    raBills.forEach(rb => {
-      const gstAmt = Number(rb.gstAmount||0);
-      if (gstAmt>0 && rb.dateSubmitted) {
-        const month = rb.dateSubmitted.slice(0,7);
-        outputByMonth[month] = (outputByMonth[month]||0) + gstAmt;
-      }
-    });
-
-    const allMonths = [...new Set([...Object.keys(inputByMonth), ...Object.keys(outputByMonth)])].sort();
-    let carry = 0;
-    const utilizedRows = [];
-    allMonths.forEach(month => {
-      const available = carry + (inputByMonth[month]||0);
-      const liability  = outputByMonth[month]||0;
-      const utilized   = Math.min(available, liability);
-      carry = available - utilized;
-      if (utilized > 0) {
-        const [y,m] = month.split('-').map(Number);
-        const nm = m===12?1:m+1, ny = m===12?y+1:y;
-        const itcDate = `${ny}-${String(nm).padStart(2,'0')}-20`;
-        utilizedRows.push({date: itcDate, label:`ITC Recovery (utilized — ${month})`, cat:'GST ITC Recovery', type:'in', amt: utilized, project:'', isPast: itcDate<todayStr});
-      }
-    });
-    return { utilizedRows, pendingCredit: carry };
-  }
-  const { utilizedRows: itcRows, pendingCredit } = buildITCLedger();
+  // ITC inflow rows come only from what's been explicitly reconciled as unutilized —
+  // nothing here is forecast or auto-netted against RA Bill liability anymore.
+  const itcRows = gstRecon.filter(r=>r.status==='unutilized' && Number(r.unutilizedAmount||0)>0).map(r => {
+    const [y,m] = r.month.split('-').map(Number);
+    const nm = m===12?1:m+1, ny = m===12?y+1:y;
+    const itcDate = `${ny}-${String(nm).padStart(2,'0')}-20`;
+    return {date: itcDate, label:`ITC Recovery (unutilized — ${r.month})`, cat:'GST ITC Recovery', type:'in', amt: Number(r.unutilizedAmount), project:'', isPast: itcDate<todayStr};
+  });
+  const pendingCredit = itcRows.filter(r=>!r.isPast).reduce((s,r)=>s+r.amt,0);
 
   function scheduleRows(items, type) {
     return items.flatMap(doc => {
@@ -2674,8 +2717,40 @@ function CashFlow() {
     });
   }
 
+  // Bills without their own payment schedule — single row, but split GST into its
+  // own line to match how PO/WO stages already report GST separately.
+  function simpleBillRows(items) {
+    return items.filter(b=>!b.fromSchedule && !b.paid && !(b.paymentSchedule && b.paymentSchedule.length>0)).flatMap(b=>{
+      const base = Number(b.amount||0);
+      const gstRate = b.gstPct ? parseFloat(b.gstPct) : 0;
+      const gst = gstRate>0 ? Math.round(base*gstRate/100) : 0;
+      const date = b.due||b.invoiceDate||'';
+      const isPast = date<todayStr;
+      const rows = [{date, label:b.payee, cat:'Bill', type:'out', amt:base, project:b.project||'', isPast}];
+      if (gst>0) rows.push({date, label:`GST — ${b.payee}`, cat:'GST Paid', type:'out', amt:gst, project:b.project||'', isPast});
+      return rows;
+    });
+  }
+  // Bills with their own payment schedule that aren't fully paid — use only the
+  // remaining UNPAID stages (each on its own date), same pattern as PO/WO stages.
+  // Fixes double-counting (previously used the bill's full original amount even
+  // after part of it was already paid) and restores per-stage dating.
+  function billScheduleRows(items) {
+    return items.filter(b=>!b.fromSchedule && !b.paid && b.paymentSchedule && b.paymentSchedule.length>0).flatMap(b =>
+      b.paymentSchedule.flatMap(s => {
+        if (s.paid || !s.amount) return [];
+        const rows = [{date:s.date||'', label:`${b.payee||''} (${s.stageType||'Payment'})`, cat:'Bill', type:'out', amt:Number(s.amount), project:b.project||'', isPast:(s.date||'')<todayStr}];
+        if (s.includesGst && Number(s.gstAmount||0)>0) {
+          rows.push({date:s.date||'', label:`GST — ${b.payee||''}`, cat:'GST Paid', type:'out', amt:Number(s.gstAmount), project:b.project||'', isPast:(s.date||'')<todayStr});
+        }
+        return rows;
+      })
+    );
+  }
+
   const allRows = [
-    ...bills.filter(b=>!b.fromSchedule&&!b.paid).map(b=>({date:b.due||b.invoiceDate||'', label:b.payee, cat:'Bill', type:'out', amt:Number(b.amount||0)+(b.gstPct?Math.round(Number(b.amount||0)*parseFloat(b.gstPct)/100):0), project:b.project||'', isPast:(b.due||b.invoiceDate||'')<todayStr})),
+    ...simpleBillRows(bills),
+    ...billScheduleRows(bills),
     ...scheduleRows(pos,'Purchase Order'),
     ...scheduleRows(wos,'Work Order'),
     ...itcRows,
@@ -2725,6 +2800,9 @@ function CashFlow() {
       )}
 
       {/* Summary cards */}
+      <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>
+        Current Position — all-time actuals (already happened)
+      </div>
       <div className="stats-grid" style={{gridTemplateColumns:'repeat(3,1fr)',marginBottom:8}}>
         <div className="stat-card" style={{background:'#F0FFF4'}}>
           <div className="stat-label">Total Inflows</div>
@@ -2742,6 +2820,9 @@ function CashFlow() {
           <div className="stat-sub" style={{fontSize:10}}>Capital+Receipts − Unadj.Advances − Paid Bills − Expenses</div>
         </div>
       </div>
+      <div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:.4,marginTop:10,marginBottom:6}}>
+        Future Projection — unpaid/upcoming transactions, starting from Current Cash Balance above
+      </div>
       <div className="stats-grid" style={{gridTemplateColumns:'repeat(4,1fr)',marginBottom:14}}>
         <div className="stat-card">
           <div className="stat-label">Lowest Future Balance</div>
@@ -2756,7 +2837,7 @@ function CashFlow() {
         <div className="stat-card">
           <div className="stat-label">Unutilized ITC Credit</div>
           <div className="stat-value amber">{inr(pendingCredit)}</div>
-          <div className="stat-sub" style={{fontSize:10}}>Not yet netted against RA Bill GST</div>
+          <div className="stat-sub" style={{fontSize:10}}>Reconciled as unutilized, not yet realized</div>
         </div>
         <div className="stat-card" style={{background: alertLevel > 0 ? '#FFF7ED' : ''}}>
           <div className="stat-label">Alert Level 🔔</div>
@@ -2777,6 +2858,26 @@ function CashFlow() {
           )}
         </div>
       </div>
+
+      {unreconciledMonths.length > 0 && (
+        <div style={{background:'var(--amber-50)',border:'1px solid var(--amber)',borderRadius:8,padding:'12px 16px',marginBottom:14}}>
+          <div style={{fontWeight:700,fontSize:12.5,color:'var(--amber)',marginBottom:8}}>
+            🔔 GST reconciliation needed for {unreconciledMonths.length} month{unreconciledMonths.length!==1?'s':''}
+          </div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+            {unreconciledMonths.map(month=>{
+              const [ry,rm] = month.split('-').map(Number);
+              const monthLabel = new Date(ry, rm-1, 1).toLocaleDateString('en-IN',{month:'long',year:'numeric'});
+              return (
+                <button key={month} className="btn btn-sm btn-outline" style={{borderColor:'var(--amber)',color:'var(--amber)'}}
+                  onClick={()=>setReconcilingMonth(month)}>
+                  {monthLabel} — {inr(inputGstByMonth[month])}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Inflow / Outflow Breakup */}
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
@@ -2880,6 +2981,14 @@ function CashFlow() {
           </table>
         )}
       </div>
+      {reconcilingMonth && (
+        <GstReconciliationModal
+          month={reconcilingMonth}
+          inputGstAmt={inputGstByMonth[reconcilingMonth]||0}
+          existing={gstReconByMonth[reconcilingMonth]}
+          onClose={()=>setReconcilingMonth(null)}
+        />
+      )}
     </div>
   );
 }
@@ -7172,6 +7281,63 @@ function ProjectPnL() {
 // ════════════════════════════════════════════════════
 // REMINDERS — auto-generated from live Firestore data
 // ════════════════════════════════════════════════════
+const GST_RECON_COLLECTION = 'gst_reconciliation';
+
+function useGstReconciliation() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    function start() {
+      const { collection, query, onSnapshot } = window.fb;
+      const unsub = onSnapshot(
+        userCol(GST_RECON_COLLECTION),
+        snap => { setItems(snap.docs.map(d=>({docId:d.id,...d.data()}))); setLoading(false); },
+        err  => { console.error('GST Reconciliation listener',err); setLoading(false); }
+      );
+      return unsub;
+    }
+    if (window.fb && getUserUID()) { const u=start(); return ()=>u&&u(); }
+    let u;
+    const hFb=()=>{ if(getUserUID()) u=start(); };
+    const hUser=()=>{ if(u) u(); u=start(); };
+    window.addEventListener('firebase-ready',hFb,{once:true});
+    window.addEventListener('user-ready',hUser,{once:true});
+    return ()=>{
+      window.removeEventListener('firebase-ready',hFb);
+      window.removeEventListener('user-ready',hUser);
+      if(u) u();
+    };
+  },[]);
+  return {items,loading};
+}
+// Upsert by month (e.g. "2026-07") so re-reconciling the same month overwrites cleanly.
+async function saveGstReconciliation(month, data) {
+  const { setDoc } = window.fb;
+  await setDoc(userDoc(GST_RECON_COLLECTION, month), {...data, month, updatedAt: Date.now()});
+}
+// Compute input GST actually paid in each month, from PO/WO paid stages + Petty Cash —
+// shared by Cash Flow's ledger and the reconciliation modal so they always agree.
+function computeInputGstByMonth(pos, wos, petty) {
+  const byMonth = {};
+  [...pos, ...wos].forEach(doc => {
+    (doc.paymentSchedule||[]).forEach(s => {
+      if (s.paid && s.includesGst && Number(s.gstAmount||0)>0) {
+        const d = s.datePaid||s.date||'';
+        if (!d) return;
+        const month = d.slice(0,7);
+        byMonth[month] = (byMonth[month]||0) + Number(s.gstAmount);
+      }
+    });
+  });
+  petty.filter(p=>p.gstPct&&Number(p.gstPct)>0).forEach(p=>{
+    const gstAmt = Number(p.gstAmount||0)||Math.round(Number(p.amount||0)*parseFloat(p.gstPct)/100);
+    if (!p.date || gstAmt<=0) return;
+    const month = p.date.slice(0,7);
+    byMonth[month] = (byMonth[month]||0) + gstAmt;
+  });
+  return byMonth;
+}
+
 const REMINDERS_COLLECTION = 'reminders';
 
 function useReminders() {
@@ -7276,14 +7442,44 @@ function Reminders() {
   const { items: tasks }     = useTasks();
   const { items: wos }       = useWorkOrders();
   const { items: raBills }   = useRABills();
+  const { items: pos }       = usePurchaseOrders();
+  const { items: petty }     = usePettyCash();
+  const { items: gstRecon }  = useGstReconciliation();
   const [showNew, setShowNew] = useState(false);
   const [filter, setFilter] = useState('all'); // all | pending | done | overdue
 
   const today = new Date().toISOString().slice(0,10);
   const in7   = new Date(Date.now()+7*86400000).toISOString().slice(0,10);
 
+  // Months where GST was paid but not yet reconciled (Paid vs Unutilized), once
+  // the 20th of the following month has arrived.
+  const inputGstByMonth = computeInputGstByMonth(pos, wos, petty);
+  const gstReconciledMonths = new Set(gstRecon.map(r=>r.month));
+  const unreconciledGstMonths = Object.keys(inputGstByMonth).filter(month => {
+    if ((inputGstByMonth[month]||0) <= 0) return false;
+    if (gstReconciledMonths.has(month)) return false;
+    const [y,m] = month.split('-').map(Number);
+    const nm = m===12?1:m+1, ny = m===12?y+1:y;
+    const dueDate = `${ny}-${String(nm).padStart(2,'0')}-20`;
+    return today >= dueDate;
+  });
+
   // Auto-generated reminders from live data
   const autoReminders = [
+    // GST reconciliation due
+    ...unreconciledGstMonths.map(month=>{
+      const [y,m] = month.split('-').map(Number);
+      const nm = m===12?1:m+1, ny = m===12?y+1:y;
+      const dueDate = `${ny}-${String(nm).padStart(2,'0')}-20`;
+      const monthLabel = new Date(y, m-1, 1).toLocaleDateString('en-IN',{month:'long',year:'numeric'});
+      return {
+        docId: `auto-gst-${month}`, auto:true,
+        title: `Reconcile GST — ${monthLabel}`,
+        notes: `Input GST paid: ${inr(inputGstByMonth[month])} — mark Paid/Utilized or enter Unutilized Credit in Cash Flow`,
+        dueDate, priority:'Normal', project:'',
+        done:false, category:'GST'
+      };
+    }),
     // Overdue bills
     ...bills.filter(b=>!b.paid&&b.due&&b.due<today).map(b=>({
       docId: `auto-bill-${b.docId}`, auto:true,
