@@ -1374,7 +1374,7 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
                 <th style={{fontSize:10,padding:'6px 8px',textAlign:'center',color:'var(--primary)',width:44}}>GST?</th>
                 <th style={{fontSize:10,padding:'6px 8px',color:'var(--primary)',width:110}}>GST Amt</th>
                 <th style={{fontSize:10,padding:'6px 8px',color:'var(--green)',width:250}}>Paid?</th>
-                <th style={{width:24}}></th>
+                <th style={{fontSize:10,padding:'6px 8px',textAlign:'center',color:'var(--text-muted)',width:70}}>Remove</th>
               </tr>
             </thead>
             <tbody>
@@ -1419,7 +1419,7 @@ function PaymentScheduleEditor({ rows, setRows, totalValue, gstPct, onGstPctChan
                       </div>
                     ) : <span style={{fontSize:10,color:'var(--text-muted)'}}>Save PO first to mark paid</span>}
                   </td>
-                  <td style={{padding:3,textAlign:'center'}}>{!r.paid&&<span onClick={()=>removeRow(r.id)} style={{cursor:'pointer',color:'var(--red)',fontSize:14}}>✕</span>}</td>
+                  <td style={{padding:3,textAlign:'center'}}>{!r.paid&&<button type="button" onClick={()=>removeRow(r.id)} className="btn btn-sm btn-ghost" style={{color:'var(--red)',fontSize:10,padding:'3px 6px'}}>🗑 Remove</button>}</td>
                 </tr>
               ))}
             </tbody>
@@ -2017,6 +2017,11 @@ function BillScheduleModal({ bill, onClose, onUpdate }) {
     }
   }
 
+  function removeStage(i) {
+    if (!confirm('Remove this payment stage? This cannot be undone once saved.')) return;
+    setStages(prev => prev.filter((_,idx) => idx!==i));
+  }
+
   async function handleSave() {
     setSaving(true);
     try {
@@ -2079,6 +2084,7 @@ function BillScheduleModal({ bill, onClose, onUpdate }) {
                   </div>
                   <button className="btn btn-primary" style={{fontSize:12,padding:'6px 14px',background:'var(--green)',
                     opacity:payDates[i]?1:0.5}} onClick={()=>toggleStage(i)}>Mark Paid</button>
+                  <button className="btn btn-sm btn-ghost" style={{color:'var(--red)',border:'1px solid var(--red)',fontSize:11}} onClick={()=>removeStage(i)}>🗑 Remove Stage</button>
                 </div>
               )}
             </div>
